@@ -19,3 +19,23 @@ body {
   background: var(--background);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* 모바일 터치 관련 스타일 */
+.touch-action-none {
+  touch-action: none; /* 브라우저 기본 터치 동작 비활성화 */
+}
+
+/* 게임 보드 관련 스타일 */
+@layer components {
+  /* 방향 버튼 터치 영역 확장 */
+  .game-direction-button {
+    position: relative;
+    z-index: 20;
+  }
+  
+  /* 미니맵 스타일 */
+  .minimap-container {
+    z-index: 10;
+    position: relative;
+  }
+}

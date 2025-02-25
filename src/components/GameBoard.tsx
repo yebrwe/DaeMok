@@ -79,11 +79,11 @@ const GameBoard: React.FC<GameBoardProps> = ({
     // 선 스타일 계산 - 격자 셀의 벽과 정확히 일치하도록 조정
     // 클릭 영역은 넓히고 감지 범위 확장을 위해 패딩 추가
     const lineClasses = `
-      absolute cursor-pointer
-      ${direction === 'up' ? 'w-full h-2 -top-1 left-0 hover:h-3' : ''}
-      ${direction === 'down' ? 'w-full h-2 -bottom-1 left-0 hover:h-3' : ''}
-      ${direction === 'left' ? 'h-full w-2 top-0 -left-1 hover:w-3' : ''}
-      ${direction === 'right' ? 'h-full w-2 top-0 -right-1 hover:w-3' : ''}
+      absolute cursor-pointer game-direction-button
+      ${direction === 'up' ? 'w-full h-4 -top-2 left-0 hover:h-5' : ''}
+      ${direction === 'down' ? 'w-full h-4 -bottom-2 left-0 hover:h-5' : ''}
+      ${direction === 'left' ? 'h-full w-4 top-0 -left-2 hover:w-5' : ''}
+      ${direction === 'right' ? 'h-full w-4 top-0 -right-2 hover:w-5' : ''}
       ${isBlocked 
         ? 'bg-yellow-500 z-10' 
         : isHovered 
@@ -92,6 +92,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
       }
       ${gamePhase === GamePhase.SETUP && !readOnly ? 'cursor-pointer' : ''}
       transition-all duration-150 ease-in-out
+      touch-action-none
     `;
     
     return (
@@ -111,18 +112,28 @@ const GameBoard: React.FC<GameBoardProps> = ({
         onMouseLeave={() => {
           setHoveredDirection(null);
         }}
-        // 모바일 터치 이벤트 추가
+        // 모바일 터치 이벤트 개선
         onTouchStart={(e) => {
+          e.preventDefault(); // 기본 동작 방지
           e.stopPropagation();
           if (gamePhase === GamePhase.SETUP && !readOnly) {
+            setHoveredCell(position);
             setHoveredDirection(direction);
           }
         }}
+        onTouchMove={(e) => {
+          e.preventDefault(); // 기본 동작 방지
+          e.stopPropagation();
+        }}
         onTouchEnd={(e) => {
+          e.preventDefault(); // 기본 동작 방지
           e.stopPropagation();
           if (gamePhase === GamePhase.SETUP && !readOnly && onDirectionClick) {
             onDirectionClick(position, direction);
-            setHoveredDirection(null);
+            // 터치 종료 후에도 잠시 호버 상태 유지 (피드백 제공)
+            setTimeout(() => {
+              setHoveredDirection(null);
+            }, 200);
           }
         }}
         disabled={readOnly || gamePhase !== GamePhase.SETUP}
@@ -141,6 +152,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
       ${cellType === 'empty' && !isHovered ? 'bg-white' : ''}
       ${cellType === 'player' ? 'bg-blue-500' : ''}
       ${!readOnly && (gamePhase === GamePhase.SETUP || gamePhase === GamePhase.PLAY) ? 'cursor-pointer' : ''}
+      touch-action-none
     `;
 
     return (
@@ -154,6 +166,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
         }}
         onMouseEnter={() => !isMinimapMode && setHoveredCell(position)}
         onMouseLeave={() => !isMinimapMode && setHoveredCell(null)}
+        onTouchStart={() => !isMinimapMode && setHoveredCell(position)}
+        onTouchEnd={() => {
+          if (!readOnly && !isMinimapMode && onCellClick) {
+            onCellClick(position);
+          }
+        }}
       >
         {/* 시작점 마커 */}
         {cellType === 'start' && (
@@ -193,7 +211,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
   return (
     <div className="flex flex-col items-center">
       <div 
-        className={`grid grid-cols-8 gap-0 border border-gray-400 bg-gray-100 ${isMinimapMode ? 'p-1' : 'p-2'} rounded-md shadow-md`}
+        className={`grid grid-cols-8 gap-0 border border-gray-400 bg-gray-100 ${isMinimapMode ? 'p-1 minimap-container' : 'p-2'} rounded-md shadow-md touch-action-none`}
         style={{ gridTemplateColumns: `repeat(${BOARD_SIZE}, 1fr)` }}
       >
         {Array.from({ length: BOARD_SIZE }).map((_, row) =>
