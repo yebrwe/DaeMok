@@ -31,6 +31,18 @@ body {
   .game-direction-button {
     position: relative;
     z-index: 20;
+    transition: all 300ms ease-in-out;
+    will-change: background-color, opacity, transform;
+  }
+  
+  .game-direction-button:hover {
+    transition-duration: 100ms;
+  }
+  
+  /* 게임 셀 스타일링 */
+  [class*="relative w-12 h-12"] {
+    transition: background-color 300ms ease-in-out;
+    will-change: background-color;
   }
   
   /* 미니맵 스타일 */

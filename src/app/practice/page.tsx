@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import Link from 'next/link';
 import GameSetup from '@/components/GameSetup';
 import GamePlay from '@/components/GamePlay';
@@ -10,10 +10,13 @@ export default function PracticePage() {
   const [map, setMap] = useState<GameMap | null>(null);
   const [gameComplete, setGameComplete] = useState<boolean>(false);
   const [moves, setMoves] = useState<number>(0);
+  // 재시작 기능을 위한 key 추가
+  const [gameKey, setGameKey] = useState<number>(0);
   
   // 맵 설정 완료 처리
   const handleMapComplete = (completedMap: GameMap) => {
     setMap(completedMap);
+    setGameComplete(false);
   };
   
   // 게임 완료 처리
@@ -22,11 +25,20 @@ export default function PracticePage() {
     setMoves(moveCount);
   };
   
-  // 새 게임 시작
+  // 새 게임 시작 (새 맵 생성)
   const handleNewGame = () => {
     setMap(null);
     setGameComplete(false);
     setMoves(0);
+    setGameKey(0);
+  };
+  
+  // 같은 맵에서 다시 시작
+  const handleRestartSameMap = () => {
+    setGameComplete(false);
+    setMoves(0);
+    // key를 변경하여 컴포넌트 강제 리렌더링
+    setGameKey(prev => prev + 1);
   };
   
   return (
@@ -67,10 +79,16 @@ export default function PracticePage() {
           </p>
           <div className="flex gap-4 justify-center">
             <button
+              className="px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 transition"
+              onClick={handleRestartSameMap}
+            >
+              같은 맵에서 다시 시작
+            </button>
+            <button
               className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
               onClick={handleNewGame}
             >
-              새 게임 시작
+              새 맵 만들기
             </button>
             <Link
               href="/"
@@ -93,6 +111,7 @@ export default function PracticePage() {
           </div>
           
           <GamePlay 
+            key={gameKey}
             map={map} 
             onGameComplete={handleGameComplete} 
             userId="practice-user" 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { CellType, Direction, GameMap, GamePhase, Obstacle, Position } from '@/types/game';
 import { BOARD_SIZE, canMove, isSamePosition } from '@/lib/gameUtils';
 
@@ -29,6 +29,27 @@ const GameBoard: React.FC<GameBoardProps> = ({
 }) => {
   const [hoveredCell, setHoveredCell] = useState<Position | null>(null);
   const [hoveredDirection, setHoveredDirection] = useState<Direction | null>(null);
+  // hover 타이머 참조 관리
+  const hoverTimerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // 디바운스된 호버 상태 설정 함수
+  const setHoveredCellWithDebounce = useCallback((position: Position | null) => {
+    // 기존 타이머가 있다면 취소
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    
+    if (position === null) {
+      // 호버 상태 제거는 살짝 지연시켜 깜빡임 방지
+      hoverTimerRef.current = setTimeout(() => {
+        setHoveredCell(null);
+      }, 50);
+    } else {
+      // 호버 상태 추가는 즉시 적용
+      setHoveredCell(position);
+    }
+  }, []);
   
   // 셀 타입 결정 함수
   const getCellType = (position: Position): CellType => {
@@ -91,7 +112,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
           : 'bg-transparent hover:bg-yellow-200'
       }
       ${gamePhase === GamePhase.SETUP && !readOnly ? 'cursor-pointer' : ''}
-      transition-all duration-150 ease-in-out
+      transition-all duration-300 ease-in-out
       touch-action-none
     `;
     
@@ -104,12 +125,14 @@ const GameBoard: React.FC<GameBoardProps> = ({
             onDirectionClick(position, direction);
           }
         }}
-        onMouseEnter={() => {
+        onMouseEnter={(e) => {
+          e.stopPropagation(); // 부모 이벤트 전파 방지
           if (gamePhase === GamePhase.SETUP && !readOnly) {
             setHoveredDirection(direction);
           }
         }}
-        onMouseLeave={() => {
+        onMouseLeave={(e) => {
+          e.stopPropagation(); // 부모 이벤트 전파 방지
           setHoveredDirection(null);
         }}
         // 모바일 터치 이벤트 개선
@@ -133,7 +156,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
             // 터치 종료 후에도 잠시 호버 상태 유지 (피드백 제공)
             setTimeout(() => {
               setHoveredDirection(null);
-            }, 200);
+            }, 300);
           }
         }}
         disabled={readOnly || gamePhase !== GamePhase.SETUP}
@@ -148,11 +171,11 @@ const GameBoard: React.FC<GameBoardProps> = ({
     
     const cellClasses = `
       relative ${isMinimapMode ? 'w-6 h-6' : 'w-12 h-12'} border border-gray-300
-      ${cellType === 'empty' && isHovered && gamePhase === GamePhase.SETUP ? 'bg-gray-200' : ''}
+      ${cellType === 'empty' && isHovered && gamePhase === GamePhase.SETUP ? 'bg-gray-100' : ''}
       ${cellType === 'empty' && !isHovered ? 'bg-white' : ''}
       ${cellType === 'player' ? 'bg-blue-500' : ''}
       ${!readOnly && (gamePhase === GamePhase.SETUP || gamePhase === GamePhase.PLAY) ? 'cursor-pointer' : ''}
-      touch-action-none
+      touch-action-none transition-colors duration-300 ease-in-out
     `;
 
     return (
@@ -164,9 +187,9 @@ const GameBoard: React.FC<GameBoardProps> = ({
             onCellClick(position);
           }
         }}
-        onMouseEnter={() => !isMinimapMode && setHoveredCell(position)}
-        onMouseLeave={() => !isMinimapMode && setHoveredCell(null)}
-        onTouchStart={() => !isMinimapMode && setHoveredCell(position)}
+        onMouseEnter={() => !isMinimapMode && setHoveredCellWithDebounce(position)}
+        onMouseLeave={() => !isMinimapMode && setHoveredCellWithDebounce(null)}
+        onTouchStart={() => !isMinimapMode && setHoveredCellWithDebounce(position)}
         onTouchEnd={() => {
           if (!readOnly && !isMinimapMode && onCellClick) {
             onCellClick(position);

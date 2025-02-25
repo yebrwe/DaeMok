@@ -193,6 +193,42 @@ const GamePlay: React.FC<GamePlayProps> = ({
     };
   }, [gameOver, playerPosition, obstacles, isMyTurn]);
   
+  // 게임 재시작 함수
+  const handleRestartGame = async () => {
+    // 플레이어 위치를 시작 위치로 초기화
+    setPlayerPosition(startPosition);
+    setMoveCount(0);
+    setGameOver(false);
+    setLastMoveValid(null);
+    setMessage('게임을 다시 시작합니다.');
+    
+    // 멀티플레이어 게임인 경우 Firebase 업데이트
+    if (roomId && roomId !== 'practice-room') {
+      const database = getDatabase();
+      const playerPositionRef = ref(database, `rooms/${roomId}/gameState/players/${userId}/position`);
+      try {
+        // 위치 초기화
+        await update(playerPositionRef, startPosition);
+        console.log('플레이어 위치 초기화 완료:', startPosition);
+        
+        // 턴 초기화 (방의 방장 ID로 설정)
+        const roomRef = ref(database, `rooms/${roomId}`);
+        const roomSnapshot = await get(roomRef);
+        const roomData = roomSnapshot.val();
+        
+        if (roomData && roomData.createdBy) {
+          const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
+          await update(gameStateRef, { 
+            currentTurn: roomData.createdBy 
+          });
+          console.log('턴 초기화 완료: 방장 턴으로 변경됨', roomData.createdBy);
+        }
+      } catch (error) {
+        console.error('게임 재시작 중 오류 발생:', error);
+      }
+    }
+  };
+  
   return (
     <div className="flex flex-col items-center gap-4 w-full max-w-2xl mx-auto">
       <h2 className="text-2xl font-bold text-center my-4">
@@ -291,12 +327,18 @@ const GamePlay: React.FC<GamePlayProps> = ({
       </div>
       
       {gameOver && (
-        <div className="mt-4">
+        <div className="mt-4 flex gap-2">
           <button
             className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition"
+            onClick={handleRestartGame}
+          >
+            현재 맵에서 다시 시작
+          </button>
+          <button
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
             onClick={() => window.location.reload()}
           >
-            다시 시작하기
+            새 맵 만들기
           </button>
         </div>
       )}
