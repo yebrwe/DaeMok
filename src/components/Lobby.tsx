@@ -116,7 +116,9 @@ const Lobby: React.FC<LobbyProps> = ({ userId }) => {
               <div className="flex justify-between items-center mb-2">
                 <h3 className="text-lg font-medium">{room.name}</h3>
                 <span className="text-sm text-gray-500">
-                  {room.players?.length || 0}/{room.maxPlayers}
+                  {room.gameState && room.gameState.players 
+                    ? Object.keys(room.gameState.players).length 
+                    : 0}/{room.maxPlayers}
                 </span>
               </div>
               
@@ -126,12 +128,14 @@ const Lobby: React.FC<LobbyProps> = ({ userId }) => {
                 </span>
                 <button
                   className={`px-4 py-1 rounded text-white ${
-                    room.players?.length >= room.maxPlayers || room.gameState?.phase !== 'setup'
+                    (room.gameState && room.gameState.players && Object.keys(room.gameState.players).length >= room.maxPlayers) 
+                    || room.gameState?.phase !== 'setup'
                       ? 'bg-gray-400 cursor-not-allowed'
                       : 'bg-blue-500 hover:bg-blue-600'
                   }`}
                   onClick={() => handleJoinRoom(room.id)}
-                  disabled={room.players?.length >= room.maxPlayers || room.gameState?.phase !== 'setup'}
+                  disabled={(room.gameState && room.gameState.players && Object.keys(room.gameState.players).length >= room.maxPlayers) 
+                    || room.gameState?.phase !== 'setup'}
                 >
                   참가하기
                 </button>
