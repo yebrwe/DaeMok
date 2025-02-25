@@ -391,66 +391,6 @@ export const endGame = async (roomId: string, userId: string): Promise<void> => 
   });
 };
 
-// 게임 재시작 (같은 맵으로)
-export const restartGame = async (roomId: string): Promise<void> => {
-  console.log('게임 재시작 시도...', { roomId });
-  try {
-    const roomRef = ref(database, `rooms/${roomId}`);
-    
-    // 현재 방 정보 가져오기
-    return new Promise<void>((resolve, reject) => {
-      onValue(roomRef, async (snapshot) => {
-        try {
-          console.log('방 정보 수신 완료');
-          const room = snapshot.val() as Room;
-          
-          if (!room || !room.gameState) {
-            console.error('방 정보가 없습니다!', { room });
-            reject(new Error('방 정보가 없습니다'));
-            return;
-          }
-          
-          // 플레이어 위치 및 준비 상태 초기화
-          const updatedPlayers = { ...room.gameState.players };
-          const playerIds = Object.keys(updatedPlayers);
-          
-          for (const playerId of playerIds) {
-            const opponentIds = playerIds.filter(id => id !== playerId);
-            updatedPlayers[playerId].isReady = false;
-            
-            if (opponentIds.length > 0) {
-              const opponentId = opponentIds[0]; // 첫 번째 상대만 사용
-              if (room.gameState.maps?.[opponentId]) {
-                updatedPlayers[playerId].position = room.gameState.maps[opponentId].startPosition;
-              }
-            }
-          }
-          
-          // 게임 상태 업데이트
-          const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
-          const updateData = {
-            phase: GamePhase.SETUP,
-            players: updatedPlayers,
-            currentTurn: null,
-            winner: null
-          };
-          
-          console.log('게임 상태 업데이트:', updateData);
-          await update(gameStateRef, updateData);
-          console.log('게임 재시작 완료! 게임이 설정 단계로 돌아갔습니다.');
-          resolve();
-        } catch (error) {
-          console.error('게임 재시작 처리 중 오류 발생:', error);
-          reject(error);
-        }
-      }, { onlyOnce: true });
-    });
-  } catch (error) {
-    console.error('게임 재시작 중 오류 발생:', error);
-    throw error;
-  }
-};
-
 // 방 나가기
 export const leaveRoom = async (roomId: string, userId: string): Promise<void> => {
   console.log('방 나가기 시도...', { roomId, userId });
@@ -467,36 +407,21 @@ export const leaveRoom = async (roomId: string, userId: string): Promise<void> =
         return;
       }
       
-      // 플레이어 제거
+      // 플레이어 제거 (players 배열에서만 제거하고 gameState.players에서는 유지)
       const updatedPlayers = room.players?.filter(id => id !== userId) || [];
       console.log('업데이트된 플레이어 목록:', updatedPlayers);
       
-      try {
-        // 방이 비어있다면 삭제
-        if (updatedPlayers.length === 0) {
-          console.log('방이 비어있어 삭제합니다:', roomId);
-          await remove(roomRef);
-          console.log('방 삭제 완료');
-        } else {
-          // 플레이어 정보를 players 배열과 gameState.players 모두에서 제거
-          const gameStatePlayers = { ...(room.gameState?.players || {}) };
-          
-          // gameState.players에서도 해당 플레이어 제거 (게임이 끝나지 않은 경우에만)
-          if (room.gameState?.phase !== GamePhase.END) {
-            delete gameStatePlayers[userId];
-          }
-          
+      // 게임 상태에서는 플레이어 정보를 유지하되 온라인 상태만 변경
+      if (room.gameState && room.gameState.players && room.gameState.players[userId]) {
+        // 플레이어 정보는 그대로 유지하고 players 배열에서만 제거
+        try {
           await update(roomRef, {
-            players: updatedPlayers,
-            gameState: {
-              ...(room.gameState || {}),
-              players: gameStatePlayers
-            }
+            players: updatedPlayers
           });
-          console.log('방 업데이트 완료 (플레이어 정보 제거)');
+          console.log('방 업데이트 성공 (플레이어 연결 상태만 변경)');
+        } catch (error) {
+          console.error('방 업데이트 오류:', error);
         }
-      } catch (error) {
-        console.error('방 업데이트 오류:', error);
       }
       
       resolve();

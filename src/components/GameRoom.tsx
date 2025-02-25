@@ -9,10 +9,8 @@ import {
   placeObstacles, 
   setPlayerReady, 
   endGame, 
-  leaveRoom,
-  restartGame
+  leaveRoom 
 } from '@/lib/firebase';
-import { useRouter } from 'next/navigation';
 
 interface GameRoomProps {
   userId: string;
@@ -24,7 +22,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   const [isReady, setIsReady] = useState(false);
   const [myMap, setMyMap] = useState<GameMap | null>(null);
   const [opponentMap, setOpponentMap] = useState<GameMap | null>(null);
-  const router = useRouter();
   
   // 컴포넌트 언마운트 시 방 나가기
   useEffect(() => {
@@ -115,17 +112,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
-  // 게임 재시작 처리
-  const handleRestartGame = async () => {
-    try {
-      console.log('같은 맵에서 게임 재시작 시작...');
-      await restartGame(roomId);
-      console.log('게임 재시작 완료!');
-    } catch (error) {
-      console.error('게임 재시작 중 오류 발생:', error);
-    }
-  };
-  
   // 로딩 중 표시
   if (isLoading || !gameState) {
     return (
@@ -209,24 +195,13 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           />
         </div>
       ) : gameState.phase === GamePhase.END ? (
-        <div className="mt-6 flex flex-col items-center">
-          <h2 className="text-2xl font-bold mb-4">
-            {gameState.winner === userId ? '승리!' : '패배...'}
-          </h2>
-          <div className="flex gap-2">
-            <button
-              className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition"
-              onClick={handleRestartGame}
-            >
-              같은 맵에서 다시 시작
-            </button>
-            <button
-              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
-              onClick={() => router.push('/game')}
-            >
-              로비로 돌아가기
-            </button>
-          </div>
+        <div key="gameover-container" className="flex flex-col items-center">
+          <button
+            className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition mt-8"
+            onClick={() => window.location.href = '/lobby'}
+          >
+            로비로 돌아가기
+          </button>
         </div>
       ) : (
         <div key="loading-container" className="text-center p-8">
