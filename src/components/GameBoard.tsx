@@ -76,9 +76,13 @@ const GameBoard: React.FC<GameBoardProps> = ({
   
   // 특정 방향에 장애물이 있는지 확인
   const hasObstacle = (position: Position, direction: Direction): boolean => {
+    // obstacles이 undefined인 경우 방어 코드 추가
+    if (!obstacles) return false;
+    
     return obstacles.some(
-      (obstacle) =>
-        isSamePosition(obstacle.position, position) && obstacle.direction === direction
+      (o) => o.position.row === position.row && 
+             o.position.col === position.col && 
+             o.direction === direction
     );
   };
 

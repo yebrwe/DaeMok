@@ -258,6 +258,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     // 맵 생성 단계로 돌아가기
     setIsReady(false);
     setMyMap(null);
+    setOpponentMap(null); // 상대방 맵도 초기화
     
     // Firebase에서 게임 상태 초기화
     const database = getDatabase();
@@ -287,11 +288,19 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       await update(gameStateRef, {
         phase: GamePhase.SETUP,
         winner: null,
-        maps: {},
-        collisionWalls: [],
+        maps: null, // null로 설정하여 완전히 초기화
+        collisionWalls: null, // null로 설정하여 완전히 초기화
         currentTurn: null,
         players: preservedPlayersData  // 플레이어 상태 정보 유지
       });
+      
+      // 맵 데이터를 완전히 제거하기 위한 추가 조치
+      const mapsRef = ref(database, `rooms/${roomId}/gameState/maps`);
+      await remove(mapsRef);
+      
+      // 충돌 벽 데이터도 완전히 제거
+      const wallsRef = ref(database, `rooms/${roomId}/gameState/collisionWalls`);
+      await remove(wallsRef);
       
       setMessage('게임이 재시작됩니다. 맵을 생성해주세요.');
     } catch (error) {

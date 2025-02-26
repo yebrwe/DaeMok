@@ -25,7 +25,12 @@ const GamePlay: React.FC<GamePlayProps> = ({
   myMap, // 내가 만든 맵 정보
   gameEnded = false
 }) => {
-  const { startPosition, endPosition, obstacles } = map;
+  // 맵 데이터 안전하게 구조 분해
+  const { 
+    startPosition = { row: 0, col: 0 }, 
+    endPosition = { row: 9, col: 9 }, 
+    obstacles = [] // 기본값 빈 배열로 설정
+  } = map || {};
   
   const [playerPosition, setPlayerPosition] = useState<Position>(startPosition);
   const [moveCount, setMoveCount] = useState<number>(0);
