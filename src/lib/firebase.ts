@@ -1,10 +1,23 @@
 'use client';
 
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, onValue, set, push, update, remove } from 'firebase/database';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { getDatabase, ref, onValue, set, push, update, remove, get, onDisconnect, serverTimestamp } from 'firebase/database';
+import { 
+  getAuth, 
+  GoogleAuthProvider, 
+  signInWithPopup, 
+  signOut, 
+  setPersistence, 
+  browserLocalPersistence,
+  onIdTokenChanged
+} from 'firebase/auth';
 import { getAnalytics, isSupported } from 'firebase/analytics';
 import { Room, GameState, GamePhase, SocketEvents, GameMap } from '@/types/game';
+
+// Firebase 인스턴스를 저장할 변수들  
+let app;
+export let auth;
+export let database;
 
 // Firebase 설정
 const firebaseConfig = {
@@ -19,21 +32,29 @@ const firebaseConfig = {
 };
 
 // Firebase 초기화
-let app;
-let auth;
-let database;
-
-// 클라이언트 사이드에서만 Firebase 초기화
-if (typeof window !== 'undefined') {
+export const firebaseInitPromise = (async () => {
   try {
-    app = initializeApp(firebaseConfig);
-    database = getDatabase(app);
+    const app = initializeApp(firebaseConfig);
+    const analytics = isSupported().then(yes => yes ? getAnalytics(app) : null);
     auth = getAuth(app);
-    console.log('Firebase 초기화 성공');
+    
+    // 브라우저 종료 후에도 인증 상태 유지 (로컬 스토리지 사용)
+    setPersistence(auth, browserLocalPersistence)
+      .then(() => {
+        console.log('Firebase 인증 지속성 설정 완료: LOCAL');
+      })
+      .catch((error) => {
+        console.error('인증 지속성 설정 오류:', error);
+      });
+    
+    database = getDatabase(app);
+    console.log('Firebase 초기화 완료');
+    return { app, auth, database };
   } catch (error) {
     console.error('Firebase 초기화 오류:', error);
+    return null;
   }
-}
+})();
 
 // Firebase Analytics 초기화 (클라이언트 사이드에서만 실행)
 const initAnalytics = async () => {
@@ -52,6 +73,11 @@ const initAnalytics = async () => {
 
 // Analytics 초기화 실행
 initAnalytics();
+
+// 인증 객체 가져오기
+export const getFirebaseAuth = () => {
+  return auth;
+};
 
 // 구글 로그인 처리
 export const signInWithGoogle = async () => {
@@ -136,112 +162,166 @@ export const getRooms = (callback: (rooms: Room[]) => void) => {
 };
 
 // 방 생성
-export const createRoom = async (name: string, userId: string): Promise<string> => {
+export const createRoom = async (name: string, creatorId: string, maxPlayers: number = 2): Promise<string | null> => {
   if (!database) {
     console.error('Firebase Database가 초기화되지 않았습니다.');
-    throw new Error('데이터베이스 초기화 오류');
+    return null;
   }
-
-  console.log('방 생성 시도...', { name, userId });
-  const roomsRef = ref(database, 'rooms');
-  const newRoomRef = push(roomsRef);
-  const roomId = newRoomRef.key as string;
   
-  const newRoom: Room = {
-    id: roomId,
-    name,
-    players: [userId],
-    gameState: {
-      phase: GamePhase.SETUP,
-      players: {
-        [userId]: {
-          id: userId,
-          position: { row: 0, col: 0 },
-          isReady: false,
-        },
-      },
-      currentTurn: null,
-      maps: {},
-      winner: null,
-    },
-    maxPlayers: 2,
-  };
+  console.log('방 생성 시도...', { name, creatorId, maxPlayers });
   
   try {
-    await set(newRoomRef, newRoom);
+    // 기본 방 정보 생성
+    const roomsRef = ref(database, 'rooms');
+    const newRoomRef = push(roomsRef);
+    const roomId = newRoomRef.key;
+    
+    if (!roomId) {
+      console.error('방 ID 생성 실패');
+      return null;
+    }
+    
+    // 방 생성 시간
+    const now = serverTimestamp();
+    
+    // 초기 게임 상태 설정
+    const initialGameState = {
+      phase: 'setup', // setup, play, end
+      turn: 0,
+      currentPlayer: creatorId,
+      players: {
+        [creatorId]: {
+          id: creatorId,
+          position: { row: 0, col: 0 },
+          isReady: false,
+          isOnline: true,
+          lastSeen: now
+        }
+      },
+      map: null,
+      obstacles: [],
+      winner: null,
+      startedAt: null,
+      endedAt: null
+    };
+    
+    // 방 데이터 구조
+    const roomData = {
+      id: roomId,
+      name: name,
+      createdAt: now,
+      createdBy: creatorId,
+      players: [creatorId],
+      maxPlayers: maxPlayers,
+      gameState: initialGameState,
+      status: 'waiting', // waiting, playing, ended
+      lastActivity: now
+    };
+    
+    // 방 생성
+    await set(newRoomRef, roomData);
     console.log('방 생성 성공:', roomId);
+    
+    // 방 생성자를 방 참여자로 추가
+    await set(ref(database, `rooms/${roomId}/joinedPlayers/${creatorId}`), {
+      joined: true,
+      joinedAt: now,
+      isCreator: true
+    });
+    
+    // 사용자-방 매핑 정보 저장
+    await set(ref(database, `userRooms/${creatorId}/${roomId}`), {
+      joinedAt: now,
+      lastSeen: now,
+      active: true
+    });
+    
+    // 사용자 상태 업데이트
+    await update(ref(database, `userStatus/${creatorId}`), {
+      currentRoom: roomId,
+      lastActivity: now
+    });
+    
     return roomId;
   } catch (error) {
-    console.error('방 생성 오류:', error);
-    throw error;
+    console.error('방 생성 중 오류:', error);
+    return null;
   }
 };
 
 // 방 참가
 export const joinRoom = async (roomId: string, userId: string): Promise<boolean> => {
-  if (!database) {
-    console.error('Firebase Database가 초기화되지 않았습니다.');
+  if (!database || !auth.currentUser) return false;
+  
+  // 인증 상태 확인
+  if (auth.currentUser.uid !== userId) {
+    console.error('인증된 사용자 ID와 참여 시도 ID 불일치');
     return false;
   }
 
-  console.log('방 참가 시도...', { roomId, userId });
-  const roomRef = ref(database, `rooms/${roomId}`);
-  
-  return new Promise((resolve) => {
-    onValue(roomRef, async (snapshot) => {
-      console.log('방 정보 수신:', snapshot.val());
-      const room = snapshot.val() as Room;
-      
-      if (!room) {
-        console.log('방을 찾을 수 없음');
-        resolve(false);
-        return;
-      }
-      
-      if ((room.players?.length || 0) >= room.maxPlayers) {
-        console.log('방이 가득 참');
-        resolve(false);
-        return;
-      }
-      
-      // 이미 참가한 경우 (플레이어 리스트에 있는 경우)
-      if (room.players?.includes(userId)) {
-        console.log('이미 참가한 방, 플레이어 정보 유지');
-        // 기존 플레이어 정보가 이미 있으면 그대로 유지
-        resolve(true);
-        return;
-      }
-      
-      // 기존에 방에 있었던 플레이어인지 확인 (게임 상태에 플레이어 정보가 있는지)
-      const existingPlayerInfo = room.gameState?.players?.[userId];
-      
-      // 새 플레이어 추가
-      const updatedPlayers = [...(room.players || []), userId];
-      const updatedGameState = {
-        ...(room.gameState || {}),
-        players: {
-          ...(room.gameState?.players || {}),
-          [userId]: existingPlayerInfo || { // 기존 정보가 있으면 재사용, 없으면 새로 생성
-            id: userId,
-            position: { row: 0, col: 0 },
-            isReady: false,
-          }
-        }
-      };
-      
-      try {
-        await update(roomRef, {
-          players: updatedPlayers,
-          gameState: updatedGameState
-        });
-        console.log('방 참가 성공');
-        resolve(true);
-      } catch (error) {
-        console.error('방 참가 오류:', error);
-        resolve(false);
-      }
-    }, { onlyOnce: true });
-  });
+  try {
+    console.log('방 참여 시도:', roomId);
+    
+    // 방 정보 확인
+    const roomRef = ref(database, `rooms/${roomId}`);
+    const snapshot = await get(roomRef);
+    
+    if (!snapshot.exists()) {
+      console.error('방을 찾을 수 없음:', roomId);
+      return false;
+    }
+    
+    const roomData = snapshot.val();
+    
+    // 최대 인원 제한 체크
+    if (roomData.players && roomData.players.length >= roomData.maxPlayers) {
+      console.error('방 인원이 가득 참:', roomId);
+      return false;
+    }
+    
+    // 플레이어 목록에 사용자 추가
+    const updatedPlayers = roomData.players ? [...roomData.players] : [];
+    if (!updatedPlayers.includes(userId)) {
+      updatedPlayers.push(userId);
+      await update(roomRef, { players: updatedPlayers });
+    }
+    
+    // 게임 상태에 플레이어 추가 (위치 정보 포함)
+    const playerPath = `rooms/${roomId}/gameState/players/${userId}`;
+    const playerRef = ref(database, playerPath);
+    const playerSnapshot = await get(playerRef);
+    
+    if (!playerSnapshot.exists() || !playerSnapshot.val().position) {
+      // 플레이어 초기 상태 설정
+      await update(ref(database, playerPath), {
+        id: userId,
+        position: { row: 0, col: 0 },
+        isReady: false,
+        isOnline: true,
+        lastSeen: serverTimestamp()
+      });
+    }
+    
+    // 방 참여 상태 업데이트
+    await update(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`), {
+      joined: true,
+      joinedAt: serverTimestamp(),
+      displayName: auth.currentUser.displayName || '익명 사용자',
+      photoURL: auth.currentUser.photoURL || null
+    });
+    
+    // 사용자-방 매핑 정보 저장
+    await update(ref(database, `userRooms/${userId}/${roomId}`), {
+      joinedAt: serverTimestamp(),
+      lastSeen: serverTimestamp(),
+      active: true
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('방 참여 중 오류:', error);
+    return false;
+  }
 };
 
 // 방 상태 조회
@@ -367,6 +447,16 @@ export const setPlayerReady = async (roomId: string, userId: string, isReady: bo
 
 // 맵 설정
 export const placeObstacles = async (roomId: string, userId: string, map: GameMap): Promise<void> => {
+  if (!roomId || !userId) {
+    console.error('유효하지 않은 roomId 또는 userId:', { roomId, userId });
+    throw new Error('유효하지 않은 방 ID 또는 사용자 ID입니다.');
+  }
+
+  if (!database) {
+    console.error('Firebase Database가 초기화되지 않았습니다.');
+    return;
+  }
+
   try {
     console.log('맵 설정 중...', { roomId, userId, map });
     const mapRef = ref(database, `rooms/${roomId}/gameState/maps/${userId}`);
@@ -495,46 +585,242 @@ export const endGame = async (roomId: string, userId: string): Promise<void> => 
 };
 
 // 방 나가기
-export const leaveRoom = async (roomId: string, userId: string): Promise<void> => {
+export const leaveRoom = async (roomId: string, userId: string): Promise<boolean> => {
   if (!database) {
     console.error('Firebase Database가 초기화되지 않았습니다.');
-    return;
+    return false;
   }
 
-  console.log('방 나가기 시도...', { roomId, userId });
-  const roomRef = ref(database, `rooms/${roomId}`);
+  try {
+    console.log('방 나가기 시도:', { roomId, userId });
+    
+    // 1. 모든 관련 경로에서 플레이어 데이터 삭제
+    const roomRef = ref(database, `rooms/${roomId}`);
+    const roomSnapshot = await get(roomRef);
+    
+    if (!roomSnapshot.exists()) {
+      console.error('존재하지 않는 방입니다.');
+      return false;
+    }
+    
+    const room = roomSnapshot.val();
+    
+    // 플레이어 목록에서 제거
+    if (room.players && room.players.includes(userId)) {
+      const updatedPlayers = room.players.filter(id => id !== userId);
+      await update(roomRef, { players: updatedPlayers });
+    }
+    
+    // 2. 게임 상태에서 플레이어 정보 명시적으로 제거
+    if (room.gameState && room.gameState.players && room.gameState.players[userId]) {
+      // 플레이어 상태를 완전히 삭제하지 않고 오프라인 상태로 표시 (기록 유지 목적)
+      await update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), {
+        isOnline: false,
+        hasLeft: true, // 명시적으로 나간 상태 표시
+        lastSeen: serverTimestamp()
+      });
+    }
+    
+    // 3. 방 참여 상태 명확히 제거
+    await remove(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`));
+    
+    // 4. 방 멤버 상태 업데이트
+    await update(ref(database, `rooms/${roomId}/members/${userId}`), {
+      online: false,
+      hasLeft: true,
+      leftAt: serverTimestamp()
+    });
+    
+    // 5. 사용자-방 연결 정보 업데이트
+    await update(ref(database, `userRooms/${userId}/${roomId}`), {
+      active: false,
+      leftAt: serverTimestamp()
+    });
+    
+    // 6. 사용자 상태 업데이트
+    await update(ref(database, `userStatus/${userId}`), {
+      online: true, // 앱에서는 여전히 온라인이지만
+      currentRoom: null, // 현재 방은 없음
+      lastSeen: serverTimestamp()
+    });
+    
+    // 7. 다른 플레이어들에게 나간 이벤트 알림 (선택 사항)
+    await push(ref(database, `rooms/${roomId}/events`), {
+      type: 'PLAYER_LEFT',
+      userId: userId,
+      displayName: auth.currentUser?.displayName || '익명 사용자',
+      timestamp: serverTimestamp()
+    });
+    
+    console.log('방 나가기 성공');
+    return true;
+  } catch (error) {
+    console.error('방 나가기 오류:', error);
+    return false;
+  }
+};
+
+// 현재 접속 상태 관리 함수
+export const updateUserPresence = async (userId: string) => {
+  if (!userId) return;
   
-  return new Promise((resolve) => {
-    onValue(roomRef, async (snapshot) => {
-      console.log('방 정보 수신:', snapshot.val());
-      const room = snapshot.val() as Room;
-      
-      if (!room) {
-        console.log('방을 찾을 수 없음');
-        resolve();
-        return;
-      }
-      
-      // 플레이어 제거 (players 배열에서만 제거하고 gameState.players에서는 유지)
-      const updatedPlayers = room.players?.filter(id => id !== userId) || [];
-      console.log('업데이트된 플레이어 목록:', updatedPlayers);
-      
-      // 게임 상태에서는 플레이어 정보를 유지하되 온라인 상태만 변경
-      if (room.gameState && room.gameState.players && room.gameState.players[userId]) {
-        // 플레이어 정보는 그대로 유지하고 players 배열에서만 제거
-        try {
-          await update(roomRef, {
-            players: updatedPlayers
-          });
-          console.log('방 업데이트 성공 (플레이어 연결 상태만 변경)');
-        } catch (error) {
-          console.error('방 업데이트 오류:', error);
-        }
-      }
-      
-      resolve();
-    }, { onlyOnce: true });
+  const database = getDatabase();
+  
+  // 사용자 온라인 상태 참조
+  const userStatusRef = ref(database, `status/${userId}`);
+  
+  // 연결 상태 참조
+  const connectedRef = ref(database, '.info/connected');
+  
+  onValue(connectedRef, async (snapshot) => {
+    // 연결되어 있지 않으면 종료
+    if (snapshot.val() === false) {
+      return;
+    }
+    
+    // 연결이 끊어질 때 실행할 작업 등록
+    onDisconnect(userStatusRef).remove();
+    
+    // 현재 상태를 온라인으로 설정
+    await set(userStatusRef, {
+      online: true,
+      lastSeen: serverTimestamp()
+    });
+    
+    // 사용자가 접속한 방 확인
+    const userRoomsRef = ref(database, `userRooms/${userId}`);
+    const userRoomsSnapshot = await get(userRoomsRef);
+    const userRooms = userRoomsSnapshot.val();
+    
+    // 사용자가 속한 방들에 대해 온라인 상태 표시
+    if (userRooms) {
+      Object.keys(userRooms).forEach(async (roomId) => {
+        const roomMemberRef = ref(database, `rooms/${roomId}/members/${userId}`);
+        
+        // 방에서 연결 끊어질 때 상태 변경
+        onDisconnect(roomMemberRef).update({
+          online: false,
+          lastSeen: serverTimestamp()
+        });
+        
+        // 현재 상태 업데이트
+        await update(roomMemberRef, {
+          online: true,
+          lastSeen: serverTimestamp()
+        });
+      });
+    }
   });
+};
+
+// 방 청소 함수 - 주기적으로 실행하여 빈 방 삭제
+export const cleanUpEmptyRooms = async () => {
+  const database = getDatabase();
+  const roomsRef = ref(database, 'rooms');
+  
+  const roomsSnapshot = await get(roomsRef);
+  const rooms = roomsSnapshot.val();
+  
+  if (!rooms) return;
+  
+  Object.entries(rooms).forEach(async ([roomId, roomData]: [string, any]) => {
+    // 플레이어가 없는 방 삭제
+    if (!roomData.players || roomData.players.length === 0) {
+      await remove(ref(database, `rooms/${roomId}`));
+      console.log(`빈 방 삭제: ${roomId}`);
+    }
+  });
+};
+
+// 새로고침 시 방 세션 자동 복원
+export const restoreRoomSession = async (): Promise<string | null> => {
+  if (!auth?.currentUser || !database) return null;
+  
+  try {
+    const userId = auth.currentUser.uid;
+    // 사용자가 속한 방 찾기
+    const userRoomsRef = ref(database, `userRooms/${userId}`);
+    const userRoomsSnapshot = await get(userRoomsRef);
+    const userRooms = userRoomsSnapshot.val();
+    
+    if (!userRooms) return null;
+    
+    // 가장 최근에 활동한 방 찾기
+    const roomEntries = Object.entries(userRooms);
+    if (roomEntries.length === 0) return null;
+    
+    // 마지막 활동 시간 기준으로 정렬
+    roomEntries.sort((a, b) => {
+      const lastSeenA = a[1].lastSeen || 0;
+      const lastSeenB = b[1].lastSeen || 0;
+      return lastSeenB - lastSeenA;
+    });
+    
+    // 가장 최근 방 ID
+    const [mostRecentRoomId] = roomEntries[0];
+    
+    // 방 존재 확인
+    const roomRef = ref(database, `rooms/${mostRecentRoomId}`);
+    const roomSnapshot = await get(roomRef);
+    
+    if (!roomSnapshot.exists()) {
+      console.log('방이 존재하지 않음');
+      return null;
+    }
+    
+    console.log('최근 활동 방 발견:', mostRecentRoomId);
+    return mostRecentRoomId;
+
+  } catch (error) {
+    console.error('방 세션 복원 중 오류:', error);
+    return null;
+  }
+};
+
+// null 키를 가진 데이터 정리
+export const cleanupNullKeys = async (roomId: string) => {
+  if (!database) return;
+  
+  try {
+    console.log('방 데이터 정리 시작:', roomId);
+    
+    // 맵 데이터에서 null 키 제거
+    const mapsRef = ref(database, `rooms/${roomId}/gameState/maps`);
+    const mapsSnapshot = await get(mapsRef);
+    const maps = mapsSnapshot.val();
+    
+    if (maps && maps.null) {
+      console.log('맵 데이터에서 null 키 제거');
+      await remove(ref(database, `rooms/${roomId}/gameState/maps/null`));
+    }
+    
+    // 플레이어 데이터에서 null 키 제거
+    const playersRef = ref(database, `rooms/${roomId}/gameState/players`);
+    const playersSnapshot = await get(playersRef);
+    const players = playersSnapshot.val();
+    
+    if (players && players.null) {
+      console.log('플레이어 데이터에서 null 키 제거');
+      await remove(ref(database, `rooms/${roomId}/gameState/players/null`));
+    }
+    
+    // 플레이어 목록에서 null 값 제거
+    const roomRef = ref(database, `rooms/${roomId}`);
+    const roomSnapshot = await get(roomRef);
+    const room = roomSnapshot.val();
+    
+    if (room && room.players) {
+      const cleanedPlayers = room.players.filter(id => id !== null && id !== 'null');
+      if (cleanedPlayers.length !== room.players.length) {
+        console.log('플레이어 목록에서 null 값 제거');
+        await update(roomRef, { players: cleanedPlayers });
+      }
+    }
+    
+    console.log('방 데이터 정리 완료');
+  } catch (error) {
+    console.error('데이터 정리 중 오류:', error);
+  }
 };
 
 /**
@@ -557,4 +843,146 @@ export const leaveRoom = async (roomId: string, userId: string): Promise<void> =
  * 4. 구글 클라우드 콘솔 설정 확인:
  *    - Google Cloud Console -> API 및 서비스 -> OAuth 동의 화면이 올바르게 설정되어 있는지 확인
  *    - 승인된 도메인, 승인된 JavaScript 출처, 승인된 리디렉션 URI 등을 확인하세요.
- */ 
+ */
+
+// 인증 상태 복원 시도 (토큰 만료 또는 오류 발생 시)
+export const tryRestoreAuth = async (): Promise<boolean> => {
+  if (!auth) return false;
+  
+  try {
+    // 현재 사용자 확인
+    const currentUser = auth.currentUser;
+    
+    if (currentUser) {
+      // 현재 인증된 사용자가 있으면 토큰 갱신 시도
+      try {
+        await currentUser.getIdToken(true);
+        console.log('토큰 리프레시 성공');
+        
+        // Firebase 데이터베이스에 사용자 상태 기록 (선택사항)
+        if (database) {
+          const userStatusRef = ref(database, `userStatus/${currentUser.uid}`);
+          await update(userStatusRef, {
+            lastTokenRefresh: serverTimestamp(),
+            lastActive: serverTimestamp()
+          });
+        }
+        
+        return true;
+      } catch (e) {
+        console.error('토큰 리프레시 실패:', e);
+        return false;
+      }
+    }
+    
+    return !!currentUser;
+  } catch (error) {
+    console.error('인증 복원 오류:', error);
+    return false;
+  }
+};
+
+// Firebase를 사용하여 방 참여 상태 확인
+export const checkRoomMembership = async (userId: string, roomId: string): Promise<boolean> => {
+  if (!userId || !roomId || !database) return false;
+  
+  try {
+    console.log('Firebase에서 방 참여 상태 확인:', roomId);
+    
+    // 1. 사용자가 방에 포함되어 있는지 확인
+    const roomRef = ref(database, `rooms/${roomId}`);
+    const roomSnapshot = await get(roomRef);
+    
+    if (!roomSnapshot.exists()) {
+      console.log('방을 찾을 수 없음:', roomId);
+      return false;
+    }
+    
+    const roomData = roomSnapshot.val();
+    
+    // 2. 플레이어 목록에 사용자가 포함되어 있는지 확인
+    const playerExists = roomData.players && roomData.players.includes(userId);
+    
+    // 3. 게임 상태에 사용자 정보가 있는지 확인
+    const playerStateExists = roomData.gameState?.players && roomData.gameState.players[userId];
+    
+    if (playerExists || playerStateExists) {
+      console.log('사용자가 방의 멤버임:', roomId);
+      return true;
+    }
+    
+    console.log('사용자가 방의 멤버가 아님:', roomId);
+    return false;
+  } catch (error) {
+    console.error('방 참여 상태 확인 중 오류:', error);
+    return false;
+  }
+};
+
+// 방 재참여 처리 (세션이 끊어진 후 재연결)
+export const rejoinRoom = async (userId: string, roomId: string): Promise<boolean> => {
+  if (!userId || !roomId || !database || !auth.currentUser) return false;
+  
+  // 인증 상태 확인
+  if (auth.currentUser.uid !== userId) {
+    console.error('인증된 사용자 ID와 재참여 시도 ID 불일치');
+    return false;
+  }
+
+  try {
+    console.log('방 재참여 시도:', roomId);
+    
+    // 토큰 유효성 확인 (선택 사항)
+    try {
+      await auth.currentUser.getIdToken(true);
+    } catch (e) {
+      console.error('토큰 갱신 실패, 재참여 불가:', e);
+      return false;
+    }
+    
+    // 방 정보 확인
+    const roomRef = ref(database, `rooms/${roomId}`);
+    const snapshot = await get(roomRef);
+    
+    if (!snapshot.exists()) {
+      console.error('방을 찾을 수 없음:', roomId);
+      return false;
+    }
+    
+    const roomData = snapshot.val();
+    
+    // 데이터베이스 상 방 상태 검증 (추가 검증)
+    if (roomData.closed || roomData.deleted) {
+      console.error('닫힌 방에 재참여 시도:', roomId);
+      return false;
+    }
+    
+    // 플레이어 목록에 사용자가 없으면 추가
+    if (!roomData.players || !roomData.players.includes(userId)) {
+      console.log('방 참여자 목록에 추가:', userId);
+      const updatedPlayers = roomData.players ? [...roomData.players, userId] : [userId];
+      await update(roomRef, { players: updatedPlayers });
+    }
+    
+    // 방 참여 상태 업데이트
+    await update(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`), {
+      joined: true,
+      joinedAt: serverTimestamp(),
+      displayName: auth.currentUser.displayName || '익명 사용자',
+      photoURL: auth.currentUser.photoURL || null,
+      tokenValid: true // 토큰 유효성 표시
+    });
+    
+    // 사용자 현재 상태 업데이트
+    await update(ref(database, `userStatus/${userId}`), {
+      online: true,
+      currentRoom: roomId,
+      lastSeen: serverTimestamp()
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('방 재참여 중 오류:', error);
+    return false;
+  }
+}; 

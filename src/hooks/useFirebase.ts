@@ -9,6 +9,7 @@ import {
   getGameState
 } from '@/lib/firebase';
 import { Room, GameState, UserProfile } from '@/types/game';
+import { getDatabase, ref, onValue } from 'firebase/database';
 
 // 사용자 인증 및 ID 관리
 export const useAuth = () => {
@@ -106,28 +107,56 @@ export const useRooms = () => {
 };
 
 // 게임 상태 관리
-export const useGameState = (roomId: string) => {
+export function useGameState(roomId: string) {
   const [gameState, setGameState] = useState<GameState | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!roomId) {
       setIsLoading(false);
       return;
     }
+
+    const database = getDatabase();
+    const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
+    const eventsRef = ref(database, `rooms/${roomId}/events`);
     
-    setIsLoading(true);
-    
-    // 게임 상태 구독
-    const unsubscribe = getGameState(roomId, (state) => {
-      setGameState(state);
+    // 게임 상태 변경 감지
+    const unsubscribe = onValue(gameStateRef, (snapshot) => {
       setIsLoading(false);
+      
+      if (snapshot.exists()) {
+        setGameState(snapshot.val());
+      } else {
+        setGameState(null);
+      }
+    }, (error) => {
+      console.error('게임 상태 구독 오류:', error);
+      setError('게임 상태를 불러올 수 없습니다.');
+      setIsLoading(false);
+    });
+    
+    // 방 이벤트 감지 (선택 사항)
+    const eventsUnsubscribe = onValue(eventsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const events = snapshot.val();
+        const eventsList = Object.values(events);
+        
+        // 가장 최근 이벤트 확인
+        const lastEvent = eventsList[eventsList.length - 1];
+        if (lastEvent && lastEvent.type === 'PLAYER_LEFT') {
+          console.log('플레이어가 방을 나갔습니다:', lastEvent.displayName);
+          // 필요한 경우 UI에 알림 표시
+        }
+      }
     });
     
     return () => {
       unsubscribe();
+      eventsUnsubscribe();
     };
   }, [roomId]);
-  
-  return { gameState, isLoading };
-}; 
+
+  return { gameState, isLoading, error };
+} 

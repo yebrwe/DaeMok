@@ -13,6 +13,7 @@ interface GamePlayProps {
   roomId: string;
   currentTurn: string | null;
   myMap?: GameMap; // 내가 만든 맵 정보 추가
+  gameEnded?: boolean; // 게임 종료 여부
 }
 
 const GamePlay: React.FC<GamePlayProps> = ({ 
@@ -21,7 +22,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
   userId, 
   roomId, 
   currentTurn,
-  myMap // 내가 만든 맵 정보
+  myMap, // 내가 만든 맵 정보
+  gameEnded = false
 }) => {
   const { startPosition, endPosition, obstacles } = map;
   
@@ -51,6 +53,10 @@ const GamePlay: React.FC<GamePlayProps> = ({
         // 나를 제외한 플레이어가 상대방
         const foundOpponentId = Object.keys(players).find(id => id !== userId);
         
+        console.log('모든 플레이어 ID:', Object.keys(players));
+        console.log('내 ID:', userId);
+        console.log('찾은 상대방 ID:', foundOpponentId);
+        
         if (foundOpponentId) {
           setOpponentId(foundOpponentId);
           console.log('상대방 ID 찾음:', foundOpponentId);
@@ -67,6 +73,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
           
           // cleanup 함수 반환
           return () => unsubscribe();
+        } else {
+          console.log('상대방을 찾을 수 없습니다.');
         }
       } catch (error) {
         console.error('상대방 정보 조회 중 오류:', error);
@@ -292,16 +300,27 @@ const GamePlay: React.FC<GamePlayProps> = ({
     }
   };
   
+  // 게임 종료 상태 감지 및 처리
+  useEffect(() => {
+    if (gameEnded) {
+      setGameOver(true);
+    }
+  }, [gameEnded]);
+  
   return (
     <div className="flex flex-col items-center gap-4 w-full max-w-2xl mx-auto">
       <h2 className="text-2xl font-bold text-center my-4">
-        {gameOver ? '게임 종료' : '게임 플레이'}
+        {gameOver || gameEnded ? '게임 종료' : '게임 플레이'}
       </h2>
       
       <div className="text-xl font-bold mb-2 text-center">
-        {isMyTurn 
-          ? '현재 당신의 턴입니다!'
-          : '상대방의 턴입니다. 기다려주세요...'}
+        {gameOver || gameEnded ? (
+          <span className="text-green-600">게임이 종료되었습니다!</span>
+        ) : (
+          isMyTurn 
+            ? '현재 당신의 턴입니다!'
+            : '상대방의 턴입니다. 기다려주세요...'
+        )}
       </div>
       
       <div className="flex justify-between w-full px-4 mb-4">
@@ -357,39 +376,42 @@ const GamePlay: React.FC<GamePlayProps> = ({
         )}
       </div>
       
-      <div className="mt-6 grid grid-cols-3 gap-2 w-36">
-        <div className="col-span-1"></div>
-        <button
-          className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
-          onClick={() => handleMove('up')}
-          disabled={gameOver || !isMyTurn}
-        >
-          ↑
-        </button>
-        <div className="col-span-1"></div>
-        
-        <button
-          className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
-          onClick={() => handleMove('left')}
-          disabled={gameOver || !isMyTurn}
-        >
-          ←
-        </button>
-        <button
-          className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
-          onClick={() => handleMove('down')}
-          disabled={gameOver || !isMyTurn}
-        >
-          ↓
-        </button>
-        <button
-          className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
-          onClick={() => handleMove('right')}
-          disabled={gameOver || !isMyTurn}
-        >
-          →
-        </button>
-      </div>
+      {/* 컨트롤 버튼 (게임 종료 시 숨김) */}
+      {!gameOver && !gameEnded && (
+        <div className="mt-6 grid grid-cols-3 gap-2 w-36">
+          <div className="col-span-1"></div>
+          <button
+            className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
+            onClick={() => handleMove('up')}
+            disabled={gameOver || !isMyTurn}
+          >
+            ↑
+          </button>
+          <div className="col-span-1"></div>
+          
+          <button
+            className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
+            onClick={() => handleMove('left')}
+            disabled={gameOver || !isMyTurn}
+          >
+            ←
+          </button>
+          <button
+            className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
+            onClick={() => handleMove('down')}
+            disabled={gameOver || !isMyTurn}
+          >
+            ↓
+          </button>
+          <button
+            className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
+            onClick={() => handleMove('right')}
+            disabled={gameOver || !isMyTurn}
+          >
+            →
+          </button>
+        </div>
+      )}
       
       {gameOver && (
         <div className="mt-4 flex gap-2">
