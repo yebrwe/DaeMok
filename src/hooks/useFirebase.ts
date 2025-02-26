@@ -2,39 +2,85 @@
 
 import { useState, useEffect } from 'react';
 import { 
-  signInAnonymousUser, 
+  signInWithGoogle,
+  signOutUser,
+  getCurrentUser,
   getRooms, 
-  getGameState, 
-  generateUserId as generateFirebaseUserId
+  getGameState
 } from '@/lib/firebase';
-import { Room, GameState } from '@/types/game';
+import { Room, GameState, UserProfile } from '@/types/game';
 
 // 사용자 인증 및 ID 관리
 export const useAuth = () => {
   const [userId, setUserId] = useState<string | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   
   useEffect(() => {
     const initAuth = async () => {
       setIsLoading(true);
       
-      // 로컬 스토리지에서 사용자 ID 확인
-      let storedUserId = localStorage.getItem('daemok_user_id');
+      // 현재 로그인된 사용자 확인
+      const currentUser = getCurrentUser();
       
-      if (!storedUserId) {
-        // 익명 로그인 또는 ID 생성
-        storedUserId = await signInAnonymousUser() || generateFirebaseUserId();
-        localStorage.setItem('daemok_user_id', storedUserId);
+      if (currentUser) {
+        // 이미 로그인된 사용자가 있으면 프로필 정보 설정
+        setUserId(currentUser.uid);
+        setUserProfile({
+          uid: currentUser.uid,
+          displayName: currentUser.displayName,
+          email: currentUser.email,
+          photoURL: currentUser.photoURL
+        });
+        setIsLoggedIn(true);
+        setIsLoading(false);
+        return;
       }
       
-      setUserId(storedUserId);
+      // 로그인된 사용자가 없으면 상태 업데이트
+      setUserId(null);
+      setUserProfile(null);
+      setIsLoggedIn(false);
       setIsLoading(false);
     };
     
     initAuth();
   }, []);
   
-  return { userId, isLoading };
+  // 구글 로그인 함수
+  const loginWithGoogle = async () => {
+    setIsLoading(true);
+    const userInfo = await signInWithGoogle();
+    
+    if (userInfo) {
+      localStorage.setItem('daemok_user_id', userInfo.uid);
+      setUserId(userInfo.uid);
+      setUserProfile(userInfo);
+      setIsLoggedIn(true);
+    }
+    
+    setIsLoading(false);
+    return !!userInfo;
+  };
+  
+  // 로그아웃 함수
+  const logout = async () => {
+    setIsLoading(true);
+    const success = await signOutUser();
+    
+    if (success) {
+      localStorage.removeItem('daemok_user_id');
+      setUserId(null);
+      setUserProfile(null);
+      setIsLoggedIn(false);
+    }
+    
+    setIsLoading(false);
+    return success;
+  };
+  
+  return { userId, userProfile, isLoading, isLoggedIn, loginWithGoogle, logout };
 };
 
 // 방 목록 관리

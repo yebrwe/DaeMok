@@ -6,7 +6,7 @@ import Lobby from '@/components/Lobby';
 import { useAuth } from '@/hooks/useFirebase';
 
 export default function LobbyPage() {
-  const { userId, isLoading } = useAuth();
+  const { userId, userProfile, isLoading, isLoggedIn } = useAuth();
   const router = useRouter();
   
   // 사용자 ID 확인
@@ -21,15 +21,15 @@ export default function LobbyPage() {
     );
   }
   
-  if (!userId) {
-    // ID가 없으면 홈으로 리다이렉트
+  if (!isLoggedIn || !userProfile) {
+    // 로그인되지 않은 경우 홈으로 리다이렉트
     router.push('/');
     return null;
   }
   
   return (
     <div className="container mx-auto p-4">
-      <Lobby userId={userId} />
+      <Lobby userId={userProfile.uid} />
     </div>
   );
 } 

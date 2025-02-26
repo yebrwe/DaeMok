@@ -1,7 +1,7 @@
 import { Direction, GameMap, Obstacle, Position } from '@/types/game';
 
 // 보드 크기 상수
-export const BOARD_SIZE = 8;
+export const BOARD_SIZE = 6;
 
 // 위치가 보드 내에 있는지 확인
 export function isPositionInBoard(position: Position): boolean {

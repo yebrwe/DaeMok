@@ -11,6 +11,7 @@ import {
   endGame, 
   leaveRoom 
 } from '@/lib/firebase';
+import { useRouter } from 'next/navigation';
 
 interface GameRoomProps {
   userId: string;
@@ -22,20 +23,12 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   const [isReady, setIsReady] = useState(false);
   const [myMap, setMyMap] = useState<GameMap | null>(null);
   const [opponentMap, setOpponentMap] = useState<GameMap | null>(null);
+  const router = useRouter();
   
-  // 컴포넌트 언마운트 시 방 나가기
+  // 컴포넌트 마운트 시 현재 방 정보 저장 (새로고침해도 그대로 유지)
   useEffect(() => {
-    return () => {
-      // 게임이 종료된 상태가 아닐 때만 방 나가기 실행
-      // 게임 종료 시에는 endGame에서 이미 처리됨
-      if (gameState && gameState.phase !== GamePhase.END) {
-        console.log('컴포넌트 언마운트 - 방 나가기');
-        leaveRoom(roomId, userId);
-      } else {
-        console.log('컴포넌트 언마운트 - 게임 종료 상태이므로 방 나가기 실행 안함');
-      }
-    };
-  }, [roomId, userId, gameState]);
+    localStorage.setItem('currentRoom', roomId);
+  }, [roomId]);
   
   // 게임 상태 변경 감지
   useEffect(() => {
@@ -112,6 +105,18 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
+  // 방 나가기 핸들러 (명시적으로 로비로 돌아갈 때 호출)
+  const handleLeaveRoom = async () => {
+    try {
+      await leaveRoom(roomId, userId);
+      console.log('방 나가기 성공');
+    } catch (error) {
+      console.error('방 나가기 오류:', error);
+    }
+    localStorage.removeItem('currentRoom');
+    router.push('/lobby');
+  };
+  
   // 로딩 중 표시
   if (isLoading || !gameState) {
     return (
@@ -151,21 +156,31 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       
       {/* 플레이어 정보 */}
       <div className="flex justify-around mb-6">
-        {players && players.length > 0 ? players.map((player, index) => (
-          <div
-            key={`player-${player.id || index}`}
-            className={`text-center p-3 rounded-lg ${
-              player.id === userId ? 'bg-blue-100' : 'bg-gray-100'
-            }`}
-          >
-            <div className="font-medium">
-              {player.id === userId ? '나' : '상대방'}
-            </div>
+        {/* 내 플레이어 정보 */}
+        {gameState.players && gameState.players[userId] && (
+          <div className="text-center p-3 rounded-lg bg-blue-100">
+            <div className="font-medium">나</div>
             <div className="text-sm">
-              {player.isReady ? '준비 완료' : '준비 중...'}
+              {gameState.players[userId].isReady ? '준비 완료' : '준비 중...'}
             </div>
           </div>
-        )) : <div>플레이어 정보 로딩 중...</div>}
+        )}
+
+        {/* 상대방 플레이어 정보 - 실제 유효한 상대가 있을 때만 표시 */}
+        {gameState.players &&
+         Object.values(gameState.players).some(p => p.id && p.id !== userId) && (
+          <div className="text-center p-3 rounded-lg bg-gray-100">
+            <div className="font-medium">상대방</div>
+            <div className="text-sm">
+              {
+                Object.values(gameState.players).find(p => p.id && p.id !== userId)
+                  ?.isReady
+                  ? '준비 완료'
+                  : '준비 중...'
+              }
+            </div>
+          </div>
+        )}
       </div>
       
       {/* 게임 종료 메시지 */}
@@ -198,7 +213,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         <div key="gameover-container" className="flex flex-col items-center">
           <button
             className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition mt-8"
-            onClick={() => window.location.href = '/lobby'}
+            onClick={handleLeaveRoom}
           >
             로비로 돌아가기
           </button>

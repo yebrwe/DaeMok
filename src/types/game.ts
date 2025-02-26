@@ -3,6 +3,14 @@
 export type CellType = 'empty' | 'start' | 'end' | 'player';
 export type Direction = 'up' | 'down' | 'left' | 'right';
 
+// 사용자 프로필 타입
+export interface UserProfile {
+  uid: string;
+  displayName: string | null;
+  email: string | null;
+  photoURL: string | null;
+}
+
 // 셀 좌표 타입
 export interface Position {
   row: number;
@@ -36,13 +44,23 @@ export interface GameMap {
   obstacles: Obstacle[];
 }
 
+// 충돌된 벽 타입
+export interface CollisionWall {
+  playerId: string;
+  position: Position;
+  direction: Direction;
+  timestamp: number;
+  mapOwnerId: string;  // 맵 소유자 ID - 어떤 플레이어의 맵인지 구분
+}
+
 // 게임 상태 타입
 export interface GameState {
   phase: GamePhase;
   players: Record<string, Player>;
-  currentTurn: string | null;
-  maps: Record<string, GameMap>;
-  winner: string | null;
+  maps?: Record<string, GameMap>;
+  currentTurn?: string;
+  winner?: string;
+  collisionWalls?: CollisionWall[];  // 충돌 벽 정보를 저장할 배열 추가
 }
 
 // 게임 방 타입

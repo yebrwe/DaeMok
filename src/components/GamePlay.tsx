@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Direction, GameMap, GamePhase, Position } from '@/types/game';
+import { CollisionWall, Direction, GameMap, GamePhase, Position } from '@/types/game';
 import GameBoard from './GameBoard';
-import { canMove, getNewPosition, isSamePosition } from '@/lib/gameUtils';
+import { BOARD_SIZE, canMove, getNewPosition, isSamePosition } from '@/lib/gameUtils';
 import { getDatabase, ref, update, get, onValue } from 'firebase/database';
 
 interface GamePlayProps {
@@ -32,6 +32,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const [message, setMessage] = useState<string>('게임을 시작합니다.');
   const [opponentPosition, setOpponentPosition] = useState<Position | null>(null);
   const [opponentId, setOpponentId] = useState<string | null>(null);
+  const [collisionWalls, setCollisionWalls] = useState<CollisionWall[]>([]);
+  const [opponentCollisionWalls, setOpponentCollisionWalls] = useState<CollisionWall[]>([]);
   
   const isMyTurn = currentTurn === userId;
   
@@ -82,6 +84,36 @@ const GamePlay: React.FC<GamePlayProps> = ({
     };
   }, [roomId, userId]);
   
+  // 충돌 벽 정보 구독
+  useEffect(() => {
+    const database = getDatabase();
+    const collisionWallsRef = ref(database, `rooms/${roomId}/gameState/collisionWalls`);
+    
+    const unsubscribe = onValue(collisionWallsRef, (snapshot) => {
+      const walls = snapshot.val();
+      if (walls) {
+        // 내가 플레이하는 맵(상대방이 만든 맵)의 충돌 벽만 필터링
+        const myWalls = Object.values(walls).filter(
+          (wall: CollisionWall) => wall.mapOwnerId === opponentId
+        );
+        setCollisionWalls(myWalls);
+        
+        // 상대방이 플레이하는 맵(내가 만든 맵)의 충돌 벽만 필터링
+        const opponentWalls = Object.values(walls).filter(
+          (wall: CollisionWall) => wall.mapOwnerId === userId
+        );
+        setOpponentCollisionWalls(opponentWalls);
+        
+        console.log('충돌 벽 정보 업데이트:', walls);
+      } else {
+        setCollisionWalls([]);
+        setOpponentCollisionWalls([]);
+      }
+    });
+    
+    return () => unsubscribe();
+  }, [roomId, opponentId, userId]);
+  
   // 턴 변경 함수
   const changeTurn = async () => {
     const database = getDatabase();
@@ -119,12 +151,14 @@ const GamePlay: React.FC<GamePlayProps> = ({
       return;
     }
     
-    const canPlayerMove = canMove(playerPosition, direction, obstacles);
     const newPosition = getNewPosition(playerPosition, direction);
+    const canMoveResult = canMove(playerPosition, direction, obstacles);
     
-    setLastMoveValid(canPlayerMove);
+    setLastMoveValid(canMoveResult);
     
-    if (canPlayerMove) {
+    if (canMoveResult && 
+        newPosition.row >= 0 && newPosition.row < BOARD_SIZE &&
+        newPosition.col >= 0 && newPosition.col < BOARD_SIZE) {
       setPlayerPosition(newPosition);
       setMoveCount(moveCount + 1);
       setMessage('이동했습니다.');
@@ -162,6 +196,35 @@ const GamePlay: React.FC<GamePlayProps> = ({
       } catch (error) {
         console.error('턴 변경 중 오류 발생:', error);
       }
+      
+      // 이동 불가능할 경우 충돌 벽 정보를, 영구적으로 Firebase에 저장
+      if (!canMoveResult) {
+        const database = getDatabase();
+        const collisionWallsRef = ref(database, `rooms/${roomId}/gameState/collisionWalls`);
+        
+        // 새 충돌 벽 데이터 생성
+        const newCollisionWall: CollisionWall = {
+          playerId: userId,
+          position: playerPosition,
+          direction: direction, // 정상 방향으로 저장
+          timestamp: Date.now(),
+          mapOwnerId: opponentId || '' // 내가 플레이하는 맵의 소유자(상대방)
+        };
+        
+        // 기존 충돌 벽 목록 가져오기
+        const wallsSnapshot = await get(collisionWallsRef);
+        const existingWalls = wallsSnapshot.val() || [];
+        
+        // 새 충돌 벽 추가
+        const updatedWalls = [...Object.values(existingWalls), newCollisionWall];
+        
+        // Firebase에 업데이트
+        await update(ref(database, `rooms/${roomId}/gameState`), {
+          collisionWalls: updatedWalls
+        });
+        
+        console.log('충돌 벽 정보 저장됨:', newCollisionWall);
+      }
     }
   };
   
@@ -191,7 +254,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [gameOver, playerPosition, obstacles, isMyTurn]);
+  }, [gameOver, playerPosition, obstacles, isMyTurn, BOARD_SIZE]);
   
   // 게임 재시작 함수
   const handleRestartGame = async () => {
@@ -268,7 +331,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
             startPosition={startPosition}
             endPosition={endPosition}
             playerPosition={playerPosition}
-            obstacles={[]} // 게임 플레이 중에는 장애물이 보이지 않음
+            obstacles={obstacles}
+            collisionWalls={collisionWalls}
             readOnly={true}
           />
         </div>
@@ -283,9 +347,10 @@ const GamePlay: React.FC<GamePlayProps> = ({
                 startPosition={myMap.startPosition}
                 endPosition={myMap.endPosition}
                 playerPosition={opponentPosition}
-                obstacles={myMap.obstacles} // 내가 만든 맵의 장애물 표시
+                obstacles={myMap.obstacles}
+                collisionWalls={opponentCollisionWalls}
                 readOnly={true}
-                isMinimapMode={true} // 미니맵 모드 전달
+                isMinimapMode={true}
               />
             </div>
           </div>
