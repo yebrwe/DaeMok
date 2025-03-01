@@ -23,15 +23,22 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
       return;
     }
     
+    if (isCreating) {
+      console.log('이미 방 생성이 진행 중입니다.');
+      return;
+    }
+    
     try {
       setIsCreating(true);
       setError(null);
       
       console.log('방 생성 시도:', { roomName, maxPlayers: 2 });
+      
       const roomId = await createRoom(roomName, userId, 2);
       
       if (roomId) {
         console.log('방 생성 성공:', roomId);
+        localStorage.setItem('last_created_room', roomId);
         router.push(`/rooms/${roomId}`);
       } else {
         console.error('방 생성 실패');

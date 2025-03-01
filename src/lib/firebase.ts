@@ -174,18 +174,42 @@ export const getRooms = (callback: (rooms: Room[]) => void) => {
   });
 };
 
-// 방 생성
+// 방 생성에 디바운싱 추가
+let roomCreationInProgress = false;
+
 export const createRoom = async (name: string, creatorId: string, maxPlayers: number = 2): Promise<string | null> => {
   if (!database) {
     console.error('Firebase Database가 초기화되지 않았습니다.');
     return null;
   }
   
+  // 이미 방 생성 중이면 중복 생성 방지
+  if (roomCreationInProgress) {
+    console.log('이미 방 생성이 진행 중입니다.');
+    return null;
+  }
+  
   console.log('방 생성 시도...', { name, creatorId, maxPlayers });
   
   try {
-    // 기본 방 정보 생성
+    roomCreationInProgress = true;
+    
+    // 이미 같은 이름의 방이 있는지 확인
     const roomsRef = ref(database, 'rooms');
+    const existingRoomsSnapshot = await get(roomsRef);
+    const existingRooms = existingRoomsSnapshot.val() || {};
+    
+    // 이름으로 중복 검사
+    const roomExists = Object.values(existingRooms).some(
+      (room: any) => room.name === name && room.createdBy === creatorId
+    );
+    
+    if (roomExists) {
+      console.log('이미 같은 이름의 방이 존재합니다:', name);
+      return null;
+    }
+    
+    // 기본 방 정보 생성
     const newRoomRef = push(roomsRef);
     const roomId = newRoomRef.key;
     
@@ -259,6 +283,9 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
   } catch (error) {
     console.error('방 생성 중 오류:', error);
     return null;
+  } finally {
+    // 방 생성 작업 완료
+    roomCreationInProgress = false;
   }
 };
 

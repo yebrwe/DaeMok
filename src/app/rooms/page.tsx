@@ -14,6 +14,17 @@ export default function RoomsPage() {
   const [restoringSession, setRestoringSession] = useState(true);
   
   useEffect(() => {
+    // 브라우저 재시작 감지를 위한 세션 스토리지 확인
+    const isNewBrowserSession = !sessionStorage.getItem('browser_session');
+    
+    if (isNewBrowserSession) {
+      // 새 브라우저 세션 표시
+      sessionStorage.setItem('browser_session', Date.now().toString());
+      // 방 복원 건너뛰기 플래그 설정
+      sessionStorage.setItem('skip_room_restore', 'true');
+      console.log('새 브라우저 세션 감지, 방 복원을 건너뜁니다.');
+    }
+    
     if (!loading && !user) {
       console.log('인증되지 않은 사용자, 로그인 페이지로 이동');
       router.push('/login');
