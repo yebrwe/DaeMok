@@ -10,7 +10,9 @@ import {
   setPlayerReady, 
   endGame, 
   leaveRoom,
-  tryRestoreAuth
+  tryRestoreAuth,
+  updateRoomUserStatus,
+  getRoomOnlineUsers
 } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
 import { getDatabase, ref, update, get, remove, onValue, query, orderByChild, equalTo, serverTimestamp } from 'firebase/database';
@@ -73,22 +75,16 @@ const usePlayersActivity = (roomId: string) => {
   useEffect(() => {
     if (!roomId) return;
     
-    const database = getDatabase();
-    
-    // 1. 방 참여자 실시간 상태 감지
-    const joinedPlayersRef = ref(database, `rooms/${roomId}/joinedPlayers`);
-    const unsubscribe = onValue(joinedPlayersRef, (snapshot) => {
-      const players: {[key: string]: any} = {};
+    // 방 참여자 실시간 상태 감지 - 새로운 함수 사용
+    const unsubscribe = getRoomOnlineUsers(roomId, (users) => {
+      const players: {[key: string]: boolean} = {};
       
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        Object.keys(data).forEach(playerId => {
-          // 방을 떠나지 않은 플레이어만 접속 중으로 표시
-          players[playerId] = !!data[playerId].joined && !data[playerId].offline;
-        });
-      }
+      users.forEach(user => {
+        players[user.uid] = true;
+      });
       
       setPlayersStatus(players);
+      console.log('게임방 온라인 플레이어 상태 업데이트:', players);
     });
     
     return () => unsubscribe();
@@ -325,23 +321,47 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         return;
       }
       
+      // 방장 확인 (createdBy 필드 확인)
+      const isRoomOwner = roomData.createdBy === userId;
+      
+      // 먼저 사용자 상태 업데이트 (방을 떠났다고 표시)
+      const userPath = `rooms/${roomId}/gameState/players/${userId}`;
+      const userRef = ref(database, userPath);
+      await update(userRef, { hasLeft: true });
+      
+      // 게임방에서 오프라인 상태로 설정 (새로운 함수 사용)
+      await updateRoomUserStatus(roomId, userId, false);
+      
       // 플레이어 목록에서 자신 제거
       const updatedPlayers = roomData.players.filter((id: string) => id !== userId);
       
-      // 방에 남은 플레이어가 없는 경우 방 삭제
-      if (updatedPlayers.length === 0) {
-        await remove(roomRef);
-        console.log('모든 플레이어가 나가서 방이 삭제되었습니다.');
-      } else {
-        // 남은 플레이어가 있으면 방 유지, 플레이어 목록만 업데이트
-        await update(roomRef, { players: updatedPlayers });
-        console.log('방에서 나갔습니다. 다른 플레이어가 남아있어 방은 유지됩니다.');
-      }
+      // 방장이 나가거나 남은 플레이어가 없는 경우 방 삭제, 아니면 플레이어 목록 업데이트
+      let needsDelete = isRoomOwner || updatedPlayers.length === 0;
       
+      // 먼저 리디렉션 실행 (타이밍 이슈 방지)
       router.push('/rooms');
+      
+      // 리디렉션 후 비동기적으로 방 처리
+      setTimeout(async () => {
+        try {
+          if (needsDelete) {
+            await remove(roomRef);
+            console.log(isRoomOwner ? '방장이 나가서 방이 삭제되었습니다.' : '모든 플레이어가 나가서 방이 삭제되었습니다.');
+          } else {
+            // 남은 플레이어가 있으면 방 유지, 플레이어 목록만 업데이트
+            await update(roomRef, { players: updatedPlayers });
+            console.log('방에서 나갔습니다. 다른 플레이어가 남아있어 방은 유지됩니다.');
+          }
+        } catch (innerError) {
+          console.error('방 처리 중 내부 오류:', innerError);
+        }
+      }, 500); // 리디렉션 후 약간의 지연을 두고 처리
+      
     } catch (error) {
       console.error('방 나가기 중 오류:', error);
       setMessage('방을 나가는 데 문제가 발생했습니다.');
+      // 오류가 발생해도 사용자를 방 목록으로 리디렉션
+      router.push('/rooms');
     }
   };
   
@@ -398,14 +418,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       setMessage(getWinnerMessage());
     }
   }, [gameState, getWinnerMessage]);
-  
-  // 모든 조건부 렌더링 이전에 모든 useEffect 선언이 완료되어야 함
-  useEffect(() => {
-    // 이 Hook은 항상 존재하여 Hook 순서 일관성을 보장
-    return () => {
-      // 컴포넌트 언마운트 시 필요한 정리 작업
-    };
-  }, []);
   
   // 방 초기화를 위한 useEffect
   useEffect(() => {
@@ -477,9 +489,11 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           await update(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`), {
             joined: true,
             joinedAt: serverTimestamp(),
-            lastActive: serverTimestamp(),
             displayName: displayName // 여기도 표시 이름 추가
           });
+          
+          // 게임방 온라인 상태 업데이트 (새로운 함수 사용)
+          await updateRoomUserStatus(roomId, userId, true);
         } catch (error) {
           console.error('방 초기화 중 오류:', error);
           setError('방 정보를 불러오는 데 문제가 발생했습니다.');
@@ -489,6 +503,19 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       initRoom();
     }
   }, [roomId, userId, gameState, router]);
+  
+  // 모든 조건부 렌더링 이전에 모든 useEffect 선언이 완료되어야 함
+  useEffect(() => {
+    // 이 Hook은 항상 존재하여 Hook 순서 일관성을 보장
+    return () => {
+      // 컴포넌트 언마운트 시 필요한 정리 작업
+      if (roomId && userId) {
+        // 게임방에서 나갈 때 온라인 상태 오프라인으로 변경
+        updateRoomUserStatus(roomId, userId, false)
+          .then(() => console.log('게임방 나가기: 온라인 상태 오프라인으로 변경됨'));
+      }
+    };
+  }, [roomId, userId]);
   
   // 컴포넌트의 렌더링 내용을 결정하는 함수
   const renderContent = () => {
@@ -604,12 +631,28 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         {gameState.phase === GamePhase.SETUP && !isReady ? (
           <div key="setup-container">
             <GameSetup onMapComplete={handleMapComplete} />
+            <div className="flex justify-center mt-4">
+              <button
+                className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+                onClick={handleLeaveRoom}
+              >
+                방 나가기
+              </button>
+            </div>
           </div>
         ) : gameState.phase === GamePhase.SETUP && isReady ? (
           <div key="waiting-container" className="text-center p-8">
             <h2 className="text-xl font-bold mb-4">맵 제작 완료</h2>
             <p>상대방이 맵을 제작할 때까지 기다리고 있습니다...</p>
             <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mt-4"></div>
+            <div className="flex justify-center mt-6">
+              <button
+                className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+                onClick={handleLeaveRoom}
+              >
+                방 나가기
+              </button>
+            </div>
           </div>
         ) : gameState.phase === GamePhase.PLAY && opponentMap ? (
           <div key="gameplay-container">
@@ -621,6 +664,16 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               currentTurn={gameState.currentTurn}
               myMap={myMap || undefined}
             />
+            <div className="flex justify-center mt-4">
+              <button
+                className={`px-6 py-2 ${gameState.phase === GamePhase.PLAY ? 'bg-gray-300 cursor-not-allowed' : 'bg-gray-500 hover:bg-gray-600'} text-white rounded transition-colors`}
+                onClick={handleLeaveRoom}
+                disabled={gameState.phase === GamePhase.PLAY}
+                title={gameState.phase === GamePhase.PLAY ? "게임 진행 중에는 방을 나갈 수 없습니다" : "방 나가기"}
+              >
+                방 나가기
+              </button>
+            </div>
           </div>
         ) : gameState.phase === GamePhase.END ? (
           <div key="gameover-container" className="flex flex-col items-center">
@@ -628,7 +681,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition mt-8"
               onClick={handleLeaveRoom}
             >
-              로비로 돌아가기
+              방 나가기
             </button>
           </div>
         ) : (

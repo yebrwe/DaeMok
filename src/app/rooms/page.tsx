@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import RoomList from '@/components/RoomList';
 import CreateRoomForm from '@/components/CreateRoomForm';
+import LobbyChat from '@/components/LobbyChat';
 import { useAuth } from '@/hooks/useAuth';
 import { restoreRoomSession } from '@/lib/firebase';
 
@@ -55,12 +56,22 @@ export default function RoomsPage() {
   
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-6 text-center">게임 방 목록</h1>
+      <h1 className="text-2xl font-bold mb-6 text-center">게임 대기실</h1>
       
-      <CreateRoomForm userId={user.uid} />
-      
-      <div className="mt-8">
-        <RoomList userId={user.uid} />
+      <div className="flex flex-col h-[calc(100vh-120px)]">
+        {/* 방 생성 및 목록 (모바일에서 상단) */}
+        <div className="flex-1 overflow-y-auto mb-4">
+          <CreateRoomForm userId={user.uid} />
+          
+          <div className="mt-4">
+            <RoomList userId={user.uid} />
+          </div>
+        </div>
+        
+        {/* 채팅과 유저 목록 (모바일에서 하단) */}
+        <div className="h-64 md:h-72">
+          <LobbyChat currentUserId={user.uid} />
+        </div>
       </div>
     </div>
   );

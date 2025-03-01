@@ -7,8 +7,10 @@ export type Direction = 'up' | 'down' | 'left' | 'right';
 export interface UserProfile {
   uid: string;
   displayName: string | null;
-  email: string | null;
+  email?: string | null;
   photoURL: string | null;
+  isOnline?: boolean;
+  lastSeen?: any; // 서버 타임스탬프를 저장하기 위한 필드
 }
 
 // 셀 좌표 타입
@@ -35,6 +37,11 @@ export interface Player {
   id: string;
   position: Position;
   isReady: boolean;
+  displayName?: string | null;
+  hasLeft?: boolean;
+  lastPosition?: Position;
+  isOnline?: boolean;
+  lastSeen?: any; // serverTimestamp 타입
 }
 
 // 게임 맵 타입
@@ -70,6 +77,10 @@ export interface Room {
   players: string[];
   gameState: GameState | null;
   maxPlayers: number;
+  createdAt?: number | null;
+  createdBy?: string;
+  status?: 'waiting' | 'playing' | 'ended';
+  lastActivity?: number | null;
 }
 
 // 실시간 이벤트 타입

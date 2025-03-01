@@ -9,10 +9,13 @@ import {
   signOut, 
   setPersistence, 
   browserLocalPersistence,
-  onIdTokenChanged
+  onIdTokenChanged,
+  User,
+  Auth,
+  onAuthStateChanged
 } from 'firebase/auth';
 import { getAnalytics, isSupported } from 'firebase/analytics';
-import { Room, GameState, GamePhase, SocketEvents, GameMap } from '@/types/game';
+import { Room, GameState, GamePhase, SocketEvents, GameMap, UserProfile } from '@/types/game';
 
 // Firebase 인스턴스를 저장할 변수들  
 let app;
@@ -151,9 +154,19 @@ export const getRooms = (callback: (rooms: Room[]) => void) => {
   return onValue(roomsRef, (snapshot) => {
     console.log('방 목록 데이터 수신:', snapshot.val());
     const data = snapshot.val();
-    const roomsList: Room[] = data 
-      ? Object.values(data as Record<string, Room>) 
-      : [];
+    let roomsList: Room[] = [];
+    
+    if (data) {
+      // 객체를 배열로 변환하고 id 속성이 없으면 키를 id로 추가
+      roomsList = Object.entries(data).map(([key, room]) => {
+        const typedRoom = room as Room;
+        if (!typedRoom.id) {
+          return { ...typedRoom, id: key };
+        }
+        return typedRoom;
+      });
+    }
+    
     callback(roomsList);
   }, (error) => {
     console.error('방 목록 조회 오류:', error);
@@ -751,8 +764,8 @@ export const restoreRoomSession = async (): Promise<string | null> => {
     
     // 마지막 활동 시간 기준으로 정렬
     roomEntries.sort((a, b) => {
-      const lastSeenA = a[1].lastSeen || 0;
-      const lastSeenB = b[1].lastSeen || 0;
+      const lastSeenA = (a[1] as any).lastSeen || 0;
+      const lastSeenB = (b[1] as any).lastSeen || 0;
       return lastSeenB - lastSeenA;
     });
     
@@ -985,4 +998,191 @@ export const rejoinRoom = async (userId: string, roomId: string): Promise<boolea
     console.error('방 재참여 중 오류:', error);
     return false;
   }
+};
+
+// 로비 온라인 사용자 상태 관리 (게임방과 별개)
+export const updateUserOnlineStatus = async (userId: string) => {
+  try {
+    if (!userId) {
+      console.error('유효하지 않은 사용자 ID로 온라인 상태 업데이트 시도');
+      return false;
+    }
+
+    const auth = getAuth();
+    const db = getDatabase();
+    // 로비 온라인 상태를 위한 별도 경로 사용
+    const userStatusRef = ref(db, `lobbyOnline/${userId}`);
+
+    // 사용자 정보 (이메일 제외)
+    const userData = {
+      uid: userId,
+      displayName: auth.currentUser?.displayName || '익명 사용자',
+      photoURL: auth.currentUser?.photoURL || null,
+      lastSeen: serverTimestamp(),
+      isOnline: true
+    };
+
+    // 먼저 현재 연결 상태 확인
+    const connectedRef = ref(db, '.info/connected');
+    
+    return new Promise((resolve) => {
+      let unsubscribeFunc: (() => void) | null = null;
+      
+      unsubscribeFunc = onValue(connectedRef, async (snapshot) => {
+        // 첫 번째 이벤트 후 리스너 제거 (한 번만 실행)
+        if (unsubscribeFunc) {
+          unsubscribeFunc();
+        }
+        
+        if (snapshot.val() === false) {
+          console.log('Firebase에 연결되지 않음, 로비 온라인 상태 업데이트 지연');
+          resolve(false);
+          return;
+        }
+        
+        console.log(`사용자 ${userId}의 로비 온라인 상태 업데이트 시작`);
+        
+        try {
+          // 현재 상태를 온라인으로 업데이트
+          await set(userStatusRef, userData);
+          
+          // 연결 해제 시 실행될 작업 등록
+          onDisconnect(userStatusRef).update({
+            isOnline: false,
+            lastSeen: serverTimestamp()
+          });
+          
+          console.log(`사용자 ${userId}의 로비 온라인 상태 업데이트 완료, onDisconnect 핸들러 등록됨`);
+          resolve(true);
+        } catch (error) {
+          console.error('로비 온라인 상태 업데이트 중 오류:', error);
+          resolve(false);
+        }
+      });
+    });
+  } catch (error) {
+    console.error('로비 온라인 상태 업데이트 오류:', error);
+    return false;
+  }
+};
+
+// 로비 온라인 사용자 목록 가져오기 (게임방과 별개)
+export const getOnlineUsers = (callback: (users: UserProfile[]) => void) => {
+  const db = getDatabase();
+  // 로비 전용 온라인 상태 경로 사용
+  const onlineUsersRef = ref(db, 'lobbyOnline');
+  
+  console.log('로비 온라인 사용자 목록 구독 시작');
+  
+  return onValue(onlineUsersRef, (snapshot) => {
+    const users: UserProfile[] = [];
+    
+    if (snapshot.exists()) {
+      console.log('로비 온라인 데이터 스냅샷:', snapshot.val());
+      
+      snapshot.forEach((childSnapshot) => {
+        const userData = childSnapshot.val();
+        console.log(`로비 사용자 데이터 확인: ${childSnapshot.key}`, userData);
+        
+        // null 체크와 isOnline 필드 확인
+        if (userData && userData.isOnline === true) {
+          users.push({
+            uid: userData.uid,
+            displayName: userData.displayName || '익명 사용자',
+            photoURL: userData.photoURL || null,
+            isOnline: true,
+            lastSeen: userData.lastSeen
+          });
+        }
+      });
+    }
+    
+    console.log(`로비 온라인 사용자 ${users.length}명 발견:`, users.map(u => u.displayName));
+    callback(users);
+  });
+};
+
+// 게임방 내 사용자 온라인 상태 업데이트 (로비와 별개)
+export const updateRoomUserStatus = async (roomId: string, userId: string, isOnline: boolean = true) => {
+  if (!roomId || !userId) return false;
+  
+  try {
+    const db = getDatabase();
+    const auth = getAuth();
+    
+    const userStatusRef = ref(db, `rooms/${roomId}/playerStatus/${userId}`);
+    
+    const userData = {
+      uid: userId,
+      displayName: auth.currentUser?.displayName || '익명 사용자',
+      photoURL: auth.currentUser?.photoURL || null,
+      lastSeen: serverTimestamp(),
+      isOnline: isOnline
+    };
+    
+    // 방 내 사용자 상태 업데이트
+    await update(userStatusRef, userData);
+    
+    // 게임 상태의 플레이어 정보도 업데이트
+    if (isOnline) {
+      const playerRef = ref(db, `rooms/${roomId}/gameState/players/${userId}`);
+      await update(playerRef, { 
+        isOnline: true,
+        lastSeen: serverTimestamp()
+      });
+      
+      // 방 참여 시 연결 종료 처리 설정
+      const connectedRef = ref(db, '.info/connected');
+      onValue(connectedRef, (snapshot) => {
+        if (snapshot.val() === true) {
+          onDisconnect(userStatusRef).update({
+            isOnline: false,
+            lastSeen: serverTimestamp()
+          });
+          
+          onDisconnect(playerRef).update({
+            isOnline: false,
+            lastSeen: serverTimestamp()
+          });
+        }
+      }, { onlyOnce: true });
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('방 내 사용자 상태 업데이트 오류:', error);
+    return false;
+  }
+};
+
+// 게임방 내 온라인 사용자 목록 가져오기 (로비와 별개)
+export const getRoomOnlineUsers = (roomId: string, callback: (users: UserProfile[]) => void) => {
+  if (!roomId) {
+    callback([]);
+    return () => {};
+  }
+  
+  const db = getDatabase();
+  const roomUsersRef = ref(db, `rooms/${roomId}/playerStatus`);
+  
+  return onValue(roomUsersRef, (snapshot) => {
+    const users: UserProfile[] = [];
+    
+    if (snapshot.exists()) {
+      snapshot.forEach((childSnapshot) => {
+        const userData = childSnapshot.val();
+        if (userData && userData.isOnline === true) {
+          users.push({
+            uid: userData.uid,
+            displayName: userData.displayName || '익명 사용자',
+            photoURL: userData.photoURL || null,
+            isOnline: true,
+            lastSeen: userData.lastSeen
+          });
+        }
+      });
+    }
+    
+    callback(users);
+  });
 }; 

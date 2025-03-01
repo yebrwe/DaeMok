@@ -13,9 +13,9 @@ export default function Home() {
   const handleJoinLobby = () => {
     // 로그인되어 있는 경우에만 로비로 이동
     if (isLoggedIn) {
-      router.push('/lobby');
+      router.push('/rooms');
     } else {
-      // 로그인 요청 메시지 또는 자동 로그인 처리
+      // 로그인 요청 후 방 목록으로 이동
       handleGoogleLogin();
     }
   };
@@ -26,14 +26,17 @@ export default function Home() {
     if (isLoggedIn) {
       router.push('/practice');
     } else {
-      // 로그인 요청 메시지 또는 자동 로그인 처리
+      // 로그인 요청 후 방 목록으로 이동
       handleGoogleLogin();
     }
   };
   
   // 구글 로그인 처리
   const handleGoogleLogin = async () => {
-    await loginWithGoogle();
+    const success = await loginWithGoogle();
+    if (success) {
+      router.push('/rooms');
+    }
   };
   
   // 로그아웃 처리
@@ -103,7 +106,7 @@ export default function Home() {
                 onClick={handleJoinLobby}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg w-full text-lg font-medium transition duration-300"
               >
-                로비 참가
+                방 목록 참가
               </button>
               
               <button
