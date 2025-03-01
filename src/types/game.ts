@@ -66,9 +66,11 @@ export interface GameState {
   phase: GamePhase;
   players: Record<string, Player>;
   maps?: Record<string, GameMap>;
-  currentTurn?: string;
-  winner?: string;
-  collisionWalls?: CollisionWall[];  // 충돌 벽 정보를 저장할 배열 추가
+  currentTurn?: string | null;
+  winner?: string | null;
+  collisionWalls?: any[];
+  turnMessage?: string;
+  turnMessageTimestamp?: any;
 }
 
 // 게임 방 타입

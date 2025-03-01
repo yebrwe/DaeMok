@@ -253,6 +253,21 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         }
       }
     }
+    
+    // 선턴 정보 명확하게 로깅
+    if (gameState.phase === GamePhase.SETUP && gameState.currentTurn) {
+      console.log('세팅 단계 선턴 정보:', {
+        currentTurn: gameState.currentTurn,
+        isMyTurn: gameState.currentTurn === userId,
+        userId: userId
+      });
+    } else if (gameState.phase === GamePhase.PLAY && gameState.currentTurn) {
+      console.log('게임 시작 후 턴 정보:', {
+        currentTurn: gameState.currentTurn,
+        isMyTurn: gameState.currentTurn === userId,
+        userId: userId
+      });
+    }
   }, [gameState, userId]);
   
   // 선턴 메시지를 위한 별도의 useEffect 추가 (무한 루프 방지)
@@ -289,12 +304,24 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       // 맵 저장
       console.log('맵 저장 시작');
       await placeObstacles(roomId, userId, map);
-      console.log('맵 저장 및 준비 완료');
       
-      // 준비 완료는 placeObstacles 내에서 자동으로 처리됨
+      // 플레이어 준비 상태로 변경
+      console.log('플레이어 준비 상태 변경');
+      await setPlayerReady(roomId, userId, true);
       setIsReady(true);
+      
+      // 디버깅: 현재 턴 정보 확인
+      console.log('맵 설정 완료 후 turnInfo 확인:', {
+        currentTurn: gameState?.currentTurn,
+        userId: userId,
+        isMyTurn: gameState?.currentTurn === userId
+      });
+      
+      // 맵 설정
+      setMyMap(map);
     } catch (error) {
-      console.error('맵 설정 오류:', error);
+      console.error('맵 설정 중 오류 발생:', error);
+      setMessage('맵 설정 중 오류가 발생했습니다.');
     }
   };
   
@@ -390,52 +417,120 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     if (!roomId || !gameState) return;
     
     try {
+      console.log('게임 재시작 시작, 현재 상태:', {
+        winner: gameState.winner,
+        players: Object.keys(gameState.players || {})
+      });
+      
       const database = getDatabase();
       
-      // 게임 상태 초기화
+      // 게임 상태 확인
       const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
+      const gameStateSnapshot = await get(gameStateRef);
+      const currentGameState = gameStateSnapshot.exists() ? gameStateSnapshot.val() : null;
       
-      // 패배한 사람이 먼저 턴을 갖도록 설정
+      // 이미 재시작 중인지 확인
+      if (currentGameState && currentGameState.phase === GamePhase.SETUP) {
+        console.log('이미 게임이 재시작되었습니다.');
+        setMessage('이미 게임이 재시작되었습니다. 맵을 설정해주세요.');
+        
+        // 내 상태 초기화 (이미 재시작된 경우에도)
+        setIsReady(false);
+        setMyMap(null);
+        setOpponentMap(null);
+        return;
+      }
+      
+      // ======= 선턴 결정 로직 개선 =======
+      console.log('선턴 결정 시작, 게임 상태:', {
+        phase: currentGameState?.phase,
+        winner: currentGameState?.winner
+      });
+      
       let firstTurnPlayerId = '';
       let turnMessage = '';
       
-      // 승자가 있는 경우 (정상적인 게임 종료)
-      if (gameState.winner) {
-        // 패배자를 찾아 선턴으로 설정
-        const loserPlayerId = Object.keys(gameState.players || {}).find(id => id !== gameState.winner);
+      // 승자 정보가 있으면 패배자 선턴 규칙 적용
+      if (currentGameState && currentGameState.winner) {
+        const winner = currentGameState.winner;
+        console.log('직전 게임 승자:', winner);
         
-        if (loserPlayerId) {
-          firstTurnPlayerId = loserPlayerId;
-          const loserName = gameState.players[loserPlayerId]?.displayName || '패배자';
+        // 승자가 아닌 플레이어들(패배자들) 찾기
+        const players = Object.keys(currentGameState.players || {});
+        const losers = players.filter(id => id !== winner);
+        console.log('패배자 후보:', losers);
+        
+        if (losers.length > 0) {
+          // 패배자를 선턴으로 설정
+          firstTurnPlayerId = losers[0];
+          
+          // 패배자 이름 가져오기
+          let loserName = '패배자';
+          if (currentGameState.players[firstTurnPlayerId]) {
+            loserName = currentGameState.players[firstTurnPlayerId].displayName || 
+                        (firstTurnPlayerId === userId ? '당신' : '상대방');
+          }
+          
           turnMessage = `${loserName}님이 선턴을 가져갑니다. (패배자 선턴 규칙)`;
-          console.log('패배자가 선턴을 가져갑니다:', loserName, loserPlayerId);
+          console.log('패배자가 선턴을 가져갑니다:', loserName, firstTurnPlayerId);
         } else {
           // 패배자를 찾을 수 없는 경우 (드문 경우)
-          firstTurnPlayerId = userId; // 기본값으로 현재 사용자 설정
-          turnMessage = `${gameState.players[userId]?.displayName || '당신'}이(가) 선턴을 가져갑니다.`;
+          console.warn('패배자를 찾을 수 없음, 현재 승자:', winner);
+          
+          // 승자가 아닌 다른 플레이어를 찾기 위한 추가 확인
+          const otherPlayers = Object.keys(gameState.players || {}).filter(id => id !== winner);
+          console.log('다른 플레이어 후보(현재 상태):', otherPlayers);
+          
+          if (otherPlayers.length > 0) {
+            firstTurnPlayerId = otherPlayers[0];
+            const otherName = gameState.players[firstTurnPlayerId]?.displayName || '상대방';
+            turnMessage = `${otherName}님이 선턴을 가져갑니다.`;
+          } else {
+            // 승자 외에 다른 플레이어가 없으면 기본값 설정
+            firstTurnPlayerId = userId !== winner ? userId : winner; // 가능하면 승자가 아닌 플레이어
+            turnMessage = `${gameState.players[firstTurnPlayerId]?.displayName || '플레이어'}가 선턴을 가져갑니다.`;
+          }
         }
       } else {
         // 승자가 없는 경우(첫 게임 등) 랜덤으로 선택
-        const playerIds = Object.keys(gameState.players || {});
-        const randomIndex = Math.floor(Math.random() * playerIds.length);
-        firstTurnPlayerId = playerIds[randomIndex];
-        turnMessage = `${gameState.players[firstTurnPlayerId]?.displayName || (firstTurnPlayerId === userId ? '당신' : '상대방')}이(가) 선턴을 가져갑니다. (랜덤 선택)`;
+        const players = Object.keys(gameState.players || {});
+        if (players.length === 0) {
+          console.error('플레이어 정보를 찾을 수 없습니다.');
+          setMessage('게임을 재시작할 수 없습니다. 방을 나갔다가 다시 입장해주세요.');
+          return;
+        }
+        
+        const randomIndex = Math.floor(Math.random() * players.length);
+        firstTurnPlayerId = players[randomIndex];
+        turnMessage = `${gameState.players[firstTurnPlayerId]?.displayName || '플레이어'}가 선턴을 가져갑니다. (랜덤 선택)`;
         console.log('랜덤으로 선턴 결정:', firstTurnPlayerId);
       }
+      
+      console.log('최종 선턴 결정 결과:', {
+        firstTurnPlayerId,
+        turnMessage,
+        decidedBy: userId,
+        isCurrentUser: firstTurnPlayerId === userId
+      });
       
       // 선턴 메시지 설정 - 로컬 상태
       setRestartMessage(turnMessage);
       
-      // 선턴 메시지를 Firebase에 저장하여 모든 플레이어가 볼 수 있게 함
-      await update(gameStateRef, {
+      // 재시작 정보 기록 (누가 재시작 버튼을 눌렀는지)
+      const restartData = {
         phase: GamePhase.SETUP,
         winner: null,
         currentTurn: firstTurnPlayerId,
         maps: null,
         collisionWalls: null,
-        turnMessage: turnMessage,  // 선턴 메시지 저장
-        turnMessageTimestamp: serverTimestamp()  // 메시지 타임스탬프
-      });
+        turnMessage: turnMessage,
+        turnMessageTimestamp: serverTimestamp(),
+        restartedBy: userId,
+        restartedAt: serverTimestamp()
+      };
+      
+      // Firebase에 업데이트
+      await update(gameStateRef, restartData);
       
       // 맵 데이터를 완전히 제거하기 위한 추가 조치
       const mapsRef = ref(database, `rooms/${roomId}/gameState/maps`);
@@ -475,6 +570,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       setTimeout(() => {
         setRestartMessage('');
       }, 5000);
+      
+      console.log('게임 재시작 완료');
       
     } catch (error) {
       console.error('게임 재시작 중 오류 발생:', error);
@@ -631,7 +728,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               )}
               <span>
                 {player.displayName ? player.displayName.substring(0, 6) : '상대'} 
-                {player.isReady ? ' ✓' : ''} 
+                {player.isReady ? ' ✓' : ''}
               </span>
               <span className={player.isOnline ? 'text-green-600' : 'text-red-600'}>
                 {player.isOnline ? '●' : '○'}
@@ -856,19 +953,95 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     return (
       <div className="w-full max-w-md mx-auto mb-3 bg-gray-50 rounded-md p-2">
         <h3 className="text-sm font-medium text-center mb-1">이 방에서의 전적</h3>
-        <div className="flex justify-center gap-6">
-          {Object.entries(roomStats).map(([playerId, stats]) => (
-            <div key={playerId} className="text-center">
-              <p className="text-xs font-medium">
-                {stats.displayName || (playerId === userId ? '나' : '상대방')}
-              </p>
-              <p className="text-xs">
-                <span className="text-green-600">{stats.wins}승</span> 
-                <span className="mx-1">-</span> 
-                <span className="text-red-600">{stats.losses}패</span>
-              </p>
+        <div className="text-xs">
+          {roomStats[userId] ? (
+            <span>
+              전적: <span className="text-green-600">{roomStats[userId].wins}</span>승 
+              <span className="mx-0.5">-</span> 
+              <span className="text-red-600">{roomStats[userId].losses}</span>패
+            </span>
+          ) : (
+            <span>전적: 0승 0패</span>
+          )}
+        </div>
+      </div>
+    );
+  };
+  
+  // UI 개선 - 플레이어 정보 및 상태 통합 표시
+  const renderGameHeader = () => {
+    if (!gameState || !gameState.players) return null;
+    
+    const me = gameState.players[userId];
+    const opponent = Object.values(gameState.players).find(p => p.id !== userId);
+    
+    return (
+      <div className="w-full max-w-md mx-auto bg-gray-50 rounded-md p-2 mb-2">
+        <div className="flex justify-between items-center">
+          {/* 방 제목 및 상태 */}
+          <div className="text-sm font-bold">
+            {roomData?.name || '게임 방'}
+            <span className="text-xs font-normal ml-2 text-gray-500">
+              {gameState.phase === GamePhase.SETUP ? '맵 제작' : 
+               gameState.phase === GamePhase.PLAY ? '게임 진행' : '게임 종료'}
+            </span>
+          </div>
+          
+          {/* 전적 정보 - 간결하게 표시 */}
+          <div className="text-xs">
+            {roomStats[userId] ? (
+              <span>
+                전적: <span className="text-green-600">{roomStats[userId].wins}</span>승 
+                <span className="mx-0.5">-</span> 
+                <span className="text-red-600">{roomStats[userId].losses}</span>패
+              </span>
+            ) : (
+              <span>전적: 0승 0패</span>
+            )}
+          </div>
+        </div>
+        
+        {/* 플레이어 정보 행 */}
+        <div className="flex justify-between mt-1 text-xs">
+          {/* 내 정보 */}
+          <div className="flex items-center">
+            {me?.photoURL ? (
+              <img src={me.photoURL} alt="내 프로필" className="w-4 h-4 rounded-full mr-1" />
+            ) : (
+              <div className="w-4 h-4 rounded-full bg-blue-500 mr-1 flex items-center justify-center">
+                <span className="text-white text-[6px]">나</span>
+              </div>
+            )}
+            {me?.displayName?.substring(0, 6) || '나'} 
+            {me?.isReady ? ' ✓' : ''}
+          </div>
+          
+          {/* 턴 표시 */}
+          {gameState.phase === GamePhase.PLAY && (
+            <div className={`px-1 rounded ${gameState.currentTurn === userId ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+              {gameState.currentTurn === userId ? '내 턴' : '상대 턴'}
             </div>
-          ))}
+          )}
+          
+          {/* 상대방 정보 */}
+          {opponent ? (
+            <div className="flex items-center">
+              {opponent?.photoURL ? (
+                <img src={opponent.photoURL} alt="상대 프로필" className="w-4 h-4 rounded-full mr-1" />
+              ) : (
+                <div className="w-4 h-4 rounded-full bg-red-500 mr-1 flex items-center justify-center">
+                  <span className="text-white text-[6px]">상대</span>
+                </div>
+              )}
+              {opponent?.displayName?.substring(0, 6) || '상대'} 
+              {opponent?.isReady ? ' ✓' : ''}
+              <span className={playersStatus[opponent.id] ? 'text-green-600 ml-1' : 'text-red-600 ml-1'}>
+                {playersStatus[opponent.id] ? '●' : '○'}
+              </span>
+            </div>
+          ) : (
+            <div className="text-gray-400">대기 중...</div>
+          )}
         </div>
       </div>
     );
@@ -922,36 +1095,29 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     // 메인 게임 컨텐츠
     return (
       <div className="container mx-auto px-2 sm:px-4 py-2 sm:py-4">
-        {/* 방 제목과 게임 상태를 함께 표시 */}
-        <div className="flex flex-col items-center mb-2">
-          <h1 className="text-lg font-bold">
-            {roomData?.name || '게임 방'}
-          </h1>
-          <div className="text-xs text-gray-600 mt-1">
-            {gameState.phase === GamePhase.SETUP
-              ? '맵 제작'
-              : gameState.phase === GamePhase.PLAY
-                ? '게임 진행'
-                : '게임 종료'}
+        {/* 통합된 헤더 정보 표시 */}
+        {renderGameHeader()}
+        
+        {/* 선턴 메시지 표시 */}
+        {gameState.phase === GamePhase.SETUP && (
+          <div className="text-center mb-2">
+            {restartMessage && (
+              <p className="text-xs font-medium bg-blue-50 text-blue-700 py-1 px-2 rounded inline-block">
+                {restartMessage}
+              </p>
+            )}
+            {gameState.currentTurn === userId && gameState.phase === GamePhase.SETUP && (
+              <p className="text-xs font-medium bg-green-50 text-green-700 py-1 px-2 rounded inline-block mt-1">
+                선턴입니다. 맵을 설정해주세요.
+              </p>
+            )}
           </div>
-        </div>
-        
-        {/* 전적 표시 */}
-        {renderStats()}
-        
-        {/* 플레이어 정보 - 더 컴팩트하게 */}
-        <div className="flex justify-center gap-4 mb-2">
-          {/* 내 플레이어 정보 */}
-          {renderMyInfo()}
-
-          {/* 상대방 플레이어 정보 - 렌더링 함수 사용 */}
-          {renderOpponentInfo()}
-        </div>
+        )}
         
         {/* 게임 종료 메시지 */}
         {gameState.phase === GamePhase.END && (
-          <div className="flex flex-col items-center w-full">
-            <p className={`text-lg font-bold mb-2 ${gameState.winner === userId ? 'text-green-500' : 'text-red-500'}`}>
+          <div className="text-center mb-2">
+            <p className={`text-sm font-bold ${gameState.winner === userId ? 'text-green-500' : 'text-red-500'}`}>
               {getWinnerMessage()}
             </p>
             
@@ -968,7 +1134,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             )}
             
             {/* 재시작 버튼 */}
-            <div className="flex gap-3 mt-3">
+            <div className="flex gap-3 mt-3 justify-center">
               <button
                 className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
                 onClick={handleRestartGame}
@@ -983,22 +1149,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                 나가기
               </button>
             </div>
-          </div>
-        )}
-        
-        {/* 게임 진행 중 턴 표시 */}
-        {gameState.phase === GamePhase.PLAY && (
-          <div className="mb-2">
-            {renderTurnIndicator()}
-          </div>
-        )}
-        
-        {/* 게임 설정 단계에서 선턴 메시지 표시 */}
-        {gameState.phase === GamePhase.SETUP && restartMessage && (
-          <div className="text-center mb-3">
-            <p className="text-sm font-medium bg-blue-50 text-blue-700 py-1 px-3 rounded inline-block">
-              {restartMessage}
-            </p>
           </div>
         )}
         

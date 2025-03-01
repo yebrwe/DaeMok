@@ -404,17 +404,13 @@ export const setPlayerReady = async (roomId: string, userId: string, isReady: bo
             console.log('setPlayerReady에서 모든 게임 시작 조건 충족! 게임을 시작합니다');
             const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
             
-            // 첫 번째 턴 설정 (랜덤) - players 배열 대신 gameState.players 객체 키를 사용
-            const playerIds = Object.keys(room.gameState.players || {});
-            if (playerIds.length === 0) {
-              console.error('플레이어 목록이 비어있습니다!');
-              resolve();
-              return;
-            }
+            // 중요: currentTurn 값 유지하기
+            const currentTurn = room.gameState.currentTurn || Object.keys(room.gameState.players)[0];
             
-            const randomIndex = Math.floor(Math.random() * playerIds.length);
-            const currentTurn = playerIds[randomIndex];
-            console.log('첫 턴 설정:', { randomIndex, currentTurn, playerIds });
+            console.log('게임 시작 전 턴 정보:', {
+              setupTurn: room.gameState.currentTurn,
+              startingTurn: currentTurn
+            });
             
             // 플레이어 시작 위치 설정
             const updatedPlayers = { ...room.gameState.players };
@@ -529,17 +525,13 @@ export const placeObstacles = async (roomId: string, userId: string, map: GameMa
             console.log('모든 게임 시작 조건 충족! 게임을 시작합니다');
             const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
             
-            // 첫 번째 턴 설정 (랜덤) - players 배열 대신 gameState.players 객체 키를 사용
-            const playerIds = Object.keys(room.gameState.players || {});
-            if (playerIds.length === 0) {
-              console.error('플레이어 목록이 비어있습니다!');
-              resolve();
-              return;
-            }
+            // 중요: currentTurn 값 유지하기
+            const currentTurn = room.gameState.currentTurn || Object.keys(room.gameState.players)[0];
             
-            const randomIndex = Math.floor(Math.random() * playerIds.length);
-            const currentTurn = playerIds[randomIndex];
-            console.log('첫 턴 설정:', { randomIndex, currentTurn, playerIds });
+            console.log('게임 시작 전 턴 정보:', {
+              setupTurn: room.gameState.currentTurn,
+              startingTurn: currentTurn
+            });
             
             // 플레이어 시작 위치 설정
             const updatedPlayers = { ...room.gameState.players };
@@ -1243,4 +1235,32 @@ export const getRoomOnlineUsers = (roomId: string, callback: (users: UserProfile
     
     callback(users);
   });
+};
+
+// 게임 시작 함수 수정
+export const startGame = async (roomId: string) => {
+  const database = getDatabase();
+  const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
+  
+  // 먼저 현재 게임 상태 가져오기
+  const snapshot = await get(gameStateRef);
+  if (!snapshot.exists()) return false;
+  
+  const gameState = snapshot.val();
+  
+  // 중요: currentTurn 값 유지하기
+  const currentTurn = gameState.currentTurn || Object.keys(gameState.players)[0];
+  
+  console.log('게임 시작 전 턴 정보:', {
+    setupTurn: gameState.currentTurn,
+    startingTurn: currentTurn
+  });
+  
+  // 게임 상태 업데이트 - currentTurn 유지
+  await update(gameStateRef, {
+    phase: 'play',
+    currentTurn: currentTurn  // 설정 단계의 턴 정보 유지
+  });
+  
+  return true;
 }; 
