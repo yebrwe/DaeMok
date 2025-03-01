@@ -111,6 +111,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   const playersStatus = usePlayersActivity(roomId);
   const [isRoomSetupComplete, setIsRoomSetupComplete] = useState(false);
   const [roomData, setRoomData] = useState<any>(null);
+  const [restartMessage, setRestartMessage] = useState<string>('');
   
   // 방 정보 가져오기
   useEffect(() => {
@@ -141,8 +142,21 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     if (!gameState || !gameState.winner) return '';
     
     const isWinner = gameState.winner === userId;
-    return isWinner ? '축하합니다! 당신이 승리했습니다!' : '안타깝게도 상대방이 승리했습니다.';
+    return isWinner ? '승리했습니다!' : '패배했습니다.';
   }, [gameState?.winner, userId]);
+  
+  // 현재 턴 표시 함수 추가
+  const renderTurnIndicator = () => {
+    if (!gameState || gameState.phase !== GamePhase.PLAY) return null;
+    
+    const isMyTurn = gameState.currentTurn === userId;
+    
+    return (
+      <div className={`text-center py-1 px-2 rounded-md text-sm font-medium ${isMyTurn ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+        {isMyTurn ? '내 턴입니다' : '상대방 턴입니다'}
+      </div>
+    );
+  };
   
   // 게임 상태 변경 감지
   useEffect(() => {
@@ -215,6 +229,27 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   }, [gameState, userId]);
   
+  // 선턴 메시지를 위한 별도의 useEffect 추가 (무한 루프 방지)
+  useEffect(() => {
+    if (!gameState) return;
+    
+    // 선턴 메시지 확인 및 설정 (별도의 useEffect로 분리)
+    if (gameState.turnMessage && gameState.phase === GamePhase.SETUP) {
+      // 이전 메시지와 다른 경우에만 업데이트
+      if (restartMessage !== gameState.turnMessage) {
+        console.log('선턴 메시지 설정:', gameState.turnMessage);
+        setRestartMessage(gameState.turnMessage);
+        
+        // 5초 후 선턴 메시지 초기화
+        const timer = setTimeout(() => {
+          setRestartMessage('');
+        }, 5000);
+        
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [gameState?.turnMessage, gameState?.phase, restartMessage]);
+  
   // 맵 설정 완료 처리
   const handleMapComplete = async (map: GameMap) => {
     console.log('맵 설정 완료 처리 시작');
@@ -271,7 +306,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
-  // 게임 재시작 함수
+  // 게임 재시작 함수 수정
   const handleRestartGame = async () => {
     if (!roomId || !gameState) return;
     
@@ -283,20 +318,42 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       
       // 패배한 사람이 먼저 턴을 갖도록 설정
       let firstTurnPlayerId = userId;
+      let turnMessage = '';
+      
       if (gameState.winner === userId) {
         // 내가 이겼다면, 상대방이 먼저 시작
-        const otherPlayers = Object.keys(gameState.players).filter(id => id !== userId);
+        const otherPlayers = Object.keys(gameState.players || {}).filter(id => id !== userId);
         if (otherPlayers.length > 0) {
           firstTurnPlayerId = otherPlayers[0];
+          turnMessage = `${gameState.players[firstTurnPlayerId]?.displayName || '상대방'}이(가) 선턴을 가져갑니다.`;
+          console.log('이전 게임 패배자(상대방)가 선턴을 가져갑니다:', firstTurnPlayerId);
         }
+      } else if (gameState.winner && gameState.winner !== userId) {
+        // 상대방이 이겼다면, 내가 먼저 시작
+        turnMessage = `${gameState.players[userId]?.displayName || '당신'}이(가) 선턴을 가져갑니다.`;
+        console.log('이전 게임 패배자(나)가 선턴을 가져갑니다:', userId);
+        firstTurnPlayerId = userId;
+      } else {
+        // 승자가 없는 경우(첫 게임 등) 랜덤으로 선택
+        const playerIds = Object.keys(gameState.players || {});
+        const randomIndex = Math.floor(Math.random() * playerIds.length);
+        firstTurnPlayerId = playerIds[randomIndex];
+        turnMessage = `${gameState.players[firstTurnPlayerId]?.displayName || (firstTurnPlayerId === userId ? '당신' : '상대방')}이(가) 선턴을 가져갑니다.`;
+        console.log('랜덤으로 선턴 결정:', firstTurnPlayerId);
       }
       
+      // 선턴 메시지 설정 - 로컬 상태
+      setRestartMessage(turnMessage);
+      
+      // 선턴 메시지를 Firebase에 저장하여 모든 플레이어가 볼 수 있게 함
       await update(gameStateRef, {
         phase: GamePhase.SETUP,
         winner: null,
         currentTurn: firstTurnPlayerId,
         maps: null,
-        collisionWalls: null
+        collisionWalls: null,
+        turnMessage: turnMessage,  // 선턴 메시지 저장
+        turnMessageTimestamp: serverTimestamp()  // 메시지 타임스탬프
       });
       
       // 맵 데이터를 완전히 제거하기 위한 추가 조치
@@ -330,7 +387,13 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       setMyMap(null);
       setOpponentMap(null);
       
-      setMessage('게임 재시작');
+      // 메시지 설정 (선턴 정보 포함)
+      setMessage(`게임 재시작 - ${turnMessage}`);
+      
+      // 5초 후 선턴 메시지 초기화 (로컬만)
+      setTimeout(() => {
+        setRestartMessage('');
+      }, 5000);
       
     } catch (error) {
       console.error('게임 재시작 중 오류 발생:', error);
@@ -627,21 +690,30 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   }, [roomId, userId, gameState, router]);
   
-  // 방 삭제 감지를 위한 useEffect 추가
+  // 방 삭제 감지를 위한 useEffect 수정
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId || !router) return;
+    
+    let isRedirecting = false;
     
     const database = getDatabase();
     const roomRef = ref(database, `rooms/${roomId}`);
     
     // 방 삭제 감지 리스너
     const unsubscribe = onValue(roomRef, (snapshot) => {
+      // 이미 리디렉션 중이면 추가 처리 방지
+      if (isRedirecting) return;
+      
       if (!snapshot.exists()) {
         console.log('방이 삭제되었습니다. 로비로 이동합니다.');
         // 세션 스토리지에 방 나가기 표시
         sessionStorage.setItem(`left_room_${roomId}`, 'true');
         // 로컬 스토리지에 방 삭제 표시
         localStorage.setItem(`deleted_room_${roomId}`, 'true');
+        
+        // 리디렉션 상태 설정
+        isRedirecting = true;
+        
         // 로비로 리디렉션
         router.push('/rooms');
       }
@@ -650,20 +722,29 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     return () => unsubscribe();
   }, [roomId, router]);
   
-  // 방 상태 변경 감지
+  // 방 상태 변경 감지 useEffect 수정
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId || !router) return;
+    
+    let isRedirecting = false;
     
     const database = getDatabase();
     const roomStatusRef = ref(database, `rooms/${roomId}/status`);
     
     const unsubscribe = onValue(roomStatusRef, (snapshot) => {
+      // 이미 리디렉션 중이면 추가 처리 방지
+      if (isRedirecting) return;
+      
       if (snapshot.exists() && snapshot.val() === 'deleting') {
         console.log('방이 삭제 중입니다. 로비로 이동합니다.');
         // 세션 스토리지에 방 나가기 표시
         sessionStorage.setItem(`left_room_${roomId}`, 'true');
         // 로컬 스토리지에 방 삭제 표시
         localStorage.setItem(`deleted_room_${roomId}`, 'true');
+        
+        // 리디렉션 상태 설정
+        isRedirecting = true;
+        
         // 로비로 리디렉션
         router.push('/rooms');
       }
@@ -759,8 +840,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         {/* 게임 종료 메시지 */}
         {gameState.phase === GamePhase.END && (
           <div className="flex flex-col items-center w-full">
-            <p className={`text-sm sm:text-base font-medium mb-2 ${gameState.winner === userId ? 'text-green-500' : gameState.winner ? 'text-red-500' : ''}`}>
-              {message}
+            <p className={`text-lg font-bold mb-2 ${gameState.winner === userId ? 'text-green-500' : 'text-red-500'}`}>
+              {getWinnerMessage()}
             </p>
             
             {/* 게임 종료 후에도 게임 상태는 계속 표시 */}
@@ -791,6 +872,22 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                 나가기
               </button>
             </div>
+          </div>
+        )}
+        
+        {/* 게임 진행 중 턴 표시 */}
+        {gameState.phase === GamePhase.PLAY && (
+          <div className="mb-2">
+            {renderTurnIndicator()}
+          </div>
+        )}
+        
+        {/* 게임 설정 단계에서 선턴 메시지 표시 */}
+        {gameState.phase === GamePhase.SETUP && restartMessage && (
+          <div className="text-center mb-3">
+            <p className="text-sm font-medium bg-blue-50 text-blue-700 py-1 px-3 rounded inline-block">
+              {restartMessage}
+            </p>
           </div>
         )}
         

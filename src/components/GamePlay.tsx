@@ -432,9 +432,12 @@ const GamePlay: React.FC<GamePlayProps> = ({
         }
       }
       
-      setCollisionWalls(allWalls);
+      // 이전 상태와 비교하여 변경이 있을 때만 업데이트
+      if (JSON.stringify(allWalls) !== JSON.stringify(collisionWalls)) {
+        setCollisionWalls(allWalls);
+      }
     }
-  }, [gameEnded, obstacles, BOARD_SIZE, userId]);
+  }, [gameEnded, obstacles, BOARD_SIZE, userId, collisionWalls]);
   
   return (
     <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
