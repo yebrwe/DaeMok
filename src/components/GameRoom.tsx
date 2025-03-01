@@ -110,6 +110,28 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   const [message, setMessage] = useState<string>('');
   const playersStatus = usePlayersActivity(roomId);
   const [isRoomSetupComplete, setIsRoomSetupComplete] = useState(false);
+  const [roomData, setRoomData] = useState<any>(null);
+  
+  // 방 정보 가져오기
+  useEffect(() => {
+    if (!roomId) return;
+    
+    const fetchRoomData = async () => {
+      try {
+        const database = getDatabase();
+        const roomRef = ref(database, `rooms/${roomId}`);
+        const snapshot = await get(roomRef);
+        
+        if (snapshot.exists()) {
+          setRoomData(snapshot.val());
+        }
+      } catch (error) {
+        console.error('방 정보 가져오기 오류:', error);
+      }
+    };
+    
+    fetchRoomData();
+  }, [roomId]);
   
   // 플레이어 목록 계산 - null-safe 방식으로 항상 값을 가지도록 함
   const players = gameState ? Object.values(gameState.players || {}) : [];
@@ -368,7 +390,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 상대방 플레이어 표시 로직 수정
   const renderOpponentInfo = () => {
     if (!gameState || !gameState.players) {
-      return <div>상대방을 기다리는 중...</div>;
+      return <div className="text-center px-2 py-1 rounded-lg bg-gray-100 text-xs">대기 중</div>;
     }
     
     const players = Object.keys(gameState.players)
@@ -386,25 +408,20 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       });
     
     if (players.length === 0) {
-      return <div>상대방을 기다리는 중...</div>;
+      return <div className="text-center px-2 py-1 rounded-lg bg-gray-100 text-xs">대기 중</div>;
     }
     
     return (
       <>
         {players.map(player => (
-          <div key={player.id} className="mb-4">
-            <h3 className="text-lg font-medium">
-              {player.displayName || '익명 상대방'}
-              <span className={`ml-2 text-sm font-normal ${player.isOnline ? 'text-green-600' : 'text-red-600'}`}>
-                {player.isOnline ? '(온라인)' : '(오프라인)'}
+          <div key={player.id} className="text-center px-2 py-1 rounded-lg bg-gray-100">
+            <div className="text-xs sm:text-sm">
+              {player.displayName ? player.displayName.substring(0, 6) : '상대방'} 
+              {player.isReady ? '✓' : ''} 
+              <span className={player.isOnline ? 'text-green-600' : 'text-red-600'}>
+                {player.isOnline ? '●' : '○'}
               </span>
-            </h3>
-            <p>
-              상태: {player.isReady ? '준비 완료' : '준비 중'}
-              {!player.isOnline && player.hasLeft && 
-                <span className="ml-2 text-red-500">방을 나갔습니다</span>
-              }
-            </p>
+            </div>
           </div>
         ))}
       </>
@@ -564,23 +581,28 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     
     // 메인 게임 컨텐츠
     return (
-      <div className="container mx-auto p-4">
-        <h1 className="text-2xl font-bold text-center mb-6">
-          {gameState.phase === GamePhase.SETUP
-            ? '맵 제작 단계'
-            : gameState.phase === GamePhase.PLAY
-              ? '게임 플레이 단계'
-              : '게임 종료'}
-        </h1>
+      <div className="container mx-auto px-2 sm:px-4 py-2 sm:py-4">
+        {/* 방 제목과 게임 상태를 함께 표시 */}
+        <div className="flex flex-col items-center mb-2">
+          <h1 className="text-lg font-bold">
+            {roomData?.name || '게임 방'}
+          </h1>
+          <div className="text-xs text-gray-600 mt-1">
+            {gameState.phase === GamePhase.SETUP
+              ? '맵 제작'
+              : gameState.phase === GamePhase.PLAY
+                ? '게임 진행'
+                : '게임 종료'}
+          </div>
+        </div>
         
-        {/* 플레이어 정보 */}
-        <div className="flex justify-around mb-6">
+        {/* 플레이어 정보 - 더 컴팩트하게 */}
+        <div className="flex justify-around mb-2">
           {/* 내 플레이어 정보 */}
           {gameState.players && gameState.players[userId] && (
-            <div className="text-center p-3 rounded-lg bg-blue-100">
-              <div className="font-medium">나</div>
-              <div className="text-sm">
-                {gameState.players[userId].isReady ? '준비 완료' : '준비 중...'}
+            <div className="text-center px-2 py-1 rounded-lg bg-blue-100">
+              <div className="text-xs sm:text-sm">
+                나 {gameState.players[userId].isReady ? '✓' : ''}
               </div>
             </div>
           )}
@@ -592,9 +614,9 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         {/* 게임 종료 메시지 */}
         {gameState.phase === GamePhase.END && (
           <div className="flex flex-col items-center w-full">
-            <h2 className={`text-2xl font-bold mb-4 ${gameState.winner === userId ? 'text-green-500' : gameState.winner ? 'text-red-500' : ''}`}>
+            <p className={`text-sm sm:text-base font-medium mb-2 ${gameState.winner === userId ? 'text-green-500' : gameState.winner ? 'text-red-500' : ''}`}>
               {message}
-            </h2>
+            </p>
             
             {/* 게임 종료 후에도 게임 상태는 계속 표시 */}
             {myMap && opponentMap && (
@@ -609,19 +631,19 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             )}
             
             {/* 재시작 버튼 */}
-            <div className="flex gap-4 mt-6">
+            <div className="flex gap-3 mt-3">
               <button
-                className="px-6 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
                 onClick={handleRestartGame}
               >
-                게임 재시작
+                재시작
               </button>
               
               <button
-                className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+                className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
                 onClick={handleLeaveRoom}
               >
-                방 나가기
+                나가기
               </button>
             </div>
           </div>
@@ -631,26 +653,25 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         {gameState.phase === GamePhase.SETUP && !isReady ? (
           <div key="setup-container">
             <GameSetup onMapComplete={handleMapComplete} />
-            <div className="flex justify-center mt-4">
+            <div className="flex justify-center mt-2">
               <button
-                className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+                className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
                 onClick={handleLeaveRoom}
               >
-                방 나가기
+                나가기
               </button>
             </div>
           </div>
         ) : gameState.phase === GamePhase.SETUP && isReady ? (
-          <div key="waiting-container" className="text-center p-8">
-            <h2 className="text-xl font-bold mb-4">맵 제작 완료</h2>
-            <p>상대방이 맵을 제작할 때까지 기다리고 있습니다...</p>
-            <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mt-4"></div>
-            <div className="flex justify-center mt-6">
+          <div key="waiting-container" className="text-center p-3">
+            <p className="text-sm mb-2">상대방 준비 대기 중...</p>
+            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+            <div className="flex justify-center mt-3">
               <button
-                className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+                className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
                 onClick={handleLeaveRoom}
               >
-                방 나가기
+                나가기
               </button>
             </div>
           </div>
@@ -664,29 +685,15 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               currentTurn={gameState.currentTurn}
               myMap={myMap || undefined}
             />
-            <div className="flex justify-center mt-4">
-              <button
-                className={`px-6 py-2 ${gameState.phase === GamePhase.PLAY ? 'bg-gray-300 cursor-not-allowed' : 'bg-gray-500 hover:bg-gray-600'} text-white rounded transition-colors`}
-                onClick={handleLeaveRoom}
-                disabled={gameState.phase === GamePhase.PLAY}
-                title={gameState.phase === GamePhase.PLAY ? "게임 진행 중에는 방을 나갈 수 없습니다" : "방 나가기"}
-              >
-                방 나가기
-              </button>
-            </div>
           </div>
         ) : gameState.phase === GamePhase.END ? (
           <div key="gameover-container" className="flex flex-col items-center">
-            <button
-              className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition mt-8"
-              onClick={handleLeaveRoom}
-            >
-              방 나가기
-            </button>
+            {/* 중복된 나가기 버튼 제거 */}
           </div>
         ) : (
-          <div key="loading-container" className="text-center p-8">
-            <p>게임을 불러오는 중입니다...</p>
+          <div key="loading-container" className="text-center p-3">
+            <p className="text-sm">게임을 불러오는 중...</p>
+            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mt-2"></div>
           </div>
         )}
       </div>

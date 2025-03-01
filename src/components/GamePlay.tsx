@@ -108,13 +108,13 @@ const GamePlay: React.FC<GamePlayProps> = ({
         // 내가 플레이하는 맵(상대방이 만든 맵)의 충돌 벽만 필터링
         const myWalls = Object.values(walls).filter(
           (wall: CollisionWall) => wall.mapOwnerId === opponentId
-        );
+        ) as CollisionWall[];
         setCollisionWalls(myWalls);
         
         // 상대방이 플레이하는 맵(내가 만든 맵)의 충돌 벽만 필터링
         const opponentWalls = Object.values(walls).filter(
           (wall: CollisionWall) => wall.mapOwnerId === userId
-        );
+        ) as CollisionWall[];
         setOpponentCollisionWalls(opponentWalls);
         
         console.log('충돌 벽 정보 업데이트:', walls);
@@ -313,27 +313,21 @@ const GamePlay: React.FC<GamePlayProps> = ({
   }, [gameEnded]);
   
   return (
-    <div className="flex flex-col items-center gap-4 w-full max-w-2xl mx-auto">
-      <h2 className="text-2xl font-bold text-center my-4">
-        {gameOver || gameEnded ? '게임 종료' : '게임 플레이'}
-      </h2>
-      
-      <div className="text-xl font-bold mb-2 text-center">
-        {gameOver || gameEnded ? (
-          <span className="text-green-600">게임이 종료되었습니다!</span>
-        ) : (
-          isMyTurn 
-            ? '현재 당신의 턴입니다!'
-            : '상대방의 턴입니다. 기다려주세요...'
-        )}
-      </div>
-      
-      <div className="flex justify-between w-full px-4 mb-4">
-        <div className="text-sm font-medium">
-          이동 횟수: {moveCount}
+    <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
+      {/* 상단 정보 영역 - 간결하게 수정 */}
+      <div className="w-full flex justify-between items-center mb-2 px-2">
+        <div className="text-xs">이동: {moveCount}</div>
+        <div className="text-xs text-center">
+          {gameOver || gameEnded ? (
+            <span className="text-green-600">종료</span>
+          ) : (
+            isMyTurn ? 
+              <span className="text-blue-600">내 턴</span> : 
+              <span className="text-gray-600">대기</span>
+          )}
         </div>
         <div 
-          className={`text-sm font-medium ${
+          className={`text-xs ${
             lastMoveValid === false 
               ? 'text-red-500' 
               : lastMoveValid === true 
@@ -341,30 +335,30 @@ const GamePlay: React.FC<GamePlayProps> = ({
                 : ''
           }`}
         >
-          {message}
+          {message && message !== '게임을 시작합니다.' ? message : ''}
         </div>
       </div>
       
       {/* 메인 게임 영역과 미니맵을 포함하는 컨테이너 */}
-      <div className="flex flex-col md:flex-row w-full gap-4 items-start">
+      <div className="flex flex-col md:flex-row w-full gap-2 items-center justify-center">
         {/* 메인 게임보드 - 상대방 맵에서 내가 플레이 */}
-        <div className="flex-1">
-          <h3 className="text-lg font-medium mb-2 text-center">내 게임</h3>
-          <GameBoard
-            gamePhase={GamePhase.PLAY}
-            startPosition={startPosition}
-            endPosition={endPosition}
-            playerPosition={playerPosition}
-            obstacles={obstacles}
-            collisionWalls={collisionWalls}
-            readOnly={true}
-          />
+        <div className="flex-1 overflow-hidden flex justify-center">
+          <div className="max-w-full overflow-auto">
+            <GameBoard
+              gamePhase={GamePhase.PLAY}
+              startPosition={startPosition}
+              endPosition={endPosition}
+              playerPosition={playerPosition}
+              obstacles={obstacles}
+              collisionWalls={collisionWalls}
+              readOnly={true}
+            />
+          </div>
         </div>
         
         {/* 미니맵 - 내가 만든 맵에서 상대방 플레이 */}
         {myMap && opponentPosition && (
-          <div className="w-full md:w-64">
-            <h3 className="text-lg font-medium mb-2 text-center">상대방 현황</h3>
+          <div className="w-full md:w-64 flex justify-center">
             <div className="bg-gray-100 p-2 rounded shadow-sm">
               <GameBoard
                 gamePhase={GamePhase.PLAY}
@@ -383,54 +377,64 @@ const GamePlay: React.FC<GamePlayProps> = ({
       
       {/* 컨트롤 버튼 (게임 종료 시 숨김) */}
       {!gameOver && !gameEnded && (
-        <div className="mt-6 grid grid-cols-3 gap-2 w-36">
-          <div className="col-span-1"></div>
-          <button
-            className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
-            onClick={() => handleMove('up')}
-            disabled={gameOver || !isMyTurn}
-          >
-            ↑
-          </button>
-          <div className="col-span-1"></div>
-          
-          <button
-            className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
-            onClick={() => handleMove('left')}
-            disabled={gameOver || !isMyTurn}
-          >
-            ←
-          </button>
-          <button
-            className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
-            onClick={() => handleMove('down')}
-            disabled={gameOver || !isMyTurn}
-          >
-            ↓
-          </button>
-          <button
-            className={`${isMyTurn ? 'bg-blue-500' : 'bg-gray-400'} text-white p-2 rounded hover:${isMyTurn ? 'bg-blue-600' : 'bg-gray-400'} focus:outline-none`}
-            onClick={() => handleMove('right')}
-            disabled={gameOver || !isMyTurn}
-          >
-            →
-          </button>
+        <div className="flex justify-center gap-2 mt-2">
+          <div className="grid grid-cols-3 gap-1">
+            <div className="col-start-2">
+              <button
+                className="w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center hover:bg-blue-600 disabled:bg-gray-300"
+                onClick={() => handleMove('up')}
+                disabled={!isMyTurn}
+              >
+                ↑
+              </button>
+            </div>
+            <div className="col-start-1 row-start-2">
+              <button
+                className="w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center hover:bg-blue-600 disabled:bg-gray-300"
+                onClick={() => handleMove('left')}
+                disabled={!isMyTurn}
+              >
+                ←
+              </button>
+            </div>
+            <div className="col-start-2 row-start-2">
+              <button
+                className="w-10 h-10 bg-gray-200 text-gray-700 rounded-full flex items-center justify-center"
+                disabled
+              >
+                •
+              </button>
+            </div>
+            <div className="col-start-3 row-start-2">
+              <button
+                className="w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center hover:bg-blue-600 disabled:bg-gray-300"
+                onClick={() => handleMove('right')}
+                disabled={!isMyTurn}
+              >
+                →
+              </button>
+            </div>
+            <div className="col-start-2 row-start-3">
+              <button
+                className="w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center hover:bg-blue-600 disabled:bg-gray-300"
+                onClick={() => handleMove('down')}
+                disabled={!isMyTurn}
+              >
+                ↓
+              </button>
+            </div>
+          </div>
         </div>
       )}
       
-      {gameOver && (
-        <div className="mt-4 flex gap-2">
+      {/* 게임 재시작 버튼 (게임 종료 시에만 표시) */}
+      {gameOver && !gameEnded && (
+        <div className="flex justify-center mt-2">
           <button
-            className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition"
+            className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition"
             onClick={handleRestartGame}
           >
-            현재 맵에서 다시 시작
-          </button>
-          <button
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
-            onClick={() => window.location.reload()}
-          >
-            새 맵 만들기
+            재시작
           </button>
         </div>
       )}

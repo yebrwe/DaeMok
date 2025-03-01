@@ -262,85 +262,101 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   const remainingObstacles = MAX_OBSTACLES - countUniqueObstacles(obstacles);
   
   return (
-    <div className="flex flex-col items-center gap-4 w-full max-w-2xl mx-auto">
-      <h2 className="text-2xl font-bold text-center my-4">맵 설정</h2>
-      
-      <div className="flex justify-between w-full px-4 mb-4">
-        <div className="text-sm font-medium">
-          {setupPhase === 'start' && '시작점을 선택하세요'}
-          {setupPhase === 'end' && '도착점을 선택하세요'}
-          {setupPhase === 'obstacles' && '장애물을 배치하세요 (최대 15개)'}
+    <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
+      <div className="w-full flex justify-between items-center mb-2 px-2">
+        <div className="text-xs">
+          {setupPhase === 'start' && '시작점'}
+          {setupPhase === 'end' && '도착점'}
+          {setupPhase === 'obstacles' && '장애물'}
         </div>
         {setupPhase === 'obstacles' && (
-          <div className="text-sm font-medium flex items-center">
-            <span className="mr-2">장애물:</span>
-            <div className="flex items-center">
-              <span className={`${remainingObstacles <= 5 ? 'text-red-500 font-bold' : ''}`}>
-                {MAX_OBSTACLES - remainingObstacles}
-              </span>
-              <span className="mx-1">/</span>
-              <span>{MAX_OBSTACLES}</span>
-            </div>
+          <div className="text-xs flex items-center">
+            <span className={`${remainingObstacles <= 5 ? 'text-red-500 font-bold' : ''}`}>
+              {MAX_OBSTACLES - remainingObstacles}/{MAX_OBSTACLES}
+            </span>
           </div>
         )}
       </div>
       
       {setupPhase === 'obstacles' && (
-        <div className="bg-blue-50 p-3 rounded-lg mb-2 text-sm w-full">
-          <p className="text-center font-medium mb-2">장애물 배치 방법</p>
-          <ul className="list-disc pl-5 space-y-1">
-            <li>격자 벽에 마우스를 가져다 대면 <span className="text-yellow-500 font-medium">노란색 선</span>으로 미리보기가 표시됩니다.</li>
-            <li>선을 클릭하여 장애물을 배치하거나 제거할 수 있습니다.</li>
-            <li>모바일에서는 벽을 터치하여 장애물을 배치/제거하세요.</li>
-            <li><span className="font-medium text-blue-600">두 셀 사이의 공유 벽은 하나의 장애물로 계산됩니다.</span></li>
-            <li>최대 {MAX_OBSTACLES}개의 장애물을 배치할 수 있습니다.</li>
-          </ul>
-          
-          <div className="mt-3 p-2 bg-yellow-50 rounded-md text-xs">
-            <p className="font-medium mb-1">현재 상태:</p>
-            <p>배치한 장애물 수: {MAX_OBSTACLES - remainingObstacles} / {MAX_OBSTACLES}</p>
-            <p>추가 가능한 장애물 수: {remainingObstacles}</p>
+        <div className="bg-blue-50 p-2 rounded-lg mb-2 text-xs w-full">
+          <div className="flex justify-between items-center">
+            <span>장애물 배치</span>
+            <span className="text-blue-600">
+              {remainingObstacles} 남음
+            </span>
           </div>
+          <ul className="list-disc pl-4 space-y-0.5 mt-1">
+            <li>선을 클릭하여 장애물 배치/제거</li>
+            <li>시작점에서 도착점까지 경로 필요</li>
+          </ul>
         </div>
       )}
       
-      <GameBoard
-        gamePhase={GamePhase.SETUP}
-        startPosition={startPosition}
-        endPosition={endPosition}
-        obstacles={obstacles}
-        onCellClick={handleCellClick}
-        onDirectionClick={handleDirectionClick}
-      />
+      <div className="flex justify-center w-full">
+        <GameBoard
+          gamePhase={GamePhase.SETUP}
+          startPosition={startPosition}
+          endPosition={endPosition}
+          obstacles={obstacles}
+          onCellClick={handleCellClick}
+          onDirectionClick={handleDirectionClick}
+        />
+      </div>
       
-      <div className="flex justify-between w-full px-4 mt-6">
-        <button
-          className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400 transition"
-          onClick={() => {
-            if (setupPhase === 'end') {
-              setStartPosition(undefined);
-              setSetupPhase('start');
-            } else if (setupPhase === 'obstacles') {
-              setEndPosition(undefined);
-              setSetupPhase('end');
-            }
-          }}
-          disabled={setupPhase === 'start'}
-        >
-          이전
-        </button>
-        {setupPhase === 'obstacles' && (
+      <div className="mt-3 flex gap-2 w-full justify-center">
+        {setupPhase === 'start' && (
           <button
-            className={`px-4 py-2 rounded transition ${
-              isMapValid
-                ? 'bg-blue-500 text-white hover:bg-blue-600'
-                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-            }`}
-            onClick={handleSubmit}
-            disabled={!isMapValid}
+            className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+            onClick={() => {
+              if (startPosition) {
+                setSetupPhase('end');
+              }
+            }}
+            disabled={!startPosition}
           >
-            맵 완성
+            다음
           </button>
+        )}
+        
+        {setupPhase === 'end' && (
+          <div className="flex gap-2">
+            <button
+              className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition"
+              onClick={() => setSetupPhase('start')}
+            >
+              이전
+            </button>
+            <button
+              className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+              onClick={() => {
+                if (endPosition) {
+                  setSetupPhase('obstacles');
+                }
+              }}
+              disabled={!endPosition}
+            >
+              다음
+            </button>
+          </div>
+        )}
+        
+        {setupPhase === 'obstacles' && (
+          <div className="flex gap-2">
+            <button
+              className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition"
+              onClick={() => setSetupPhase('end')}
+            >
+              이전
+            </button>
+            <button
+              className="px-3 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600 transition"
+              onClick={handleSubmit}
+              disabled={!isMapValid}
+            >
+              완료
+            </button>
+          </div>
         )}
       </div>
       

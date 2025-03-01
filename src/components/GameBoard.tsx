@@ -139,7 +139,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
     const isHovered = hoveredCell && isSamePosition(hoveredCell, position);
     
     const cellClasses = `
-      relative ${isMinimapMode ? 'w-6 h-6' : 'w-14 h-14'} 
+      relative ${isMinimapMode ? 'w-6 h-6' : 'w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14'} 
       ${cellType === 'empty' || cellType === 'player' ? 'bg-white' : ''}
       ${!readOnly && (gamePhase === GamePhase.SETUP || gamePhase === GamePhase.PLAY) ? 'cursor-pointer' : ''}
       touch-action-none transition-colors duration-300 ease-in-out
@@ -448,7 +448,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
   // 보드 렌더링
   return (
     <div 
-      className="flex flex-col items-center"
+      className="flex flex-col items-center justify-center w-full max-w-full overflow-hidden"
       onMouseLeave={() => {
         // 보드를 벗어날 때 모든 호버 상태 초기화
         setHoveredCell(null);
@@ -459,7 +459,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
       {isMinimapMode ? (
         // 미니맵 모드일 때는 단순 8x8 그리드
         <div 
-          className="grid gap-0 border border-gray-400 bg-gray-100 p-1 minimap-container rounded-md shadow-md touch-action-none"
+          className="grid gap-0 border border-gray-400 bg-gray-100 p-1 minimap-container rounded-md shadow-md touch-action-none mx-auto"
           style={{ 
             gridTemplateColumns: `repeat(${BOARD_SIZE}, 1fr)`,
             gridTemplateRows: `repeat(${BOARD_SIZE}, 1fr)`
@@ -475,7 +475,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
       ) : (
         // 일반 모드일 때는 셀+벽+교차점을 포함한 그리드
         <div 
-          className="grid gap-0 border border-gray-400 bg-gray-100 p-2 rounded-md shadow-md touch-action-none"
+          className="grid gap-0 border border-gray-400 bg-gray-100 p-1 sm:p-2 rounded-md shadow-md touch-action-none overflow-auto mx-auto"
           style={{ 
             gridTemplateColumns: `repeat(${BOARD_SIZE * 2 - 1}, auto)`,
             gridTemplateRows: `repeat(${BOARD_SIZE * 2 - 1}, auto)`
