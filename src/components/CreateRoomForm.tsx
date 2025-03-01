@@ -10,7 +10,6 @@ interface CreateRoomFormProps {
 
 const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
   const [roomName, setRoomName] = useState('');
-  const [maxPlayers, setMaxPlayers] = useState(2);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -28,8 +27,8 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
       setIsCreating(true);
       setError(null);
       
-      console.log('방 생성 시도:', { roomName, maxPlayers });
-      const roomId = await createRoom(roomName, userId, maxPlayers);
+      console.log('방 생성 시도:', { roomName, maxPlayers: 2 });
+      const roomId = await createRoom(roomName, userId, 2);
       
       if (roomId) {
         console.log('방 생성 성공:', roomId);
@@ -82,23 +81,6 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
                 disabled={isCreating}
               />
-            </div>
-            
-            <div>
-              <label htmlFor="maxPlayers" className="block text-sm font-medium text-gray-700 mb-1">
-                최대 플레이어 수
-              </label>
-              <select
-                id="maxPlayers"
-                value={maxPlayers}
-                onChange={(e) => setMaxPlayers(Number(e.target.value))}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
-                disabled={isCreating}
-              >
-                <option value={2}>2명</option>
-                <option value={3}>3명</option>
-                <option value={4}>4명</option>
-              </select>
             </div>
             
             <div className="flex space-x-2 pt-1">
