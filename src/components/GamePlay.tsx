@@ -276,7 +276,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
     setMoveCount(0);
     setGameOver(false);
     setLastMoveValid(null);
-    setMessage('게임을 다시 시작합니다.');
+    setMessage('게임 재시작');
     
     // 멀티플레이어 게임인 경우 Firebase 업데이트
     if (roomId && roomId !== 'practice-room') {
@@ -309,13 +309,45 @@ const GamePlay: React.FC<GamePlayProps> = ({
   useEffect(() => {
     if (gameEnded) {
       setGameOver(true);
+      
+      // 게임 종료 시 모든 벽 표시를 위해 충돌 벽 업데이트
+      const allWalls: CollisionWall[] = [];
+      
+      // 모든 셀에 대해 장애물이 있는 방향을 충돌 벽으로 추가
+      for (let row = 0; row < BOARD_SIZE; row++) {
+        for (let col = 0; col < BOARD_SIZE; col++) {
+          const position = { row, col };
+          
+          // 각 방향에 대해 장애물이 있는지 확인
+          ['up', 'down', 'left', 'right'].forEach((dir) => {
+            const direction = dir as Direction;
+            const hasObstacleHere = obstacles.some(
+              (o) => o.position.row === position.row && 
+                    o.position.col === position.col && 
+                    o.direction === direction
+            );
+            
+            if (hasObstacleHere) {
+              allWalls.push({
+                playerId: userId || 'unknown',
+                position,
+                direction,
+                timestamp: Date.now(),
+                mapOwnerId: userId || 'unknown'
+              });
+            }
+          });
+        }
+      }
+      
+      setCollisionWalls(allWalls);
     }
-  }, [gameEnded]);
+  }, [gameEnded, obstacles, BOARD_SIZE, userId]);
   
   return (
     <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
       {/* 상단 정보 영역 - 간결하게 수정 */}
-      <div className="w-full flex justify-between items-center mb-2 px-2">
+      <div className="w-full flex justify-center items-center mb-2 px-2 gap-4">
         <div className="text-xs">이동: {moveCount}</div>
         <div className="text-xs text-center">
           {gameOver || gameEnded ? (

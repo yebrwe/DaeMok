@@ -271,45 +271,32 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
-  // 게임 재시작 처리
+  // 게임 재시작 함수
   const handleRestartGame = async () => {
-    // 맵 생성 단계로 돌아가기
-    setIsReady(false);
-    setMyMap(null);
-    setOpponentMap(null); // 상대방 맵도 초기화
-    
-    // Firebase에서 게임 상태 초기화
-    const database = getDatabase();
-    const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
+    if (!roomId || !gameState) return;
     
     try {
-      // 현재 플레이어 상태 정보 저장 (위치 포함)
-      const playersRef = ref(database, `rooms/${roomId}/gameState/players`);
-      const playersSnapshot = await get(playersRef);
-      const players = playersSnapshot.val() || {};
+      const database = getDatabase();
       
-      // 기존 플레이어 위치 정보 보존
-      const preservedPlayersData = {};
-      Object.keys(players).forEach(playerId => {
-        preservedPlayersData[playerId] = {
-          ...players[playerId],
-          isReady: false,
-          // 위치 정보는 유지
-          position: players[playerId].position,
-          lastPosition: players[playerId].position,
-          // 표시 이름도 유지
-          displayName: players[playerId].displayName
-        };
-      });
+      // 게임 상태 초기화
+      const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
       
-      // 게임 상태 업데이트 (플레이어 정보 보존)
+      // 패배한 사람이 먼저 턴을 갖도록 설정
+      let firstTurnPlayerId = userId;
+      if (gameState.winner === userId) {
+        // 내가 이겼다면, 상대방이 먼저 시작
+        const otherPlayers = Object.keys(gameState.players).filter(id => id !== userId);
+        if (otherPlayers.length > 0) {
+          firstTurnPlayerId = otherPlayers[0];
+        }
+      }
+      
       await update(gameStateRef, {
         phase: GamePhase.SETUP,
         winner: null,
-        maps: null, // null로 설정하여 완전히 초기화
-        collisionWalls: null, // null로 설정하여 완전히 초기화
-        currentTurn: null,
-        players: preservedPlayersData  // 플레이어 상태 정보 유지
+        currentTurn: firstTurnPlayerId,
+        maps: null,
+        collisionWalls: null
       });
       
       // 맵 데이터를 완전히 제거하기 위한 추가 조치
@@ -320,10 +307,34 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       const wallsRef = ref(database, `rooms/${roomId}/gameState/collisionWalls`);
       await remove(wallsRef);
       
-      setMessage('게임이 재시작됩니다. 맵을 생성해주세요.');
+      // 플레이어 상태 초기화
+      const playersRef = ref(database, `rooms/${roomId}/gameState/players`);
+      const playersSnapshot = await get(playersRef);
+      const players = playersSnapshot.val();
+      
+      if (players) {
+        const updatedPlayers: Record<string, any> = {};
+        
+        Object.keys(players).forEach(playerId => {
+          updatedPlayers[playerId] = {
+            ...players[playerId],
+            isReady: false
+          };
+        });
+        
+        await update(playersRef, updatedPlayers);
+      }
+      
+      // 내 상태 초기화
+      setIsReady(false);
+      setMyMap(null);
+      setOpponentMap(null);
+      
+      setMessage('게임 재시작');
+      
     } catch (error) {
-      console.error('게임 재시작 중 오류:', error);
-      setMessage('게임 재시작 중 오류가 발생했습니다.');
+      console.error('게임 재시작 중 오류 발생:', error);
+      setMessage('게임을 재시작하는 데 문제가 발생했습니다.');
     }
   };
   
@@ -390,7 +401,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 상대방 플레이어 표시 로직 수정
   const renderOpponentInfo = () => {
     if (!gameState || !gameState.players) {
-      return <div className="text-center px-2 py-1 rounded-lg bg-gray-100 text-xs">대기 중</div>;
+      return <div className="text-center px-2 py-1 rounded-lg bg-gray-100 text-xs">대기</div>;
     }
     
     const players = Object.keys(gameState.players)
@@ -408,15 +419,15 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       });
     
     if (players.length === 0) {
-      return <div className="text-center px-2 py-1 rounded-lg bg-gray-100 text-xs">대기 중</div>;
+      return <div className="text-center px-2 py-1 rounded-lg bg-gray-100 text-xs">대기</div>;
     }
     
     return (
       <>
         {players.map(player => (
           <div key={player.id} className="text-center px-2 py-1 rounded-lg bg-gray-100">
-            <div className="text-xs sm:text-sm">
-              {player.displayName ? player.displayName.substring(0, 6) : '상대방'} 
+            <div className="text-xs">
+              {player.displayName ? player.displayName.substring(0, 6) : '상대'} 
               {player.isReady ? '✓' : ''} 
               <span className={player.isOnline ? 'text-green-600' : 'text-red-600'}>
                 {player.isOnline ? '●' : '○'}
@@ -542,7 +553,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         <div className="flex items-center justify-center h-screen">
           <div className="text-center">
             <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-            <p className="mt-4">인증 상태 확인 중...</p>
+            <p className="mt-4">인증 확인 중</p>
           </div>
         </div>
       );
@@ -572,7 +583,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       return (
         <div className="flex items-center justify-center h-screen">
           <div className="text-center">
-            <h2 className="text-2xl font-bold mb-4">게임 로딩 중...</h2>
+            <h2 className="text-2xl font-bold mb-4">게임 로딩</h2>
             <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
           </div>
         </div>
@@ -597,11 +608,11 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         </div>
         
         {/* 플레이어 정보 - 더 컴팩트하게 */}
-        <div className="flex justify-around mb-2">
+        <div className="flex justify-center gap-4 mb-2">
           {/* 내 플레이어 정보 */}
           {gameState.players && gameState.players[userId] && (
             <div className="text-center px-2 py-1 rounded-lg bg-blue-100">
-              <div className="text-xs sm:text-sm">
+              <div className="text-xs">
                 나 {gameState.players[userId].isReady ? '✓' : ''}
               </div>
             </div>
@@ -664,7 +675,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           </div>
         ) : gameState.phase === GamePhase.SETUP && isReady ? (
           <div key="waiting-container" className="text-center p-3">
-            <p className="text-sm mb-2">상대방 준비 대기 중...</p>
+            <p className="text-sm mb-2">상대방 준비 대기</p>
             <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
             <div className="flex justify-center mt-3">
               <button
@@ -692,7 +703,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           </div>
         ) : (
           <div key="loading-container" className="text-center p-3">
-            <p className="text-sm">게임을 불러오는 중...</p>
+            <p className="text-sm">게임 로딩</p>
             <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mt-2"></div>
           </div>
         )}

@@ -286,9 +286,9 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
               {remainingObstacles} 남음
             </span>
           </div>
-          <ul className="list-disc pl-4 space-y-0.5 mt-1">
-            <li>선을 클릭하여 장애물 배치/제거</li>
-            <li>시작점에서 도착점까지 경로 필요</li>
+          <ul className="list-disc pl-4 mt-1">
+            <li>선 클릭: 장애물 배치/제거</li>
+            <li>시작→도착 경로 필요</li>
           </ul>
         </div>
       )}
