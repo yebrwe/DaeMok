@@ -266,14 +266,7 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
       isCreator: true
     });
     
-    // 사용자-방 매핑 정보 저장
-    await set(ref(database, `userRooms/${creatorId}/${roomId}`), {
-      joinedAt: now,
-      lastSeen: now,
-      active: true
-    });
-    
-    // 사용자 상태 업데이트
+    // 사용자 상태 업데이트 - 현재 방 정보만 저장
     await update(ref(database, `userStatus/${creatorId}`), {
       currentRoom: roomId,
       lastActivity: now
@@ -350,11 +343,10 @@ export const joinRoom = async (roomId: string, userId: string): Promise<boolean>
       photoURL: auth.currentUser.photoURL || null
     });
     
-    // 사용자-방 매핑 정보 저장
-    await update(ref(database, `userRooms/${userId}/${roomId}`), {
-      joinedAt: serverTimestamp(),
-      lastSeen: serverTimestamp(),
-      active: true
+    // 대신 현재 방 정보만 업데이트
+    await update(ref(database, `userStatus/${userId}`), {
+      currentRoom: roomId,
+      lastActivity: serverTimestamp()
     });
     
     return true;
@@ -618,114 +610,44 @@ export const endGame = async (roomId: string, userId: string): Promise<void> => 
 
 // 방 나가기
 export const leaveRoom = async (roomId: string, userId: string): Promise<boolean> => {
-  if (!database) {
-    console.error('Firebase Database가 초기화되지 않았습니다.');
-    return false;
-  }
-
+  if (!database) return false;
+  
   try {
-    console.log('방 나가기 시도:', { roomId, userId });
+    console.log('방 나가기 시도:', roomId, userId);
     
-    // 1. 방 정보 확인
+    // 방 정보 확인
     const roomRef = ref(database, `rooms/${roomId}`);
     const roomSnapshot = await get(roomRef);
     
     if (!roomSnapshot.exists()) {
-      console.error('존재하지 않는 방입니다.');
-      
-      // 방이 없는 경우에도 사용자-방 연결 정보는 제거
-      await remove(ref(database, `userRooms/${userId}/${roomId}`));
-      
-      // 사용자 상태 업데이트
-      await update(ref(database, `userStatus/${userId}`), {
-        currentRoom: null,
-        lastSeen: serverTimestamp()
-      });
-      
-      return true; // 방이 이미 없으므로 나가기 성공으로 간주
+      console.error('방을 찾을 수 없음:', roomId);
+      return false;
     }
     
-    const room = roomSnapshot.val();
+    // 방에서 플레이어 제거
+    const roomData = roomSnapshot.val();
+    const players = roomData.players || [];
+    const updatedPlayers = players.filter((id: string) => id !== userId);
     
-    // 2. 플레이어 목록에서 제거
-    if (room.players && room.players.includes(userId)) {
-      const updatedPlayers = room.players.filter(id => id !== userId);
-      await update(roomRef, { players: updatedPlayers });
-      console.log('플레이어 목록에서 제거됨:', userId);
-    }
+    // 플레이어 목록 업데이트
+    await update(roomRef, { players: updatedPlayers });
     
-    // 3. 게임 상태에서 플레이어 정보 업데이트
-    if (room.gameState && room.gameState.players && room.gameState.players[userId]) {
-      await update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), {
-        isOnline: false,
-        hasLeft: true,
-        lastSeen: serverTimestamp()
-      });
-      console.log('게임 상태에서 플레이어 오프라인 처리:', userId);
-    }
-    
-    // 4. 방 참여 상태 제거
+    // 방 참여 정보 제거
     await remove(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`));
-    console.log('방 참여 상태 제거됨:', userId);
     
-    // 5. 사용자-방 연결 정보 업데이트
-    await update(ref(database, `userRooms/${userId}/${roomId}`), {
-      active: false,
-      leftAt: serverTimestamp()
-    });
-    console.log('사용자-방 연결 정보 업데이트됨');
+    // 게임 상태에서 플레이어 제거
+    await remove(ref(database, `rooms/${roomId}/gameState/players/${userId}`));
     
-    // 6. 사용자 상태 업데이트
+    // 사용자 상태 업데이트 - 현재 방 정보 null로 설정
     await update(ref(database, `userStatus/${userId}`), {
       currentRoom: null,
-      lastSeen: serverTimestamp()
+      lastActivity: serverTimestamp()
     });
-    console.log('사용자 상태 업데이트됨');
     
-    // 7. 방 내 사용자 상태 업데이트
-    await update(ref(database, `rooms/${roomId}/playerStatus/${userId}`), {
-      isOnline: false,
-      lastSeen: serverTimestamp()
-    });
-    console.log('방 내 사용자 상태 업데이트됨');
-    
-    // 8. 방의 멤버 목록에서도 제거
-    await remove(ref(database, `rooms/${roomId}/members/${userId}`));
-    console.log('방 멤버 목록에서 제거됨');
-    
-    // 9. 방장이 나가고 다른 플레이어가 없는 경우 방 삭제 처리
-    if (room.createdBy === userId) {
-      const remainingPlayers = (room.players || []).filter(id => id !== userId && id !== null);
-      
-      if (remainingPlayers.length === 0) {
-        console.log('방장이 나가고 다른 플레이어가 없어 방을 삭제합니다:', roomId);
-        await update(roomRef, { 
-          status: 'deleted',
-          deletedBy: userId,
-          deletedAt: serverTimestamp()
-        });
-        
-        // 잠시 후 방 삭제
-        setTimeout(async () => {
-          await remove(roomRef);
-          console.log('방이 삭제되었습니다:', roomId);
-        }, 1000);
-      } else {
-        // 다른 플레이어가 있으면 방장 권한 이전
-        const newOwnerId = remainingPlayers[0];
-        await update(roomRef, { 
-          createdBy: newOwnerId,
-          ownerChanged: true,
-          previousOwner: userId
-        });
-        console.log('방장 권한이 이전되었습니다:', newOwnerId);
-      }
-    }
-    
-    console.log('방 나가기 성공');
+    console.log('방 나가기 성공:', roomId, userId);
     return true;
   } catch (error) {
-    console.error('방 나가기 오류:', error);
+    console.error('방 나가기 중 오류:', error);
     return false;
   }
 };
@@ -815,58 +737,41 @@ export const restoreRoomSession = async (): Promise<string | null> => {
   
   try {
     const userId = auth.currentUser.uid;
-    // 사용자가 속한 방 찾기
-    const userRoomsRef = ref(database, `userRooms/${userId}`);
-    const userRoomsSnapshot = await get(userRoomsRef);
-    const userRooms = userRoomsSnapshot.val();
     
-    if (!userRooms) return null;
+    // userRooms 대신 userStatus에서 현재 방 정보 확인
+    const userStatusRef = ref(database, `userStatus/${userId}`);
+    const userStatusSnapshot = await get(userStatusRef);
     
-    // 가장 최근에 활동한 방 찾기
-    const roomEntries = Object.entries(userRooms);
-    if (roomEntries.length === 0) return null;
+    if (!userStatusSnapshot.exists()) return null;
     
-    // 마지막 활동 시간 기준으로 정렬
-    roomEntries.sort((a, b) => {
-      const lastSeenA = (a[1] as any).lastSeen || 0;
-      const lastSeenB = (b[1] as any).lastSeen || 0;
-      return lastSeenB - lastSeenA;
-    });
+    const userStatus = userStatusSnapshot.val();
+    const currentRoom = userStatus.currentRoom;
     
-    // 가장 최근 방 ID
-    const [mostRecentRoomId, roomData] = roomEntries[0];
-    
-    // 이전에 명시적으로 나간 방인지 확인 (세션 스토리지만 체크)
-    const hasLeftRoom = sessionStorage.getItem(`left_room_${mostRecentRoomId}`) === 'true';
-    
-    // Firebase에서도 active 상태 확인
-    const isRoomActive = (roomData as any).active !== false;
-    
-    if (hasLeftRoom) {
-      console.log('현재 세션에서 나간 방입니다. 세션 데이터 초기화하고 계속합니다.');
-      sessionStorage.removeItem(`left_room_${mostRecentRoomId}`);
+    if (!currentRoom) {
+      console.log('현재 참여 중인 방이 없습니다');
+      return null;
     }
     
     // 방 존재 확인
-    const roomRef = ref(database, `rooms/${mostRecentRoomId}`);
+    const roomRef = ref(database, `rooms/${currentRoom}`);
     const roomSnapshot = await get(roomRef);
     
     if (!roomSnapshot.exists()) {
       console.log('방이 존재하지 않음');
-      // 방이 존재하지 않으면 사용자-방 연결 정보도 제거
-      await remove(ref(database, `userRooms/${userId}/${mostRecentRoomId}`));
+      // 사용자 상태 업데이트
+      await update(userStatusRef, { currentRoom: null });
       return null;
     }
     
     // 방 상태 확인 (삭제 중인 방은 복원하지 않음)
-    const roomData2 = roomSnapshot.val();
-    if (roomData2.status === 'deleting') {
+    const roomData = roomSnapshot.val();
+    if (roomData.status === 'deleting') {
       console.log('방이 삭제 중입니다. 세션을 복원하지 않습니다.');
       return null;
     }
     
-    console.log('최근 활동 방 발견:', mostRecentRoomId);
-    return mostRecentRoomId;
+    console.log('현재 활동 방 발견:', currentRoom);
+    return currentRoom;
   } catch (error) {
     console.error('방 세션 복원 중 오류:', error);
     return null;

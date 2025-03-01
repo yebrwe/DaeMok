@@ -585,7 +585,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       console.log('방 나가기 시도:', roomId);
       setError(null);
       
-      // 세션 복원 건너뛰기 플래그 설정 (방 나가기 표시 대신)
+      // 세션 복원 건너뛰기 플래그 설정
       sessionStorage.setItem('skip_room_restore', 'true');
       
       // 방장 여부 확인
@@ -629,12 +629,9 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             const playersSnapshot = await get(playersRef);
             const players = playersSnapshot.val() || [];
             
-            // 4. 각 플레이어의 userRooms에서 해당 방 정보 제거
+            // 4. 각 플레이어의 상태 업데이트 (userRooms 제거)
             for (const playerId of players) {
               if (playerId) {
-                await remove(ref(database, `userRooms/${playerId}/${roomId}`));
-                console.log(`플레이어 ${playerId}의 방 연결 정보 제거됨`);
-                
                 // 플레이어 상태 업데이트
                 await update(ref(database, `userStatus/${playerId}`), {
                   currentRoom: null,
@@ -653,8 +650,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             if (success) {
               console.log('방 나가기 성공');
               
-              // 방 관련 정보를 완전히 삭제
-              await remove(ref(database, `userRooms/${userId}/${roomId}`));
+              // 방 관련 정보 삭제 - 간소화됨
               await remove(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`));
               await remove(ref(database, `rooms/${roomId}/members/${userId}`));
               
@@ -664,7 +660,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                 lastActivity: serverTimestamp()
               });
               
-              console.log('모든 방 연결 정보 완전히 제거됨');
+              console.log('방 연결 정보 제거됨');
             } else {
               console.error('방 나가기 실패');
             }
