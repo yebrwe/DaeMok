@@ -70,39 +70,74 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
     };
   }, []);
   
-  // 온라인 사용자 목록 가져오기
+  // 온라인 상태 관리 로직 개선
   useEffect(() => {
-    const auth = getAuth();
-    console.log('LobbyChat - 로비 온라인 상태 업데이트 시작:', currentUserId);
+    if (!currentUserId) return;
     
-    // 컴포넌트 마운트 시 현재 사용자의 로비 온라인 상태 등록
-    updateUserOnlineStatus(currentUserId)
-      .then((success) => {
-        console.log('로비 온라인 상태 업데이트 결과:', success ? '성공' : '실패');
+    console.log('로비 채팅 컴포넌트 마운트 - 온라인 상태 설정');
+    
+    // 사용자 온라인 상태 업데이트
+    const updateOnlineStatus = async () => {
+      try {
+        await updateUserOnlineStatus(currentUserId, true);
+        console.log('로비에서 사용자를 온라인으로 표시:', currentUserId);
+      } catch (error) {
+        console.error('온라인 상태 업데이트 오류:', error);
+      }
+    };
+    
+    // 초기 온라인 상태 설정
+    updateOnlineStatus();
+    
+    // 연결 상태 모니터링
+    const database = getDatabase();
+    const connectedRef = ref(database, '.info/connected');
+    
+    const connectedListener = onValue(connectedRef, (snap) => {
+      const connected = snap.val();
+      if (connected) {
+        console.log('Firebase에 연결됨, 온라인 상태 업데이트');
+        updateOnlineStatus();
         
-        // 페이지를 떠날 때 명시적으로 오프라인으로 표시
+        // 페이지 언로드 시 오프라인으로 표시
         window.addEventListener('beforeunload', () => {
           console.log('페이지 언로드: 로비에서 사용자를 오프라인으로 표시');
           const db = getDatabase();
           const userStatusRef = ref(db, `lobbyOnline/${currentUserId}`);
+          // 동기적으로 업데이트 (beforeunload에서는 비동기 작업이 완료되지 않을 수 있음)
           update(userStatusRef, { isOnline: false, lastSeen: serverTimestamp() });
         });
-      });
-    
-    // 로비 온라인 사용자 목록 구독
-    const unsubscribe = getOnlineUsers((users) => {
-      console.log("로비 온라인 사용자 목록 업데이트:", users.map(u => u.displayName));
-      setOnlineUsers(users);
+      }
     });
+    
+    // 로비 온라인 사용자 목록 구독 - 에러 처리 추가
+    let unsubscribeOnlineUsers = () => {};
+    try {
+      unsubscribeOnlineUsers = getOnlineUsers((users) => {
+        console.log("로비 온라인 사용자 목록 업데이트:", users.length);
+        setOnlineUsers(users);
+      });
+    } catch (error) {
+      console.error('온라인 사용자 목록 구독 오류:', error);
+    }
     
     return () => {
       console.log('LobbyChat 언마운트 - 리스너 정리');
-      unsubscribe();
+      connectedListener(); // 연결 상태 리스너 해제
+      
+      if (typeof unsubscribeOnlineUsers === 'function') {
+        unsubscribeOnlineUsers(); // 온라인 사용자 목록 구독 해제
+      }
       
       // 컴포넌트 언마운트 시 명시적으로 로비에서 오프라인 상태로 설정
-      const db = getDatabase();
-      const userStatusRef = ref(db, `lobbyOnline/${currentUserId}`);
-      update(userStatusRef, { isOnline: false, lastSeen: serverTimestamp() });
+      try {
+        const db = getDatabase();
+        const userStatusRef = ref(db, `lobbyOnline/${currentUserId}`);
+        update(userStatusRef, { isOnline: false, lastSeen: serverTimestamp() });
+        console.log('로비에서 사용자를 오프라인으로 표시 (언마운트):', currentUserId);
+      } catch (error) {
+        console.error('오프라인 상태 설정 오류:', error);
+      }
     };
   }, [currentUserId]);
   
@@ -110,7 +145,7 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!newMessage.trim()) {
+    if (!newMessage.trim() || !currentUserId) {
       return;
     }
     
@@ -119,17 +154,29 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
       const chatRef = ref(database, 'lobbyChat');
       const auth = getAuth();
       
-      await push(chatRef, {
+      if (!auth.currentUser) {
+        console.error('사용자 인증 정보가 없습니다.');
+        return;
+      }
+      
+      // 메시지 데이터 준비
+      const messageData = {
         userId: currentUserId,
         userName: auth.currentUser?.displayName || '익명 사용자',
         photoURL: auth.currentUser?.photoURL || null,
         text: newMessage.trim(),
         timestamp: Date.now()
-      });
+      };
       
+      // 메시지 전송
+      await push(chatRef, messageData);
+      console.log('메시지 전송 성공');
+      
+      // 입력 필드 초기화
       setNewMessage('');
     } catch (error) {
       console.error('메시지 전송 오류:', error);
+      // 사용자에게 오류 알림을 표시할 수 있음
     }
   };
   
@@ -144,7 +191,7 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
     if (activeTab === 'chat') {
       return (
         <>
-          <div className="h-[calc(100%-60px)] min-h-[150px] overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
+          <div className="h-[220px] overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
             {messages.length === 0 ? (
               <p className="text-gray-500 text-center text-sm">아직 채팅 메시지가 없습니다.</p>
             ) : (
@@ -207,7 +254,7 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
       );
     } else {
       return (
-        <div className="h-[calc(100%-60px)] min-h-[150px] overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
+        <div className="h-[300px] overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
           {onlineUsers.length === 0 ? (
             <div className="text-center py-2">
               <p className="text-gray-500 text-xs">접속 중인 유저가 없습니다.</p>
@@ -245,7 +292,7 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
   };
   
   return (
-    <div className="bg-white shadow-md rounded-lg p-2 h-full flex flex-col">
+    <div className="bg-white shadow-md rounded-lg p-2 h-[400px] flex flex-col">
       <div className="flex justify-between items-center">
         <h2 className="text-sm font-semibold">대기실</h2>
         <div className="text-[10px] text-gray-500">
