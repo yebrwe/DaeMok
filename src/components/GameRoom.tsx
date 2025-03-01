@@ -112,6 +112,13 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   const [isRoomSetupComplete, setIsRoomSetupComplete] = useState(false);
   const [roomData, setRoomData] = useState<any>(null);
   const [restartMessage, setRestartMessage] = useState<string>('');
+  const [roomStats, setRoomStats] = useState<{
+    [userId: string]: {
+      wins: number;
+      losses: number;
+      displayName?: string;
+    }
+  }>({});
   
   // 방 정보 가져오기
   useEffect(() => {
@@ -132,6 +139,25 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     };
     
     fetchRoomData();
+  }, [roomId]);
+  
+  // 전적 정보 가져오기
+  useEffect(() => {
+    if (!roomId) return;
+    
+    const database = getDatabase();
+    const statsRef = ref(database, `rooms/${roomId}/stats`);
+    
+    const unsubscribe = onValue(statsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setRoomStats(snapshot.val());
+      } else {
+        // 전적 정보가 없으면 초기화
+        setRoomStats({});
+      }
+    });
+    
+    return () => unsubscribe();
   }, [roomId]);
   
   // 플레이어 목록 계산 - null-safe 방식으로 항상 값을 가지도록 함
@@ -298,11 +324,64 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         phase: GamePhase.END 
       });
       
+      // 전적 업데이트
+      await updateGameStats(userId);
+      
       // 승리 메시지 표시
       setMessage(`축하합니다! ${moves}번 이동으로 게임을 완료했습니다. 다시 게임을 시작하려면 재시작 버튼을 클릭하세요.`);
     } catch (error) {
       console.error('게임 완료 처리 중 오류:', error);
       setMessage('게임 완료 처리 중 오류가 발생했습니다.');
+    }
+  };
+  
+  // 전적 업데이트 함수
+  const updateGameStats = async (winnerId: string) => {
+    if (!roomId || !gameState || !gameState.players) return;
+    
+    const database = getDatabase();
+    const statsRef = ref(database, `rooms/${roomId}/stats`);
+    
+    try {
+      // 현재 전적 정보 가져오기
+      const statsSnapshot = await get(statsRef);
+      const currentStats = statsSnapshot.exists() ? statsSnapshot.val() : {};
+      
+      // 업데이트할 전적 정보 준비
+      const updatedStats: any = { ...currentStats };
+      
+      // 모든 플레이어에 대해 전적 업데이트
+      Object.keys(gameState.players).forEach(playerId => {
+        // 플레이어 정보 가져오기
+        const player = gameState.players[playerId];
+        const isWinner = playerId === winnerId;
+        
+        // 플레이어의 현재 전적 정보 가져오기 (없으면 초기화)
+        if (!updatedStats[playerId]) {
+          updatedStats[playerId] = {
+            wins: 0,
+            losses: 0,
+            displayName: player.displayName || '알 수 없음'
+          };
+        }
+        
+        // 승패 업데이트
+        if (isWinner) {
+          updatedStats[playerId].wins = (updatedStats[playerId].wins || 0) + 1;
+        } else {
+          updatedStats[playerId].losses = (updatedStats[playerId].losses || 0) + 1;
+        }
+        
+        // 표시 이름 업데이트 (변경되었을 수 있음)
+        updatedStats[playerId].displayName = player.displayName || updatedStats[playerId].displayName;
+      });
+      
+      // Firebase에 업데이트된 전적 저장
+      await update(statsRef, updatedStats);
+      console.log('전적 업데이트 완료:', updatedStats);
+      
+    } catch (error) {
+      console.error('전적 업데이트 중 오류:', error);
     }
   };
   
@@ -317,28 +396,30 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
       
       // 패배한 사람이 먼저 턴을 갖도록 설정
-      let firstTurnPlayerId = userId;
+      let firstTurnPlayerId = '';
       let turnMessage = '';
       
-      if (gameState.winner === userId) {
-        // 내가 이겼다면, 상대방이 먼저 시작
-        const otherPlayers = Object.keys(gameState.players || {}).filter(id => id !== userId);
-        if (otherPlayers.length > 0) {
-          firstTurnPlayerId = otherPlayers[0];
-          turnMessage = `${gameState.players[firstTurnPlayerId]?.displayName || '상대방'}이(가) 선턴을 가져갑니다.`;
-          console.log('이전 게임 패배자(상대방)가 선턴을 가져갑니다:', firstTurnPlayerId);
+      // 승자가 있는 경우 (정상적인 게임 종료)
+      if (gameState.winner) {
+        // 패배자를 찾아 선턴으로 설정
+        const loserPlayerId = Object.keys(gameState.players || {}).find(id => id !== gameState.winner);
+        
+        if (loserPlayerId) {
+          firstTurnPlayerId = loserPlayerId;
+          const loserName = gameState.players[loserPlayerId]?.displayName || '패배자';
+          turnMessage = `${loserName}님이 선턴을 가져갑니다. (패배자 선턴 규칙)`;
+          console.log('패배자가 선턴을 가져갑니다:', loserName, loserPlayerId);
+        } else {
+          // 패배자를 찾을 수 없는 경우 (드문 경우)
+          firstTurnPlayerId = userId; // 기본값으로 현재 사용자 설정
+          turnMessage = `${gameState.players[userId]?.displayName || '당신'}이(가) 선턴을 가져갑니다.`;
         }
-      } else if (gameState.winner && gameState.winner !== userId) {
-        // 상대방이 이겼다면, 내가 먼저 시작
-        turnMessage = `${gameState.players[userId]?.displayName || '당신'}이(가) 선턴을 가져갑니다.`;
-        console.log('이전 게임 패배자(나)가 선턴을 가져갑니다:', userId);
-        firstTurnPlayerId = userId;
       } else {
         // 승자가 없는 경우(첫 게임 등) 랜덤으로 선택
         const playerIds = Object.keys(gameState.players || {});
         const randomIndex = Math.floor(Math.random() * playerIds.length);
         firstTurnPlayerId = playerIds[randomIndex];
-        turnMessage = `${gameState.players[firstTurnPlayerId]?.displayName || (firstTurnPlayerId === userId ? '당신' : '상대방')}이(가) 선턴을 가져갑니다.`;
+        turnMessage = `${gameState.players[firstTurnPlayerId]?.displayName || (firstTurnPlayerId === userId ? '당신' : '상대방')}이(가) 선턴을 가져갑니다. (랜덤 선택)`;
         console.log('랜덤으로 선턴 결정:', firstTurnPlayerId);
       }
       
@@ -766,6 +847,33 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     };
   }, [roomId, userId]);
   
+  // 전적 표시 함수
+  const renderStats = () => {
+    if (!roomStats || Object.keys(roomStats).length === 0) {
+      return null;
+    }
+    
+    return (
+      <div className="w-full max-w-md mx-auto mb-3 bg-gray-50 rounded-md p-2">
+        <h3 className="text-sm font-medium text-center mb-1">이 방에서의 전적</h3>
+        <div className="flex justify-center gap-6">
+          {Object.entries(roomStats).map(([playerId, stats]) => (
+            <div key={playerId} className="text-center">
+              <p className="text-xs font-medium">
+                {stats.displayName || (playerId === userId ? '나' : '상대방')}
+              </p>
+              <p className="text-xs">
+                <span className="text-green-600">{stats.wins}승</span> 
+                <span className="mx-1">-</span> 
+                <span className="text-red-600">{stats.losses}패</span>
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+  
   // 컴포넌트의 렌더링 내용을 결정하는 함수
   const renderContent = () => {
     // 인증 상태 확인이 완료될 때까지 로딩 표시
@@ -827,6 +935,9 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                 : '게임 종료'}
           </div>
         </div>
+        
+        {/* 전적 표시 */}
+        {renderStats()}
         
         {/* 플레이어 정보 - 더 컴팩트하게 */}
         <div className="flex justify-center gap-4 mb-2">

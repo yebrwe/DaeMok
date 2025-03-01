@@ -399,45 +399,54 @@ const GamePlay: React.FC<GamePlayProps> = ({
   
   // 게임 종료 상태 감지 및 처리
   useEffect(() => {
-    if (gameEnded) {
+    // 게임 종료 시에만 실행
+    if (gameEnded && !gameOver) {
       setGameOver(true);
       
-      // 게임 종료 시 모든 벽 표시를 위해 충돌 벽 업데이트
-      const allWalls: CollisionWall[] = [];
-      
-      // 모든 셀에 대해 장애물이 있는 방향을 충돌 벽으로 추가
-      for (let row = 0; row < BOARD_SIZE; row++) {
-        for (let col = 0; col < BOARD_SIZE; col++) {
-          const position = { row, col };
-          
-          // 각 방향에 대해 장애물이 있는지 확인
-          ['up', 'down', 'left', 'right'].forEach((dir) => {
-            const direction = dir as Direction;
-            const hasObstacleHere = obstacles.some(
-              (o) => o.position.row === position.row && 
-                    o.position.col === position.col && 
-                    o.direction === direction
-            );
+      // 게임 종료 시 모든 벽 표시를 위해 충돌 벽 정보 계산
+      const calculateWalls = () => {
+        const allWalls: CollisionWall[] = [];
+        
+        // 모든 셀에 대해 장애물이 있는 방향을 충돌 벽으로 추가
+        for (let row = 0; row < BOARD_SIZE; row++) {
+          for (let col = 0; col < BOARD_SIZE; col++) {
+            const position = { row, col };
             
-            if (hasObstacleHere) {
-              allWalls.push({
-                playerId: userId || 'unknown',
-                position,
-                direction,
-                timestamp: Date.now(),
-                mapOwnerId: userId || 'unknown'
-              });
-            }
-          });
+            // 각 방향에 대해 장애물이 있는지 확인
+            ['up', 'down', 'left', 'right'].forEach((dir) => {
+              const direction = dir as Direction;
+              const hasObstacleHere = obstacles.some(
+                (o) => o.position.row === position.row && 
+                      o.position.col === position.col && 
+                      o.direction === direction
+              );
+              
+              if (hasObstacleHere) {
+                allWalls.push({
+                  playerId: userId || 'unknown',
+                  position,
+                  direction,
+                  timestamp: Date.now(),
+                  mapOwnerId: userId || 'unknown'
+                });
+              }
+            });
+          }
         }
-      }
+        
+        return allWalls;
+      };
+      
+      // 벽 정보 계산 및 상태 업데이트
+      const walls = calculateWalls();
       
       // 이전 상태와 비교하여 변경이 있을 때만 업데이트
-      if (JSON.stringify(allWalls) !== JSON.stringify(collisionWalls)) {
-        setCollisionWalls(allWalls);
+      // JSON.stringify 대신 길이 비교로 최적화 (성능 향상)
+      if (walls.length !== collisionWalls.length) {
+        setCollisionWalls(walls);
       }
     }
-  }, [gameEnded, obstacles, BOARD_SIZE, userId, collisionWalls]);
+  }, [gameEnded, gameOver, obstacles, BOARD_SIZE, userId]);
   
   return (
     <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
