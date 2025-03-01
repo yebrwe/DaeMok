@@ -144,7 +144,7 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
     if (activeTab === 'chat') {
       return (
         <>
-          <div className="h-[100px] md:h-[170px] overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
+          <div className="h-[calc(100%-60px)] min-h-[150px] overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
             {messages.length === 0 ? (
               <p className="text-gray-500 text-center text-sm">아직 채팅 메시지가 없습니다.</p>
             ) : (
@@ -207,7 +207,7 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
       );
     } else {
       return (
-        <div className="h-[100px] md:h-[170px] overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
+        <div className="h-[calc(100%-60px)] min-h-[150px] overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
           {onlineUsers.length === 0 ? (
             <div className="text-center py-2">
               <p className="text-gray-500 text-xs">접속 중인 유저가 없습니다.</p>
@@ -245,7 +245,7 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
   };
   
   return (
-    <div className="bg-white shadow-md rounded-lg p-2">
+    <div className="bg-white shadow-md rounded-lg p-2 h-full flex flex-col">
       <div className="flex justify-between items-center">
         <h2 className="text-sm font-semibold">대기실</h2>
         <div className="text-[10px] text-gray-500">
@@ -273,7 +273,9 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
         </button>
       </div>
       
-      {renderTabContent()}
+      <div className="flex-1 overflow-hidden">
+        {renderTabContent()}
+      </div>
     </div>
   );
 };

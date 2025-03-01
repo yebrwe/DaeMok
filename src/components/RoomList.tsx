@@ -39,22 +39,28 @@ const RoomList: React.FC<RoomListProps> = ({ userId }) => {
   };
 
   if (isLoading) {
-    return <div className="text-center py-4">방 목록을 불러오는 중...</div>;
+    return <div className="h-full flex items-center justify-center">
+      <div className="text-center py-4">방 목록을 불러오는 중...</div>
+    </div>;
   }
 
   if (!rooms || rooms.length === 0) {
-    return <div className="text-center py-4">현재 생성된 방이 없습니다.</div>;
+    return <div className="h-full flex items-center justify-center">
+      <div className="text-center py-4">현재 생성된 방이 없습니다.</div>
+    </div>;
   }
 
   return (
-    <div>
+    <div className="h-full flex flex-col">
+      <h2 className="text-lg font-semibold mb-2">방 목록</h2>
+      
       {joinError && (
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
           {joinError}
         </div>
       )}
       
-      <div className="space-y-3">
+      <div className="space-y-3 overflow-y-auto flex-1 pr-1">
         {rooms.map((room, index) => (
           <div 
             key={room.id || `room-${index}`} 

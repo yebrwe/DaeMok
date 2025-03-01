@@ -58,9 +58,10 @@ export default function RoomsPage() {
     <div className="container mx-auto p-4">
       <h1 className="text-2xl font-bold mb-6 text-center">게임 대기실</h1>
       
-      <div className="flex flex-col h-[calc(100vh-120px)]">
-        {/* 방 생성 및 목록 (모바일에서 상단) */}
-        <div className="flex-1 overflow-y-auto mb-4">
+      {/* 모바일에서는 상하 배치, 데스크탑에서는 좌우 배치 */}
+      <div className="flex flex-col md:flex-row md:space-x-4 h-[calc(100vh-120px)]">
+        {/* 방 생성 및 목록 (모바일에서는 상단, 데스크탑에서는 좌측) */}
+        <div className="flex-1 overflow-y-auto mb-4 md:mb-0 md:w-1/2">
           <CreateRoomForm userId={user.uid} />
           
           <div className="mt-4">
@@ -68,8 +69,8 @@ export default function RoomsPage() {
           </div>
         </div>
         
-        {/* 채팅과 유저 목록 (모바일에서 하단) */}
-        <div className="h-64 md:h-72">
+        {/* 채팅과 유저 목록 (모바일에서는 하단, 데스크탑에서는 우측) */}
+        <div className="flex-1 md:w-1/2">
           <LobbyChat currentUserId={user.uid} />
         </div>
       </div>
