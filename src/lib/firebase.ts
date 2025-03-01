@@ -607,7 +607,7 @@ export const leaveRoom = async (roomId: string, userId: string): Promise<boolean
   try {
     console.log('방 나가기 시도:', { roomId, userId });
     
-    // 1. 모든 관련 경로에서 플레이어 데이터 삭제
+    // 1. 방 정보 확인
     const roomRef = ref(database, `rooms/${roomId}`);
     const roomSnapshot = await get(roomRef);
     
@@ -618,52 +618,47 @@ export const leaveRoom = async (roomId: string, userId: string): Promise<boolean
     
     const room = roomSnapshot.val();
     
-    // 플레이어 목록에서 제거
+    // 2. 플레이어 목록에서 제거
     if (room.players && room.players.includes(userId)) {
       const updatedPlayers = room.players.filter(id => id !== userId);
       await update(roomRef, { players: updatedPlayers });
+      console.log('플레이어 목록에서 제거됨:', userId);
     }
     
-    // 2. 게임 상태에서 플레이어 정보 명시적으로 제거
+    // 3. 게임 상태에서 플레이어 정보 업데이트
     if (room.gameState && room.gameState.players && room.gameState.players[userId]) {
-      // 플레이어 상태를 완전히 삭제하지 않고 오프라인 상태로 표시 (기록 유지 목적)
       await update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), {
         isOnline: false,
-        hasLeft: true, // 명시적으로 나간 상태 표시
+        hasLeft: true,
         lastSeen: serverTimestamp()
       });
+      console.log('게임 상태에서 플레이어 오프라인 처리:', userId);
     }
     
-    // 3. 방 참여 상태 명확히 제거
+    // 4. 방 참여 상태 제거
     await remove(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`));
-    
-    // 4. 방 멤버 상태 업데이트
-    await update(ref(database, `rooms/${roomId}/members/${userId}`), {
-      online: false,
-      hasLeft: true,
-      leftAt: serverTimestamp()
-    });
+    console.log('방 참여 상태 제거됨:', userId);
     
     // 5. 사용자-방 연결 정보 업데이트
     await update(ref(database, `userRooms/${userId}/${roomId}`), {
       active: false,
       leftAt: serverTimestamp()
     });
+    console.log('사용자-방 연결 정보 업데이트됨');
     
     // 6. 사용자 상태 업데이트
     await update(ref(database, `userStatus/${userId}`), {
-      online: true, // 앱에서는 여전히 온라인이지만
-      currentRoom: null, // 현재 방은 없음
+      currentRoom: null,
       lastSeen: serverTimestamp()
     });
+    console.log('사용자 상태 업데이트됨');
     
-    // 7. 다른 플레이어들에게 나간 이벤트 알림 (선택 사항)
-    await push(ref(database, `rooms/${roomId}/events`), {
-      type: 'PLAYER_LEFT',
-      userId: userId,
-      displayName: auth.currentUser?.displayName || '익명 사용자',
-      timestamp: serverTimestamp()
+    // 7. 방 내 사용자 상태 업데이트
+    await update(ref(database, `rooms/${roomId}/playerStatus/${userId}`), {
+      isOnline: false,
+      lastSeen: serverTimestamp()
     });
+    console.log('방 내 사용자 상태 업데이트됨');
     
     console.log('방 나가기 성공');
     return true;
@@ -771,6 +766,15 @@ export const restoreRoomSession = async (): Promise<string | null> => {
     
     // 가장 최근 방 ID
     const [mostRecentRoomId] = roomEntries[0];
+    
+    // 이전에 명시적으로 나간 방인지 확인
+    const hasLeftRoom = sessionStorage.getItem(`left_room_${mostRecentRoomId}`) === 'true' || 
+                        localStorage.getItem(`left_room_${mostRecentRoomId}`) === 'true';
+    
+    if (hasLeftRoom) {
+      console.log('이전에 명시적으로 나간 방입니다. 세션을 복원하지 않습니다.');
+      return null;
+    }
     
     // 방 존재 확인
     const roomRef = ref(database, `rooms/${mostRecentRoomId}`);

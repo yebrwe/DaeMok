@@ -340,61 +340,107 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   
   // 방 나가기 핸들러 (명시적으로 로비로 돌아갈 때 호출)
   const handleLeaveRoom = async () => {
-    if (!roomId || !userId) return;
-    
     try {
+      console.log('방 나가기 시도:', roomId);
+      setError(null);
+      
+      // 세션 스토리지에 방 나가기 표시 (재입장 방지용)
+      sessionStorage.setItem(`left_room_${roomId}`, 'true');
+      
+      // 방장 여부 확인
       const database = getDatabase();
       const roomRef = ref(database, `rooms/${roomId}`);
       const roomSnapshot = await get(roomRef);
-      const roomData = roomSnapshot.val();
       
-      if (!roomData) {
-        console.error('방 정보를 찾을 수 없습니다.');
+      if (!roomSnapshot.exists()) {
+        console.error('존재하지 않는 방입니다.');
         router.push('/rooms');
         return;
       }
       
-      // 방장 확인 (createdBy 필드 확인)
+      const roomData = roomSnapshot.val();
       const isRoomOwner = roomData.createdBy === userId;
       
-      // 먼저 사용자 상태 업데이트 (방을 떠났다고 표시)
-      const userPath = `rooms/${roomId}/gameState/players/${userId}`;
-      const userRef = ref(database, userPath);
-      await update(userRef, { hasLeft: true });
+      console.log('방장 여부 확인:', isRoomOwner ? '방장입니다' : '일반 참여자입니다');
       
-      // 게임방에서 오프라인 상태로 설정 (새로운 함수 사용)
-      await updateRoomUserStatus(roomId, userId, false);
-      
-      // 플레이어 목록에서 자신 제거
-      const updatedPlayers = roomData.players.filter((id: string) => id !== userId);
-      
-      // 방장이 나가거나 남은 플레이어가 없는 경우 방 삭제, 아니면 플레이어 목록 업데이트
-      let needsDelete = isRoomOwner || updatedPlayers.length === 0;
-      
-      // 먼저 리디렉션 실행 (타이밍 이슈 방지)
+      // 먼저 로비로 리디렉션
       router.push('/rooms');
       
-      // 리디렉션 후 비동기적으로 방 처리
+      // 방 나가기 함수 호출 (비동기적으로 처리)
       setTimeout(async () => {
         try {
-          if (needsDelete) {
+          if (isRoomOwner) {
+            // 방장인 경우: 방 삭제 및 모든 플레이어 퇴장 처리
+            console.log('방장이 나가서 방을 삭제합니다:', roomId);
+            
+            // 1. 방 상태를 '삭제 중'으로 변경 (다른 플레이어들이 감지할 수 있도록)
+            await update(roomRef, { 
+              status: 'deleting',
+              deletedBy: userId,
+              deletedAt: serverTimestamp()
+            });
+            
+            // 2. 잠시 대기하여 다른 플레이어들이 상태 변경을 감지할 시간을 줌
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // 3. 방에 있는 모든 플레이어 목록 가져오기
+            const playersRef = ref(database, `rooms/${roomId}/players`);
+            const playersSnapshot = await get(playersRef);
+            const players = playersSnapshot.val() || [];
+            
+            // 4. 각 플레이어의 userRooms에서 해당 방 정보 제거
+            for (const playerId of players) {
+              if (playerId) {
+                await remove(ref(database, `userRooms/${playerId}/${roomId}`));
+                console.log(`플레이어 ${playerId}의 방 연결 정보 제거됨`);
+                
+                // 플레이어 상태 업데이트
+                await update(ref(database, `userStatus/${playerId}`), {
+                  currentRoom: null,
+                  lastActivity: serverTimestamp()
+                });
+              }
+            }
+            
+            // 5. 방 자체를 삭제
             await remove(roomRef);
-            console.log(isRoomOwner ? '방장이 나가서 방이 삭제되었습니다.' : '모든 플레이어가 나가서 방이 삭제되었습니다.');
+            console.log('방이 삭제되었습니다:', roomId);
+            
+            // 6. 로컬 스토리지에 방 삭제 표시
+            localStorage.setItem(`deleted_room_${roomId}`, 'true');
           } else {
-            // 남은 플레이어가 있으면 방 유지, 플레이어 목록만 업데이트
-            await update(roomRef, { players: updatedPlayers });
-            console.log('방에서 나갔습니다. 다른 플레이어가 남아있어 방은 유지됩니다.');
+            // 일반 참여자인 경우: 자신만 방에서 나가기
+            const success = await leaveRoom(roomId, userId);
+            
+            if (success) {
+              console.log('방 나가기 성공');
+              
+              // 사용자-방 연결 정보 완전히 제거 (재입장 방지)
+              await remove(ref(database, `userRooms/${userId}/${roomId}`));
+              await remove(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`));
+              await remove(ref(database, `rooms/${roomId}/members/${userId}`));
+              
+              // 사용자 상태 업데이트
+              await update(ref(database, `userStatus/${userId}`), {
+                currentRoom: null,
+                lastActivity: serverTimestamp()
+              });
+              
+              console.log('모든 방 연결 정보 완전히 제거됨');
+              
+              // 로컬 스토리지에도 방 나가기 표시 (영구적)
+              localStorage.setItem(`left_room_${roomId}`, 'true');
+            } else {
+              console.error('방 나가기 실패');
+            }
           }
-        } catch (innerError) {
-          console.error('방 처리 중 내부 오류:', innerError);
+        } catch (error) {
+          console.error('방 나가기 중 오류:', error);
         }
-      }, 500); // 리디렉션 후 약간의 지연을 두고 처리
-      
+      }, 500);
     } catch (error) {
       console.error('방 나가기 중 오류:', error);
-      setMessage('방을 나가는 데 문제가 발생했습니다.');
-      // 오류가 발생해도 사용자를 방 목록으로 리디렉션
-      router.push('/rooms');
+      setError('방 나가기 중 오류가 발생했습니다.');
     }
   };
   
@@ -580,6 +626,51 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       initRoom();
     }
   }, [roomId, userId, gameState, router]);
+  
+  // 방 삭제 감지를 위한 useEffect 추가
+  useEffect(() => {
+    if (!roomId) return;
+    
+    const database = getDatabase();
+    const roomRef = ref(database, `rooms/${roomId}`);
+    
+    // 방 삭제 감지 리스너
+    const unsubscribe = onValue(roomRef, (snapshot) => {
+      if (!snapshot.exists()) {
+        console.log('방이 삭제되었습니다. 로비로 이동합니다.');
+        // 세션 스토리지에 방 나가기 표시
+        sessionStorage.setItem(`left_room_${roomId}`, 'true');
+        // 로컬 스토리지에 방 삭제 표시
+        localStorage.setItem(`deleted_room_${roomId}`, 'true');
+        // 로비로 리디렉션
+        router.push('/rooms');
+      }
+    });
+    
+    return () => unsubscribe();
+  }, [roomId, router]);
+  
+  // 방 상태 변경 감지
+  useEffect(() => {
+    if (!roomId) return;
+    
+    const database = getDatabase();
+    const roomStatusRef = ref(database, `rooms/${roomId}/status`);
+    
+    const unsubscribe = onValue(roomStatusRef, (snapshot) => {
+      if (snapshot.exists() && snapshot.val() === 'deleting') {
+        console.log('방이 삭제 중입니다. 로비로 이동합니다.');
+        // 세션 스토리지에 방 나가기 표시
+        sessionStorage.setItem(`left_room_${roomId}`, 'true');
+        // 로컬 스토리지에 방 삭제 표시
+        localStorage.setItem(`deleted_room_${roomId}`, 'true');
+        // 로비로 리디렉션
+        router.push('/rooms');
+      }
+    });
+    
+    return () => unsubscribe();
+  }, [roomId, router]);
   
   // 모든 조건부 렌더링 이전에 모든 useEffect 선언이 완료되어야 함
   useEffect(() => {

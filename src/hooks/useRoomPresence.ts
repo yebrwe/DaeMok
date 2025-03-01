@@ -38,6 +38,16 @@ export function useRoomPresence(userId: string, roomId: string) {
       return;
     }
     
+    // 이전에 명시적으로 나간 방인지 확인
+    const hasLeftRoom = sessionStorage.getItem(`left_room_${roomId}`) === 'true' || 
+                        localStorage.getItem(`left_room_${roomId}`) === 'true';
+    
+    if (hasLeftRoom) {
+      console.log('이전에 명시적으로 나간 방입니다. 방 참여를 시도하지 않습니다.');
+      setError('이 방에서 이미 나갔습니다.');
+      return; // 방 참여 로직을 실행하지 않음
+    }
+    
     // Firebase에서 방 참여 상태 확인 및 복원
     const checkMembership = async () => {
       try {

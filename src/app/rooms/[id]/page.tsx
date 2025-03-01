@@ -135,6 +135,17 @@ export default function RoomPage({ params }: { params: { id: string } }) {
     }
   }, [error, router]);
   
+  useEffect(() => {
+    // 이전에 명시적으로 나간 방인지 확인
+    const hasLeftRoom = sessionStorage.getItem(`left_room_${roomId}`) === 'true' || 
+                        localStorage.getItem(`left_room_${roomId}`) === 'true';
+    
+    if (hasLeftRoom) {
+      console.log('이전에 명시적으로 나간 방입니다. 로비로 리디렉션합니다.');
+      router.push('/rooms');
+    }
+  }, [roomId, router]);
+  
   if (loading || !user || !authConfirmed || !authVerified) {
     return <div className="p-8 text-center">로딩 중...</div>;
   }
