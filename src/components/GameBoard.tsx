@@ -16,6 +16,7 @@ interface GameBoardProps {
   isMinimapMode?: boolean;
   selectionMode?: 'start' | 'end' | 'none';
   collisionWalls?: CollisionWall[];
+  playerPhotoURL?: string;
 }
 
 const GameBoard: React.FC<GameBoardProps> = ({
@@ -30,6 +31,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
   isMinimapMode = false,
   selectionMode = 'none',
   collisionWalls = [],
+  playerPhotoURL,
 }) => {
   const [hoveredCell, setHoveredCell] = useState<Position | null>(null);
   const [hoveredWall, setHoveredWall] = useState<{position: Position, direction: Direction} | null>(null);
@@ -196,8 +198,16 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 플레이어 오버레이 마커: 플레이어 위치가 해당 셀에 있을 경우 항상 표시 */}
         {isPlayer && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className={`${isMinimapMode ? 'w-3 h-3' : 'w-6 h-6'} rounded-full bg-blue-500 flex items-center justify-center z-20`}>
-              {!isMinimapMode && <span className="text-white font-bold text-xs">P</span>}
+            <div className={`${isMinimapMode ? 'w-3 h-3' : 'w-6 h-6'} rounded-full bg-blue-500 flex items-center justify-center z-20 overflow-hidden ${isMinimapMode ? 'border border-white' : 'border-2 border-white'}`}>
+              {playerPhotoURL ? (
+                <img 
+                  src={playerPhotoURL} 
+                  alt="Player" 
+                  className="w-full h-full object-cover rounded-full"
+                />
+              ) : (
+                <span className={`text-white font-bold ${isMinimapMode ? 'text-[6px]' : 'text-xs'}`}>P</span>
+              )}
             </div>
           </div>
         )}

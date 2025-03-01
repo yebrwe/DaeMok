@@ -414,7 +414,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           ...player,
           displayName: player.displayName || null,
           hasLeft: player.hasLeft || false,
-          isOnline: playersStatus[id] === true
+          isOnline: playersStatus[id] === true,
+          photoURL: player.photoURL || null
         };
       });
     
@@ -426,9 +427,22 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       <>
         {players.map(player => (
           <div key={player.id} className="text-center px-2 py-1 rounded-lg bg-gray-100">
-            <div className="text-xs">
-              {player.displayName ? player.displayName.substring(0, 6) : '상대'} 
-              {player.isReady ? '✓' : ''} 
+            <div className="flex items-center justify-center gap-1 text-xs">
+              {player.photoURL ? (
+                <img 
+                  src={player.photoURL} 
+                  alt="상대방 프로필" 
+                  className="w-5 h-5 rounded-full object-cover"
+                />
+              ) : (
+                <div className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center">
+                  <span className="text-white text-[8px]">상대</span>
+                </div>
+              )}
+              <span>
+                {player.displayName ? player.displayName.substring(0, 6) : '상대'} 
+                {player.isReady ? ' ✓' : ''} 
+              </span>
               <span className={player.isOnline ? 'text-green-600' : 'text-red-600'}>
                 {player.isOnline ? '●' : '○'}
               </span>
@@ -436,6 +450,37 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           </div>
         ))}
       </>
+    );
+  };
+  
+  // 내 정보 표시 로직 추가
+  const renderMyInfo = () => {
+    if (!gameState || !gameState.players || !gameState.players[userId]) {
+      return <div className="text-center px-2 py-1 rounded-lg bg-gray-100 text-xs">내 정보 로딩 중...</div>;
+    }
+    
+    const me = gameState.players[userId];
+    
+    return (
+      <div className="text-center px-2 py-1 rounded-lg bg-gray-100">
+        <div className="flex items-center justify-center gap-1 text-xs">
+          {me.photoURL ? (
+            <img 
+              src={me.photoURL} 
+              alt="내 프로필" 
+              className="w-5 h-5 rounded-full object-cover"
+            />
+          ) : (
+            <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center">
+              <span className="text-white text-[8px]">나</span>
+            </div>
+          )}
+          <span>
+            {me.displayName ? me.displayName.substring(0, 6) : '나'} 
+            {me.isReady ? ' ✓' : ''}
+          </span>
+        </div>
+      </div>
     );
   };
   
@@ -469,6 +514,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           const auth = getAuth();
           const currentUser = auth.currentUser;
           const displayName = currentUser?.displayName || currentUser?.email?.split('@')[0] || '익명 사용자';
+          const photoURL = currentUser?.photoURL || null;
           
           // 게임 상태에 플레이어가 없으면 초기 위치 설정
           const playerPath = `rooms/${roomId}/gameState/players/${userId}`;
@@ -491,6 +537,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               isReady: false,
               isOnline: true,
               displayName: displayName, // 구글 표시 이름 추가
+              photoURL: photoURL, // 프로필 이미지 URL 추가
               lastSeen: serverTimestamp()
             });
           } else {
@@ -502,6 +549,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               isReady: false,
               isOnline: true,
               displayName: displayName, // 구글 표시 이름 추가
+              photoURL: photoURL, // 프로필 이미지 URL 추가
               lastSeen: serverTimestamp()
             });
           }
@@ -517,7 +565,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           await update(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`), {
             joined: true,
             joinedAt: serverTimestamp(),
-            displayName: displayName // 여기도 표시 이름 추가
+            displayName: displayName, // 여기도 표시 이름 추가
+            photoURL: photoURL // 프로필 이미지 URL 추가
           });
           
           // 게임방 온라인 상태 업데이트 (새로운 함수 사용)
@@ -610,13 +659,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         {/* 플레이어 정보 - 더 컴팩트하게 */}
         <div className="flex justify-center gap-4 mb-2">
           {/* 내 플레이어 정보 */}
-          {gameState.players && gameState.players[userId] && (
-            <div className="text-center px-2 py-1 rounded-lg bg-blue-100">
-              <div className="text-xs">
-                나 {gameState.players[userId].isReady ? '✓' : ''}
-              </div>
-            </div>
-          )}
+          {renderMyInfo()}
 
           {/* 상대방 플레이어 정보 - 렌더링 함수 사용 */}
           {renderOpponentInfo()}

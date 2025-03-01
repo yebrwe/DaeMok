@@ -5,6 +5,7 @@ import { CollisionWall, Direction, GameMap, GamePhase, Position } from '@/types/
 import GameBoard from './GameBoard';
 import { BOARD_SIZE, canMove, getNewPosition, isSamePosition } from '@/lib/gameUtils';
 import { getDatabase, ref, update, get, onValue } from 'firebase/database';
+import { getAuth } from 'firebase/auth';
 
 interface GamePlayProps {
   map: GameMap;
@@ -41,6 +42,10 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const [opponentId, setOpponentId] = useState<string | null>(null);
   const [collisionWalls, setCollisionWalls] = useState<CollisionWall[]>([]);
   const [opponentCollisionWalls, setOpponentCollisionWalls] = useState<CollisionWall[]>([]);
+  const [playerPhotoURL, setPlayerPhotoURL] = useState<string | null>(null);
+  const [opponentPhotoURL, setOpponentPhotoURL] = useState<string | null>(null);
+  const [playerName, setPlayerName] = useState<string>('나');
+  const [opponentName, setOpponentName] = useState<string>('상대방');
   
   const isMyTurn = currentTurn === userId;
   
@@ -126,6 +131,93 @@ const GamePlay: React.FC<GamePlayProps> = ({
     
     return () => unsubscribe();
   }, [roomId, opponentId, userId]);
+  
+  // 사용자 프로필 이미지 가져오기
+  useEffect(() => {
+    const fetchUserProfiles = async () => {
+      try {
+        const database = getDatabase();
+        const auth = getAuth();
+        
+        // 내 프로필 이미지 설정
+        if (auth.currentUser?.photoURL) {
+          setPlayerPhotoURL(auth.currentUser.photoURL);
+        }
+        
+        // 상대방 ID가 있으면 상대방 프로필 이미지 가져오기
+        if (opponentId) {
+          // 게임방 내 플레이어 상태 정보에서 가져오기
+          const playerStatusRef = ref(database, `rooms/${roomId}/playerStatus/${opponentId}`);
+          const snapshot = await get(playerStatusRef);
+          
+          if (snapshot.exists()) {
+            const userData = snapshot.val();
+            if (userData.photoURL) {
+              setOpponentPhotoURL(userData.photoURL);
+            }
+          } else {
+            // 게임방 내 정보가 없으면 일반 사용자 정보에서 가져오기
+            const userRef = ref(database, `lobbyOnline/${opponentId}`);
+            const userSnapshot = await get(userRef);
+            
+            if (userSnapshot.exists()) {
+              const userData = userSnapshot.val();
+              if (userData.photoURL) {
+                setOpponentPhotoURL(userData.photoURL);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('프로필 이미지 가져오기 오류:', error);
+      }
+    };
+    
+    fetchUserProfiles();
+  }, [userId, opponentId, roomId]);
+  
+  // 사용자 이름 가져오기
+  useEffect(() => {
+    const fetchUserNames = async () => {
+      try {
+        const database = getDatabase();
+        const auth = getAuth();
+        
+        // 내 이름 설정
+        const myPlayerRef = ref(database, `rooms/${roomId}/gameState/players/${userId}`);
+        const mySnapshot = await get(myPlayerRef);
+        
+        if (mySnapshot.exists()) {
+          const myData = mySnapshot.val();
+          if (myData.displayName) {
+            setPlayerName(myData.displayName);
+          } else if (auth.currentUser?.displayName) {
+            setPlayerName(auth.currentUser.displayName);
+          }
+        } else if (auth.currentUser?.displayName) {
+          setPlayerName(auth.currentUser.displayName);
+        }
+        
+        // 상대방 ID가 있으면 상대방 이름 가져오기
+        if (opponentId) {
+          // 게임방 내 플레이어 상태 정보에서 가져오기
+          const opponentPlayerRef = ref(database, `rooms/${roomId}/gameState/players/${opponentId}`);
+          const snapshot = await get(opponentPlayerRef);
+          
+          if (snapshot.exists()) {
+            const userData = snapshot.val();
+            if (userData.displayName) {
+              setOpponentName(userData.displayName);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('사용자 이름 가져오기 오류:', error);
+      }
+    };
+    
+    fetchUserNames();
+  }, [userId, opponentId, roomId]);
   
   // 턴 변경 함수
   const changeTurn = async () => {
@@ -346,9 +438,26 @@ const GamePlay: React.FC<GamePlayProps> = ({
   
   return (
     <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
-      {/* 상단 정보 영역 - 간결하게 수정 */}
+      {/* 상단 정보 영역 - 플레이어 정보 추가 */}
       <div className="w-full flex justify-center items-center mb-2 px-2 gap-4">
+        {/* 내 정보 */}
+        <div className="flex items-center gap-1">
+          {playerPhotoURL ? (
+            <img 
+              src={playerPhotoURL} 
+              alt="Player" 
+              className="w-5 h-5 rounded-full object-cover border border-blue-500"
+            />
+          ) : (
+            <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center">
+              <span className="text-white text-[8px]">P</span>
+            </div>
+          )}
+          <span className="text-xs">{playerName.substring(0, 6)}</span>
+        </div>
+        
         <div className="text-xs">이동: {moveCount}</div>
+        
         <div className="text-xs text-center">
           {gameOver || gameEnded ? (
             <span className="text-green-600">종료</span>
@@ -358,8 +467,30 @@ const GamePlay: React.FC<GamePlayProps> = ({
               <span className="text-gray-600">대기</span>
           )}
         </div>
+        
+        {/* 상대방 정보 */}
+        {opponentId && (
+          <div className="flex items-center gap-1">
+            {opponentPhotoURL ? (
+              <img 
+                src={opponentPhotoURL} 
+                alt="Opponent" 
+                className="w-5 h-5 rounded-full object-cover border border-red-500"
+              />
+            ) : (
+              <div className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center">
+                <span className="text-white text-[8px]">O</span>
+              </div>
+            )}
+            <span className="text-xs">{opponentName.substring(0, 6)}</span>
+          </div>
+        )}
+      </div>
+      
+      {/* 메시지 표시 영역 */}
+      {message && message !== '게임을 시작합니다.' && (
         <div 
-          className={`text-xs ${
+          className={`text-xs mb-2 ${
             lastMoveValid === false 
               ? 'text-red-500' 
               : lastMoveValid === true 
@@ -367,9 +498,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
                 : ''
           }`}
         >
-          {message && message !== '게임을 시작합니다.' ? message : ''}
+          {message}
         </div>
-      </div>
+      )}
       
       {/* 메인 게임 영역과 미니맵을 포함하는 컨테이너 */}
       <div className="flex flex-col md:flex-row w-full gap-2 items-center justify-center">
@@ -384,6 +515,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
               obstacles={obstacles}
               collisionWalls={collisionWalls}
               readOnly={true}
+              playerPhotoURL={playerPhotoURL || undefined}
             />
           </div>
         </div>
@@ -401,6 +533,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
                 collisionWalls={opponentCollisionWalls}
                 readOnly={true}
                 isMinimapMode={true}
+                playerPhotoURL={opponentPhotoURL || undefined}
               />
             </div>
           </div>

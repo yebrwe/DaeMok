@@ -103,11 +103,13 @@ const OnlineUsers: React.FC<OnlineUsersProps> = ({ currentUserId }) => {
                     <img 
                       src={user.photoURL} 
                       alt={user.displayName || '유저'} 
-                      className="w-8 h-8 rounded-full mr-2"
+                      className="w-8 h-8 rounded-full mr-2 object-cover"
                     />
                   ) : (
-                    <div className="w-8 h-8 bg-gray-200 rounded-full mr-2 flex items-center justify-center">
-                      {user.displayName?.[0] || '?'}
+                    <div className="w-8 h-8 bg-blue-500 rounded-full mr-2 flex items-center justify-center">
+                      <span className="text-white font-medium">
+                        {user.displayName ? user.displayName.charAt(0).toUpperCase() : '?'}
+                      </span>
                     </div>
                   )}
                   <div>

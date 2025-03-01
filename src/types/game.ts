@@ -42,6 +42,7 @@ export interface Player {
   lastPosition?: Position;
   isOnline?: boolean;
   lastSeen?: any; // serverTimestamp 타입
+  photoURL?: string | null; // 프로필 이미지 URL 추가
 }
 
 // 게임 맵 타입
