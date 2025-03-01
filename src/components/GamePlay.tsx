@@ -379,17 +379,46 @@ const GamePlay: React.FC<GamePlayProps> = ({
         await update(playerPositionRef, startPosition);
         console.log('플레이어 위치 초기화 완료:', startPosition);
         
-        // 턴 초기화 (방의 방장 ID로 설정)
-        const roomRef = ref(database, `rooms/${roomId}`);
-        const roomSnapshot = await get(roomRef);
-        const roomData = roomSnapshot.val();
+        // 게임 상태 가져오기
+        const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
+        const gameStateSnapshot = await get(gameStateRef);
+        const gameState = gameStateSnapshot.val();
         
-        if (roomData && roomData.createdBy) {
-          const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
-          await update(gameStateRef, { 
-            currentTurn: roomData.createdBy 
-          });
-          console.log('턴 초기화 완료: 방장 턴으로 변경됨', roomData.createdBy);
+        if (gameState && gameState.winner) {
+          // 패배자를 찾아 선턴으로 설정
+          const loserPlayerId = Object.keys(gameState.players || {}).find(id => id !== gameState.winner);
+          
+          if (loserPlayerId) {
+            // 패배자가 선턴을 가져감
+            await update(gameStateRef, { 
+              currentTurn: loserPlayerId 
+            });
+            console.log('턴 초기화 완료: 패배자 턴으로 변경됨', loserPlayerId);
+          } else {
+            // 패배자를 찾을 수 없는 경우 방장 턴으로 설정
+            const roomRef = ref(database, `rooms/${roomId}`);
+            const roomSnapshot = await get(roomRef);
+            const roomData = roomSnapshot.val();
+            
+            if (roomData && roomData.createdBy) {
+              await update(gameStateRef, { 
+                currentTurn: roomData.createdBy 
+              });
+              console.log('턴 초기화 완료: 방장 턴으로 변경됨', roomData.createdBy);
+            }
+          }
+        } else {
+          // 승자가 없는 경우 방장 턴으로 설정
+          const roomRef = ref(database, `rooms/${roomId}`);
+          const roomSnapshot = await get(roomRef);
+          const roomData = roomSnapshot.val();
+          
+          if (roomData && roomData.createdBy) {
+            await update(gameStateRef, { 
+              currentTurn: roomData.createdBy 
+            });
+            console.log('턴 초기화 완료: 방장 턴으로 변경됨', roomData.createdBy);
+          }
         }
       } catch (error) {
         console.error('게임 재시작 중 오류 발생:', error);
@@ -403,50 +432,95 @@ const GamePlay: React.FC<GamePlayProps> = ({
     if (gameEnded && !gameOver) {
       setGameOver(true);
       
-      // 게임 종료 시 모든 벽 표시를 위해 충돌 벽 정보 계산
-      const calculateWalls = () => {
-        const allWalls: CollisionWall[] = [];
-        
-        // 모든 셀에 대해 장애물이 있는 방향을 충돌 벽으로 추가
-        for (let row = 0; row < BOARD_SIZE; row++) {
-          for (let col = 0; col < BOARD_SIZE; col++) {
-            const position = { row, col };
-            
-            // 각 방향에 대해 장애물이 있는지 확인
-            ['up', 'down', 'left', 'right'].forEach((dir) => {
-              const direction = dir as Direction;
-              const hasObstacleHere = obstacles.some(
-                (o) => o.position.row === position.row && 
-                      o.position.col === position.col && 
-                      o.direction === direction
-              );
+      // Firebase에 벽 정보 업데이트
+      const updateWallsInFirebase = async () => {
+        try {
+          const database = getDatabase();
+          const collisionWallsRef = ref(database, `rooms/${roomId}/gameState/collisionWalls`);
+          
+          // 기존 충돌 벽 목록 가져오기
+          const wallsSnapshot = await get(collisionWallsRef);
+          const existingWalls = wallsSnapshot.val() || [];
+          
+          // 상대방이 만든 맵(내가 플레이하는 맵)의 모든 벽 정보 계산
+          const opponentMapWalls: CollisionWall[] = [];
+          
+          // 모든 셀에 대해 장애물이 있는 방향을 충돌 벽으로 추가
+          for (let row = 0; row < BOARD_SIZE; row++) {
+            for (let col = 0; col < BOARD_SIZE; col++) {
+              const position = { row, col };
               
-              if (hasObstacleHere) {
-                allWalls.push({
-                  playerId: userId || 'unknown',
-                  position,
-                  direction,
-                  timestamp: Date.now(),
-                  mapOwnerId: userId || 'unknown'
+              // 각 방향에 대해 장애물이 있는지 확인
+              ['up', 'down', 'left', 'right'].forEach((dir) => {
+                const direction = dir as Direction;
+                const hasObstacleHere = obstacles.some(
+                  (o) => o.position.row === position.row && 
+                        o.position.col === position.col && 
+                        o.direction === direction
+                );
+                
+                if (hasObstacleHere) {
+                  opponentMapWalls.push({
+                    playerId: userId || 'unknown',
+                    position,
+                    direction,
+                    timestamp: Date.now(),
+                    mapOwnerId: opponentId || 'unknown' // 상대방이 만든 맵이므로 상대방 ID로 설정
+                  });
+                }
+              });
+            }
+          }
+          
+          // 내가 만든 맵의 벽 정보도 계산 (상대방이 볼 수 있도록)
+          const myMapWalls: CollisionWall[] = [];
+          if (myMap && myMap.obstacles) {
+            for (let row = 0; row < BOARD_SIZE; row++) {
+              for (let col = 0; col < BOARD_SIZE; col++) {
+                const position = { row, col };
+                
+                ['up', 'down', 'left', 'right'].forEach((dir) => {
+                  const direction = dir as Direction;
+                  const hasObstacleHere = myMap.obstacles.some(
+                    (o) => o.position.row === position.row && 
+                          o.position.col === position.col && 
+                          o.direction === direction
+                  );
+                  
+                  if (hasObstacleHere) {
+                    myMapWalls.push({
+                      playerId: userId || 'unknown',
+                      position,
+                      direction,
+                      timestamp: Date.now(),
+                      mapOwnerId: userId || 'unknown' // 내가 만든 맵이므로 내 ID로 설정
+                    });
+                  }
                 });
               }
-            });
+            }
           }
+          
+          // 기존 벽과 새로 계산된 벽 병합
+          const updatedWalls = [...Object.values(existingWalls), ...opponentMapWalls, ...myMapWalls];
+          
+          // Firebase에 업데이트
+          await update(ref(database, `rooms/${roomId}/gameState`), {
+            collisionWalls: updatedWalls
+          });
+          
+          // 내가 플레이하는 맵(상대방이 만든 맵)의 벽 정보 로컬 상태 업데이트
+          setCollisionWalls(opponentMapWalls);
+          
+          console.log('게임 종료 시 벽 정보 Firebase에 업데이트됨:', updatedWalls.length);
+        } catch (error) {
+          console.error('게임 종료 시 벽 정보 업데이트 중 오류:', error);
         }
-        
-        return allWalls;
       };
       
-      // 벽 정보 계산 및 상태 업데이트
-      const walls = calculateWalls();
-      
-      // 이전 상태와 비교하여 변경이 있을 때만 업데이트
-      // JSON.stringify 대신 길이 비교로 최적화 (성능 향상)
-      if (walls.length !== collisionWalls.length) {
-        setCollisionWalls(walls);
-      }
+      updateWallsInFirebase();
     }
-  }, [gameEnded, gameOver, obstacles, BOARD_SIZE, userId]);
+  }, [gameEnded, gameOver, obstacles, BOARD_SIZE, userId, roomId, opponentId, myMap]);
   
   return (
     <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
@@ -601,18 +675,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
               </button>
             </div>
           </div>
-        </div>
-      )}
-      
-      {/* 게임 재시작 버튼 (게임 종료 시에만 표시) */}
-      {gameOver && !gameEnded && (
-        <div className="flex justify-center mt-2">
-          <button
-            className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition"
-            onClick={handleRestartGame}
-          >
-            재시작
-          </button>
         </div>
       )}
     </div>
