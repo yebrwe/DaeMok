@@ -585,8 +585,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       console.log('방 나가기 시도:', roomId);
       setError(null);
       
-      // 세션 스토리지에 방 나가기 표시 (재입장 방지용)
-      sessionStorage.setItem(`left_room_${roomId}`, 'true');
+      // 세션 복원 건너뛰기 플래그 설정 (방 나가기 표시 대신)
+      sessionStorage.setItem('skip_room_restore', 'true');
       
       // 방장 여부 확인
       const database = getDatabase();
@@ -607,7 +607,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       // 먼저 로비로 리디렉션
       router.push('/rooms');
       
-      // 방 나가기 함수 호출 (비동기적으로 처리)
+      // 리디렉션 후 방 나가기 처리를 위한 지연 설정
       setTimeout(async () => {
         try {
           if (isRoomOwner) {
@@ -646,9 +646,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             // 5. 방 자체를 삭제
             await remove(roomRef);
             console.log('방이 삭제되었습니다:', roomId);
-            
-            // 6. 로컬 스토리지에 방 삭제 표시
-            localStorage.setItem(`deleted_room_${roomId}`, 'true');
           } else {
             // 일반 참여자인 경우: 자신만 방에서 나가기
             const success = await leaveRoom(roomId, userId);
@@ -656,7 +653,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             if (success) {
               console.log('방 나가기 성공');
               
-              // 사용자-방 연결 정보 완전히 제거 (재입장 방지)
+              // 방 관련 정보를 완전히 삭제
               await remove(ref(database, `userRooms/${userId}/${roomId}`));
               await remove(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`));
               await remove(ref(database, `rooms/${roomId}/members/${userId}`));
@@ -668,9 +665,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               });
               
               console.log('모든 방 연결 정보 완전히 제거됨');
-              
-              // 로컬 스토리지에도 방 나가기 표시 (영구적)
-              localStorage.setItem(`left_room_${roomId}`, 'true');
             } else {
               console.error('방 나가기 실패');
             }
@@ -885,9 +879,9 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       if (!snapshot.exists()) {
         console.log('방이 삭제되었습니다. 로비로 이동합니다.');
         // 세션 스토리지에 방 나가기 표시
-        sessionStorage.setItem(`left_room_${roomId}`, 'true');
+        // sessionStorage.setItem(`left_room_${roomId}`, 'true'); <- 이 줄 제거
         // 로컬 스토리지에 방 삭제 표시
-        localStorage.setItem(`deleted_room_${roomId}`, 'true');
+        // localStorage.setItem(`deleted_room_${roomId}`, 'true'); <- 이 줄 제거
         
         // 리디렉션 상태 설정
         isRedirecting = true;
@@ -915,10 +909,10 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       
       if (snapshot.exists() && snapshot.val() === 'deleting') {
         console.log('방이 삭제 중입니다. 로비로 이동합니다.');
-        // 세션 스토리지에 방 나가기 표시
-        sessionStorage.setItem(`left_room_${roomId}`, 'true');
-        // 로컬 스토리지에 방 삭제 표시
-        localStorage.setItem(`deleted_room_${roomId}`, 'true');
+        // 세션 스토리지에 방 나가기 표시를 제거 - 아예 기록하지 않음
+        // sessionStorage.setItem(`left_room_${roomId}`, 'true'); <- 이 줄 제거
+        // 로컬 스토리지에 방 삭제 표시를 제거 - 이 줄 제거
+        // localStorage.setItem(`deleted_room_${roomId}`, 'true'); <- 이 줄 제거
         
         // 리디렉션 상태 설정
         isRedirecting = true;

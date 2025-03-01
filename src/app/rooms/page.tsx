@@ -20,10 +20,20 @@ export default function RoomsPage() {
       return;
     }
     
-    // 세션 복원 시도
+    // 세션 복원 시도 - 여기서 변경이 필요
     if (user) {
       const attemptRestore = async () => {
         try {
+          // 명시적으로 방 복원을 건너뛰게 하기 위한 플래그 확인
+          const skipRestore = sessionStorage.getItem('skip_room_restore') === 'true';
+          
+          if (skipRestore) {
+            console.log('사용자가 명시적으로 방을 나갔습니다. 세션 복원을 건너뜁니다.');
+            sessionStorage.removeItem('skip_room_restore'); // 플래그 제거
+            setRestoringSession(false);
+            return;
+          }
+          
           const restoredRoomId = await restoreRoomSession();
           if (restoredRoomId) {
             console.log('이전 게임 세션으로 복원:', restoredRoomId);

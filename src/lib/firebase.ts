@@ -777,6 +777,13 @@ export const cleanUpEmptyRooms = async () => {
 
 // 새로고침 시 방 세션 자동 복원
 export const restoreRoomSession = async (): Promise<string | null> => {
+  // 방 복원 건너뛰기 플래그 확인
+  if (sessionStorage.getItem('skip_room_restore') === 'true') {
+    console.log('방 복원 건너뛰기 플래그가 설정되어 있어 복원을 건너뜁니다');
+    sessionStorage.removeItem('skip_room_restore');
+    return null;
+  }
+  
   if (!auth?.currentUser || !database) return null;
   
   try {
@@ -802,16 +809,15 @@ export const restoreRoomSession = async (): Promise<string | null> => {
     // 가장 최근 방 ID
     const [mostRecentRoomId, roomData] = roomEntries[0];
     
-    // 이전에 명시적으로 나간 방인지 확인 (세션/로컬 스토리지)
-    const hasLeftRoom = sessionStorage.getItem(`left_room_${mostRecentRoomId}`) === 'true' || 
-                        localStorage.getItem(`left_room_${mostRecentRoomId}`) === 'true';
+    // 이전에 명시적으로 나간 방인지 확인 (세션 스토리지만 체크)
+    const hasLeftRoom = sessionStorage.getItem(`left_room_${mostRecentRoomId}`) === 'true';
     
     // Firebase에서도 active 상태 확인
     const isRoomActive = (roomData as any).active !== false;
     
-    if (hasLeftRoom || !isRoomActive) {
-      console.log('이전에 명시적으로 나간 방이거나 비활성 상태입니다. 세션을 복원하지 않습니다.');
-      return null;
+    if (hasLeftRoom) {
+      console.log('현재 세션에서 나간 방입니다. 세션 데이터 초기화하고 계속합니다.');
+      sessionStorage.removeItem(`left_room_${mostRecentRoomId}`);
     }
     
     // 방 존재 확인
