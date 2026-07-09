@@ -188,19 +188,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     return players[userId]?.forfeited ? '포기하여 패배했습니다.' : '패배했습니다.';
   }, [gameState, userId]);
   
-  // 현재 턴 표시 함수 추가
-  const renderTurnIndicator = () => {
-    if (!gameState || gameState.phase !== GamePhase.PLAY) return null;
-    
-    const isMyTurn = gameState.currentTurn === userId;
-    
-    return (
-      <div className={`text-center py-1 px-2 rounded-md text-sm font-medium ${isMyTurn ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
-        {isMyTurn ? '내 턴입니다' : '상대방 턴입니다'}
-      </div>
-    );
-  };
-  
   // 게임 상태 변경 감지
   useEffect(() => {
     if (!gameState) return;
@@ -667,92 +654,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
-  // 상대방 플레이어 표시 로직 수정
-  const renderOpponentInfo = () => {
-    if (!gameState || !gameState.players) {
-      return <div className="text-center px-2 py-1 rounded-lg bg-gray-100 text-xs">대기</div>;
-    }
-    
-    const players = Object.keys(gameState.players)
-      .filter(id => id !== userId)
-      .map(id => {
-        // 플레이어 정보에 displayName과 hasLeft 속성이 없는 경우 기본값 설정
-        const player = gameState.players[id];
-        return {
-          id,
-          ...player,
-          displayName: player.displayName || null,
-          hasLeft: player.hasLeft || false,
-          isOnline: playersStatus[id] === true,
-          photoURL: player.photoURL || null
-        };
-      });
-    
-    if (players.length === 0) {
-      return <div className="text-center px-2 py-1 rounded-lg bg-gray-100 text-xs">대기</div>;
-    }
-    
-    return (
-      <>
-        {players.map(player => (
-          <div key={player.id} className="text-center px-2 py-1 rounded-lg bg-gray-100">
-            <div className="flex items-center justify-center gap-1 text-xs">
-              {player.photoURL ? (
-                <img 
-                  src={player.photoURL} 
-                  alt="상대방 프로필" 
-                  className="w-5 h-5 rounded-full object-cover"
-                />
-              ) : (
-                <div className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center">
-                  <span className="text-white text-[8px]">상대</span>
-                </div>
-              )}
-              <span>
-                {player.displayName ? player.displayName.substring(0, 6) : '상대'} 
-                {player.isReady ? ' ✓' : ''}
-              </span>
-              <span className={player.isOnline ? 'text-green-600' : 'text-red-600'}>
-                {player.isOnline ? '●' : '○'}
-              </span>
-            </div>
-          </div>
-        ))}
-      </>
-    );
-  };
-  
-  // 내 정보 표시 로직 추가
-  const renderMyInfo = () => {
-    if (!gameState || !gameState.players || !gameState.players[userId]) {
-      return <div className="text-center px-2 py-1 rounded-lg bg-gray-100 text-xs">내 정보 로딩 중...</div>;
-    }
-    
-    const me = gameState.players[userId];
-    
-    return (
-      <div className="text-center px-2 py-1 rounded-lg bg-gray-100">
-        <div className="flex items-center justify-center gap-1 text-xs">
-          {me.photoURL ? (
-            <img 
-              src={me.photoURL} 
-              alt="내 프로필" 
-              className="w-5 h-5 rounded-full object-cover"
-            />
-          ) : (
-            <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center">
-              <span className="text-white text-[8px]">나</span>
-            </div>
-          )}
-          <span>
-            {me.displayName ? me.displayName.substring(0, 6) : '나'} 
-            {me.isReady ? ' ✓' : ''}
-          </span>
-        </div>
-      </div>
-    );
-  };
-  
   // 게임 종료 상태 감지를 위한 useEffect 추가
   useEffect(() => {
     // gameState가 null이어도 무시하고 훅은 항상 실행
@@ -916,113 +817,89 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     };
   }, [roomId, userId]);
   
-  // 전적 표시 함수
-  const renderStats = () => {
-    if (!roomStats || Object.keys(roomStats).length === 0) {
-      return null;
-    }
-    
-    return (
-      <div className="w-full max-w-md mx-auto mb-3 bg-gray-50 rounded-md p-2">
-        <h3 className="text-sm font-medium text-center mb-1">이 방에서의 전적</h3>
-        <div className="text-xs">
-          {roomStats[userId] ? (
-            <span>
-              전적: <span className="text-green-600">{roomStats[userId].wins}</span>승 
-              <span className="mx-0.5">-</span> 
-              <span className="text-red-600">{roomStats[userId].losses}</span>패
-            </span>
-          ) : (
-            <span>전적: 0승 0패</span>
-          )}
-        </div>
-      </div>
-    );
-  };
-  
-  // UI 개선 - 플레이어 정보 및 상태 통합 표시
+  // 방 헤더 - 방 이름 / 단계 / 전적 / 플레이어 정보
   const renderGameHeader = () => {
     if (!gameState || !gameState.players) return null;
-    
+
     const me = gameState.players[userId];
     const opponent = Object.values(gameState.players).find(p => p.id !== userId);
-    
+    const stats = roomStats[userId];
+
     return (
-      <div className="w-full max-w-md mx-auto bg-gray-50 rounded-md p-2 mb-2">
-        <div className="flex justify-between items-center">
-          {/* 방 제목 및 상태 */}
-          <div className="text-sm font-bold">
-            {roomData?.name || '게임 방'}
-            <span className="text-xs font-normal ml-2 text-gray-500">
-              {gameState.phase === GamePhase.SETUP ? '맵 제작' : 
+      <div className="w-full max-w-2xl mx-auto game-panel !rounded-xl px-3 py-2 mb-2">
+        <div className="flex justify-between items-center gap-2">
+          {/* 방 제목 및 단계 */}
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-amber-400">🏁</span>
+            <span className="text-sm font-bold truncate">{roomData?.name || '게임 방'}</span>
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${
+              gameState.phase === GamePhase.SETUP
+                ? 'bg-blue-400/10 text-blue-300 border-blue-400/40'
+                : gameState.phase === GamePhase.PLAY
+                  ? 'bg-amber-400/10 text-amber-300 border-amber-400/40'
+                  : 'bg-green-400/10 text-green-300 border-green-400/40'
+            }`}>
+              {gameState.phase === GamePhase.SETUP ? '맵 제작' :
                gameState.phase === GamePhase.PLAY ? '게임 진행' : '게임 종료'}
             </span>
           </div>
-          
-          {/* 전적 정보 - 간결하게 표시 */}
-          <div className="text-xs">
-            {roomStats[userId] ? (
-              <span>
-                전적: <span className="text-green-600">{roomStats[userId].wins}</span>승
-                <span className="mx-0.5">-</span>
-                <span className="text-red-600">{roomStats[userId].losses}</span>패
-                {(roomStats[userId].draws || 0) > 0 && (
-                  <>
-                    <span className="mx-0.5">-</span>
-                    <span className="text-gray-600">{roomStats[userId].draws}</span>무
-                  </>
-                )}
-              </span>
-            ) : (
-              <span>전적: 0승 0패</span>
+
+          {/* 전적 */}
+          <div className="text-[11px] text-slate-400 shrink-0">
+            <span className="text-green-400 font-bold">{stats?.wins ?? 0}</span>승{' '}
+            <span className="text-red-400 font-bold">{stats?.losses ?? 0}</span>패
+            {(stats?.draws || 0) > 0 && (
+              <>
+                {' '}<span className="text-slate-300 font-bold">{stats?.draws}</span>무
+              </>
             )}
           </div>
         </div>
-        
+
         {/* 플레이어 정보 행 */}
-        <div className="flex justify-between mt-1 text-xs">
+        <div className="flex justify-between items-center mt-1.5 text-xs">
           {/* 내 정보 */}
-          <div className="flex items-center">
+          <div className="flex items-center gap-1.5">
             {me?.photoURL ? (
-              <img src={me.photoURL} alt="내 프로필" className="w-4 h-4 rounded-full mr-1" />
+              <img src={me.photoURL} alt="내 프로필" className="w-5 h-5 rounded-full ring-1 ring-blue-400" />
             ) : (
-              <div className="w-4 h-4 rounded-full bg-blue-500 mr-1 flex items-center justify-center">
-                <span className="text-white text-[6px]">나</span>
+              <div className="w-5 h-5 rounded-full bg-blue-500 ring-1 ring-blue-400 flex items-center justify-center">
+                <span className="text-white text-[7px] font-bold">나</span>
               </div>
             )}
-            {me?.displayName?.substring(0, 6) || '나'} 
-            {me?.isReady ? ' ✓' : ''}
+            <span className="text-blue-300 font-medium">{me?.displayName?.substring(0, 6) || '나'}</span>
+            {me?.isReady && <span className="text-green-400">✓</span>}
           </div>
-          
+
           {/* 턴 표시 */}
           {gameState.phase === GamePhase.PLAY && (
             me?.finished ? (
-              <div className="px-1 rounded bg-purple-100 text-purple-700">관전 중</div>
+              <div className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-400/15 text-purple-300 border border-purple-400/40">관전 중</div>
+            ) : gameState.currentTurn === userId ? (
+              <div className="badge-turn !text-[10px]">내 턴</div>
             ) : (
-              <div className={`px-1 rounded ${gameState.currentTurn === userId ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
-                {gameState.currentTurn === userId ? '내 턴' : '상대 턴'}
-              </div>
+              <div className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700/50 text-slate-400 border border-slate-600/50">상대 턴</div>
             )
           )}
-          
+
           {/* 상대방 정보 */}
           {opponent ? (
-            <div className="flex items-center">
-              {opponent?.photoURL ? (
-                <img src={opponent.photoURL} alt="상대 프로필" className="w-4 h-4 rounded-full mr-1" />
-              ) : (
-                <div className="w-4 h-4 rounded-full bg-red-500 mr-1 flex items-center justify-center">
-                  <span className="text-white text-[6px]">상대</span>
-                </div>
-              )}
-              {opponent?.displayName?.substring(0, 6) || '상대'} 
-              {opponent?.isReady ? ' ✓' : ''}
-              <span className={playersStatus[opponent.id] ? 'text-green-600 ml-1' : 'text-red-600 ml-1'}>
+            <div className="flex items-center gap-1.5">
+              <span className={playersStatus[opponent.id] ? 'text-green-400' : 'text-slate-600'}>
                 {playersStatus[opponent.id] ? '●' : '○'}
               </span>
+              {opponent?.isReady && <span className="text-green-400">✓</span>}
+              <span className="text-red-300 font-medium">{opponent?.displayName?.substring(0, 6) || '상대'}</span>
+              {opponent?.photoURL ? (
+                <img src={opponent.photoURL} alt="상대 프로필" className="w-5 h-5 rounded-full ring-1 ring-red-400" />
+              ) : (
+                <div className="w-5 h-5 rounded-full bg-red-500 ring-1 ring-red-400 flex items-center justify-center">
+                  <span className="text-white text-[7px] font-bold">적</span>
+                </div>
+              )}
             </div>
           ) : (
-            <div className="text-gray-400">대기 중...</div>
+            <div className="text-slate-500 text-[11px] animate-pulse">상대방 대기 중...</div>
           )}
         </div>
       </div>
@@ -1048,11 +925,11 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       console.error('유효하지 않은 사용자 ID로 GameRoom 초기화 시도');
       return (
         <div className="flex items-center justify-center h-screen">
-          <div className="text-center p-8 bg-red-100 rounded-lg">
-            <h2 className="text-2xl font-bold mb-4 text-red-700">인증 오류</h2>
-            <p>{verifyError || '유효하지 않은 사용자 ID입니다. 다시 로그인해주세요.'}</p>
-            <button 
-              className="mt-4 px-6 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+          <div className="text-center p-8 game-panel !border-red-500/40">
+            <h2 className="text-2xl font-bold mb-4 text-red-400">인증 오류</h2>
+            <p className="text-slate-300 text-sm">{verifyError || '유효하지 않은 사용자 ID입니다. 다시 로그인해주세요.'}</p>
+            <button
+              className="btn-game mt-5 px-6 py-2 text-sm"
               onClick={() => window.location.href = '/login'}
             >
               로그인 페이지로 이동
@@ -1067,8 +944,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       return (
         <div className="flex items-center justify-center h-screen">
           <div className="text-center">
-            <h2 className="text-2xl font-bold mb-4">게임 로딩</h2>
-            <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+            <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+            <h2 className="text-lg font-bold mt-4 text-slate-300">게임 로딩</h2>
           </div>
         </div>
       );
@@ -1083,7 +960,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         {/* 오류/안내 메시지 */}
         {message && gameState.phase !== GamePhase.END && (
           <div className="text-center mb-2">
-            <p className="text-xs font-medium bg-amber-50 text-amber-700 py-1 px-2 rounded inline-block">
+            <p className="text-xs font-medium bg-amber-500/10 border border-amber-400/40 text-amber-200 py-1 px-3 rounded-full inline-block">
               {message}
             </p>
           </div>
@@ -1093,57 +970,66 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         {gameState.phase === GamePhase.SETUP && (
           <div className="text-center mb-2">
             {restartMessage && (
-              <p className="text-xs font-medium bg-blue-50 text-blue-700 py-1 px-2 rounded inline-block">
+              <p className="text-xs font-medium bg-blue-500/10 border border-blue-400/40 text-blue-200 py-1 px-3 rounded-full inline-block">
                 {restartMessage}
               </p>
             )}
             {gameState.currentTurn === userId && gameState.phase === GamePhase.SETUP && (
-              <p className="text-xs font-medium bg-green-50 text-green-700 py-1 px-2 rounded inline-block mt-1">
-                선턴입니다. 맵을 설정해주세요.
+              <p className="text-xs font-bold bg-green-500/10 border border-green-400/40 text-green-300 py-1 px-3 rounded-full inline-block mt-1">
+                ⚡ 선턴입니다. 맵을 설정해주세요.
               </p>
             )}
           </div>
         )}
-        
-        {/* 게임 종료 메시지 */}
-        {gameState.phase === GamePhase.END && (
-          <div className="text-center mb-2">
-            <p className={`text-sm font-bold ${
-              gameState.draw
-                ? 'text-gray-600'
-                : gameState.winner === userId
-                  ? 'text-green-500'
-                  : 'text-red-500'
-            }`}>
-              {getWinnerMessage()}
-            </p>
 
-            {/* 재시작 버튼 (게임 보드는 아래에서 같은 인스턴스로 계속 표시됨) */}
-            <div className="flex gap-3 mt-3 justify-center">
-              <button
-                className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-                onClick={handleRestartGame}
-              >
-                재시작
-              </button>
-              
-              <button
-                className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
-                onClick={handleLeaveRoom}
-              >
-                나가기
-              </button>
+        {/* 게임 종료 결과 */}
+        {gameState.phase === GamePhase.END && (
+          <div className="text-center mb-3">
+            <div className={`game-panel !rounded-xl inline-block px-8 py-3 ${
+              gameState.draw
+                ? '!border-slate-500/60'
+                : gameState.winner === userId
+                  ? '!border-green-400/60 shadow-green-500/20'
+                  : '!border-red-400/60 shadow-red-500/20'
+            }`}>
+              <p className="text-[10px] tracking-[0.3em] text-slate-500 font-bold mb-1">GAME RESULT</p>
+              <p className={`text-xl font-black ${
+                gameState.draw
+                  ? 'text-slate-300'
+                  : gameState.winner === userId
+                    ? 'text-green-400'
+                    : 'text-red-400'
+              }`}>
+                {gameState.draw ? '🤝' : gameState.winner === userId ? '🏆' : '💀'} {getWinnerMessage()}
+              </p>
+
+              {/* 재시작 버튼 (게임 보드는 아래에서 같은 인스턴스로 계속 표시됨) */}
+              <div className="flex gap-2 mt-3 justify-center">
+                <button
+                  className="btn-game px-6 py-1.5 text-sm"
+                  onClick={handleRestartGame}
+                >
+                  재시작
+                </button>
+
+                <button
+                  className="btn-sub px-4 py-1.5 text-sm"
+                  onClick={handleLeaveRoom}
+                >
+                  나가기
+                </button>
+              </div>
             </div>
           </div>
         )}
-        
+
         {/* 게임 컴포넌트 */}
         {gameState.phase === GamePhase.SETUP && !isReady ? (
           <div key="setup-container">
             <GameSetup onMapComplete={handleMapComplete} />
             <div className="flex justify-center mt-2">
               <button
-                className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+                className="btn-sub px-4 py-1.5 text-xs"
                 onClick={handleLeaveRoom}
               >
                 나가기
@@ -1151,16 +1037,19 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             </div>
           </div>
         ) : gameState.phase === GamePhase.SETUP && isReady ? (
-          <div key="waiting-container" className="text-center p-3">
-            <p className="text-sm mb-2">상대방 준비 대기</p>
-            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-            <div className="flex justify-center mt-3">
-              <button
-                className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
-                onClick={handleLeaveRoom}
-              >
-                나가기
-              </button>
+          <div key="waiting-container" className="text-center py-8">
+            <div className="game-panel inline-block px-10 py-6">
+              <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+              <p className="text-sm mt-3 text-slate-300 font-medium">상대방 준비 대기</p>
+              <p className="text-[10px] text-slate-500 mt-1">상대가 맵을 완성하면 자동으로 시작됩니다</p>
+              <div className="flex justify-center mt-4">
+                <button
+                  className="btn-sub px-4 py-1.5 text-xs"
+                  onClick={handleLeaveRoom}
+                >
+                  나가기
+                </button>
+              </div>
             </div>
           </div>
         ) : (gameState.phase === GamePhase.PLAY || gameState.phase === GamePhase.END) && opponentMap ? (

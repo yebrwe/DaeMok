@@ -26,8 +26,9 @@ export default function Home() {
   return (
     <div className="flex items-center justify-center h-screen">
       <div className="text-center">
-        <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-        <p className="mt-4 text-lg">로딩 중...</p>
+        <div className="text-4xl mb-4">🏁</div>
+        <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+        <p className="mt-4 text-slate-400">로딩 중...</p>
       </div>
     </div>
   );

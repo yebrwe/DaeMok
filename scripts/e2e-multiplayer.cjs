@@ -82,7 +82,7 @@ async function signInWithFakeGoogle(page, acc) {
     throw e;
   }
 
-  await expectText(page, '게임 대기실', 25000);
+  await expectText(page, '새 게임 방 만들기', 25000);
 }
 
 // 2D 기본 보드에서 맵 제작: 시작(0,0), 도착(0,2), 벽 없음 (최단 2턴)
@@ -135,7 +135,7 @@ async function setupMap(page) {
     await expectText(pageA, '상대방 준비 대기');
 
     step('4: B가 방 목록에서 참가');
-    const card = pageB.locator('.border.rounded-lg', { hasText: ROOM_NAME }).first();
+    const card = pageB.locator('[data-room-card]', { hasText: ROOM_NAME }).first();
     await card.waitFor({ timeout: 20000 });
     await card.getByRole('button', { name: '참가하기' }).click();
     await pageB.waitForURL(/\/rooms\/.+/, { timeout: 20000 });

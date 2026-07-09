@@ -74,15 +74,21 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100">
-      <div className="w-full max-w-md p-8 bg-white rounded-lg shadow-md text-center">
-        <h1 className="text-3xl font-bold mb-2">대목</h1>
-        <p className="text-sm text-gray-500 mb-8">
-          상대가 숨겨둔 벽을 피해 더 적은 턴으로 골인하세요
+    <div className="flex items-center justify-center min-h-screen px-4">
+      <div className="w-full max-w-md p-8 game-panel text-center">
+        <div className="text-5xl mb-3">🏁</div>
+        <h1 className="text-4xl font-black mb-2 text-amber-300 tracking-tight">대목</h1>
+        <p className="text-sm text-slate-400 mb-2">
+          상대가 숨겨둔 벽을 피해 <span className="text-amber-300 font-bold">더 적은 턴</span>으로 골인하세요
         </p>
+        <div className="flex justify-center gap-3 text-[11px] text-slate-500 mb-8">
+          <span>🧱 벽 15개 배치</span>
+          <span>⚔️ 1:1 대전</span>
+          <span>🎲 3D 보드</span>
+        </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded text-sm">
+          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/40 text-red-300 rounded-xl text-sm">
             {error}
           </div>
         )}
@@ -90,7 +96,7 @@ export default function LoginPage() {
         <button
           onClick={handleGoogleLogin}
           disabled={isSigningIn}
-          className="w-full py-3 px-4 flex items-center justify-center gap-3 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 transition-colors disabled:opacity-60 shadow-sm"
+          className="w-full py-3 px-4 flex items-center justify-center gap-3 rounded-xl bg-white hover:bg-slate-100 active:scale-[0.98] transition disabled:opacity-60 shadow-lg shadow-black/30"
         >
           {/* Google 로고 */}
           <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
@@ -104,7 +110,7 @@ export default function LoginPage() {
           </span>
         </button>
 
-        <p className="mt-6 text-xs text-gray-400">
+        <p className="mt-6 text-xs text-slate-500">
           Google 계정으로 간편하게 로그인하고 바로 게임을 시작하세요.
         </p>
       </div>

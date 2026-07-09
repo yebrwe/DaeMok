@@ -191,61 +191,61 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
     if (activeTab === 'chat') {
       return (
         <>
-          <div className="h-[220px] overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
+          <div className="h-[280px] overflow-y-auto border border-slate-700/50 rounded-xl p-2 bg-slate-950/40">
             {messages.length === 0 ? (
-              <p className="text-gray-500 text-center text-sm">아직 채팅 메시지가 없습니다.</p>
+              <p className="text-slate-500 text-center text-xs py-4">아직 채팅 메시지가 없습니다.</p>
             ) : (
               messages.map((message) => (
-                <div 
-                  key={message.id} 
-                  className={`mb-1 ${message.userId === currentUserId ? 'text-right' : ''}`}
+                <div
+                  key={message.id}
+                  className={`mb-1.5 ${message.userId === currentUserId ? 'text-right' : ''}`}
                 >
-                  <div 
-                    className={`inline-block p-1 rounded-lg max-w-[90%] text-xs ${
-                      message.userId === currentUserId 
-                        ? 'bg-blue-100 text-blue-800' 
-                        : 'bg-gray-200 text-gray-800'
+                  <div
+                    className={`inline-block px-2 py-1 rounded-xl max-w-[90%] text-xs border ${
+                      message.userId === currentUserId
+                        ? 'bg-amber-400/10 border-amber-400/30 text-amber-100'
+                        : 'bg-slate-800/80 border-slate-700/50 text-slate-200'
                     }`}
                   >
                     {message.userId !== currentUserId && (
                       <div className="flex items-center text-xs mb-0.5">
                         {message.photoURL ? (
-                          <img 
-                            src={message.photoURL} 
-                            alt={message.userName} 
-                            className="w-3 h-3 rounded-full mr-1"
+                          <img
+                            src={message.photoURL}
+                            alt={message.userName}
+                            className="w-3.5 h-3.5 rounded-full mr-1"
                           />
                         ) : (
-                          <div className="w-3 h-3 bg-gray-400 rounded-full mr-1 flex items-center justify-center text-xs text-white">
+                          <div className="w-3.5 h-3.5 bg-slate-600 rounded-full mr-1 flex items-center justify-center text-[8px] text-white">
                             {message.userName[0]}
                           </div>
                         )}
-                        <span className="font-medium text-xs truncate max-w-[80px]">{message.userName}</span>
+                        <span className="font-bold text-[10px] text-slate-400 truncate max-w-[80px]">{message.userName}</span>
                       </div>
                     )}
                     <p className="text-xs break-words">{message.text}</p>
-                    <span className="text-[8px] text-gray-500">{formatTimestamp(message.timestamp)}</span>
+                    <span className="text-[8px] text-slate-500">{formatTimestamp(message.timestamp)}</span>
                   </div>
                 </div>
               ))
             )}
             <div ref={messagesEndRef} />
           </div>
-          
-          <form onSubmit={handleSendMessage} className="mt-1 flex">
+
+          <form onSubmit={handleSendMessage} className="mt-2 flex gap-1.5">
             <input
               type="text"
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               placeholder="메시지 입력..."
-              className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded-l-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="flex-1 px-3 py-1.5 text-xs bg-slate-800/80 border border-slate-600/70 rounded-xl
+                text-slate-100 placeholder:text-slate-500
+                focus:outline-none focus:ring-2 focus:ring-amber-400/60 focus:border-transparent"
             />
             <button
               type="submit"
               disabled={!newMessage.trim()}
-              className={`px-2 py-1 rounded-r-md text-xs ${
-                !newMessage.trim() ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'
-              } text-white transition`}
+              className="btn-game px-3 py-1.5 text-xs shrink-0"
             >
               전송
             </button>
@@ -254,34 +254,34 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
       );
     } else {
       return (
-        <div className="h-[300px] overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
+        <div className="h-[320px] overflow-y-auto border border-slate-700/50 rounded-xl p-2 bg-slate-950/40">
           {onlineUsers.length === 0 ? (
-            <div className="text-center py-2">
-              <p className="text-gray-500 text-xs">접속 중인 유저가 없습니다.</p>
-              <p className="text-gray-400 text-[10px] mt-1">잠시만 기다려주세요...</p>
+            <div className="text-center py-4">
+              <p className="text-slate-500 text-xs">접속 중인 유저가 없습니다.</p>
+              <p className="text-slate-600 text-[10px] mt-1">잠시만 기다려주세요...</p>
             </div>
           ) : (
-            <ul className="divide-y divide-gray-100">
+            <ul className="divide-y divide-slate-800">
               {onlineUsers.map((user) => (
-                <li key={user.uid} className="py-1 flex items-center">
+                <li key={user.uid} className="py-1.5 flex items-center">
                   {user.photoURL ? (
-                    <img 
-                      src={user.photoURL} 
-                      alt={user.displayName || '유저'} 
-                      className="w-5 h-5 rounded-full mr-1"
+                    <img
+                      src={user.photoURL}
+                      alt={user.displayName || '유저'}
+                      className="w-6 h-6 rounded-full mr-2 ring-1 ring-slate-600"
                     />
                   ) : (
-                    <div className="w-5 h-5 bg-gray-200 rounded-full mr-1 flex items-center justify-center text-xs">
+                    <div className="w-6 h-6 bg-slate-700 rounded-full mr-2 flex items-center justify-center text-[10px] text-slate-300">
                       {user.displayName?.[0] || '?'}
                     </div>
                   )}
                   <div className="overflow-hidden">
-                    <p className="font-medium text-xs truncate">
-                      {user.displayName} 
-                      {user.uid === currentUserId && <span className="text-[10px] text-blue-500 ml-1">(나)</span>}
+                    <p className="font-medium text-xs truncate text-slate-200">
+                      {user.displayName}
+                      {user.uid === currentUserId && <span className="text-[10px] text-amber-400 ml-1">(나)</span>}
                     </p>
                   </div>
-                  <span className="ml-auto w-1.5 h-1.5 bg-green-500 rounded-full"></span>
+                  <span className="ml-auto w-1.5 h-1.5 bg-green-400 rounded-full shadow shadow-green-400/50"></span>
                 </li>
               ))}
             </ul>
@@ -290,37 +290,41 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
       );
     }
   };
-  
+
   return (
-    <div className="bg-white shadow-md rounded-lg p-2 h-[400px] flex flex-col">
+    <div className="game-panel p-3 flex flex-col">
       <div className="flex justify-between items-center">
-        <h2 className="text-sm font-semibold">대기실</h2>
-        <div className="text-[10px] text-gray-500">
-          접속자 {onlineUsers.length}명
+        <h2 className="text-sm font-bold text-slate-200 flex items-center gap-1.5">💬 대기실</h2>
+        <div className="text-[10px] text-slate-500">
+          접속자 <span className="text-green-400 font-bold">{onlineUsers.length}</span>명
         </div>
       </div>
-      
+
       {/* 탭 선택 UI */}
-      <div className="flex border-b mt-1">
+      <div className="flex border-b border-slate-700/60 mt-2">
         <button
-          className={`py-1 px-2 focus:outline-none text-xs ${
-            activeTab === 'chat' ? 'border-b-2 border-blue-500 font-medium' : 'text-gray-500'
+          className={`py-1.5 px-3 focus:outline-none text-xs transition-colors ${
+            activeTab === 'chat'
+              ? 'border-b-2 border-amber-400 font-bold text-amber-300'
+              : 'text-slate-500 hover:text-slate-300'
           }`}
           onClick={() => setActiveTab('chat')}
         >
           채팅
         </button>
         <button
-          className={`py-1 px-2 focus:outline-none text-xs ${
-            activeTab === 'users' ? 'border-b-2 border-blue-500 font-medium' : 'text-gray-500'
+          className={`py-1.5 px-3 focus:outline-none text-xs transition-colors ${
+            activeTab === 'users'
+              ? 'border-b-2 border-amber-400 font-bold text-amber-300'
+              : 'text-slate-500 hover:text-slate-300'
           }`}
           onClick={() => setActiveTab('users')}
         >
           접속자 목록
         </button>
       </div>
-      
-      <div className="flex-1 overflow-hidden">
+
+      <div className="flex-1 overflow-hidden pt-2">
         {renderTabContent()}
       </div>
     </div>

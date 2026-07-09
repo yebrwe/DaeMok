@@ -365,74 +365,82 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
   return (
     <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
-      {/* 상단 정보 영역 */}
-      <div className="w-full flex justify-center items-center mb-2 px-2 gap-4">
+      {/* 상단 HUD - 플레이어 대결 정보 */}
+      <div className="w-full game-panel !rounded-xl px-3 py-2 mb-2 flex justify-between items-center gap-2">
         {/* 내 정보 */}
-        <div className="flex items-center gap-1">
+        <div className={`flex items-center gap-2 px-2 py-1 rounded-lg ${isMyTurn && !isFinished ? 'bg-blue-500/15 ring-1 ring-blue-400/50' : ''}`}>
           {playerPhotoURL ? (
             <img
               src={playerPhotoURL}
               alt="Player"
-              className="w-5 h-5 rounded-full object-cover border border-blue-500"
+              className="w-7 h-7 rounded-full object-cover ring-2 ring-blue-400"
             />
           ) : (
-            <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center">
-              <span className="text-white text-[8px]">P</span>
+            <div className="w-7 h-7 rounded-full bg-blue-500 ring-2 ring-blue-400 flex items-center justify-center">
+              <span className="text-white text-[10px] font-bold">나</span>
             </div>
           )}
-          <span className="text-xs">{playerName.substring(0, 6)}</span>
+          <div className="leading-tight">
+            <div className="text-xs font-bold text-blue-300">{playerName.substring(0, 6)}</div>
+            <div className="text-[10px] text-slate-400">이동: {moveCount}</div>
+          </div>
         </div>
 
-        <div className="text-xs">이동: {moveCount}</div>
-
-        <div className="text-xs text-center">
+        {/* 중앙 상태 */}
+        <div className="flex flex-col items-center gap-1">
+          <span className="text-[10px] text-slate-500 font-bold tracking-widest">VS</span>
           {gameEnded ? (
-            <span className="text-green-600">종료</span>
+            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-green-400/15 text-green-300 border border-green-400/40">종료</span>
           ) : iAmDone ? (
-            <span className="text-purple-600 font-bold">관전 중</span>
+            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-purple-400/15 text-purple-300 border border-purple-400/40">관전 중</span>
           ) : isMyTurn ? (
-            <span className="text-blue-600 font-bold">내 턴</span>
+            <span className="badge-turn">내 턴</span>
           ) : (
-            <span className="text-gray-600">대기</span>
+            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-slate-700/50 text-slate-400 border border-slate-600/50">대기</span>
           )}
         </div>
 
-        {/* 상대방 정보 */}
-        {opponentId && (
-          <div className="flex items-center gap-1">
-            {opponentPhotoURL ? (
-              <img
-                src={opponentPhotoURL}
-                alt="Opponent"
-                className="w-5 h-5 rounded-full object-cover border border-red-500"
-              />
-            ) : (
-              <div className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center">
-                <span className="text-white text-[8px]">O</span>
+        {/* 상대방 정보 + 보기 전환 */}
+        <div className="flex items-center gap-2">
+          {opponentId ? (
+            <div className={`flex items-center gap-2 px-2 py-1 rounded-lg ${!isMyTurn && !isFinished ? 'bg-red-500/15 ring-1 ring-red-400/50' : ''}`}>
+              <div className="leading-tight text-right">
+                <div className="text-xs font-bold text-red-300">{opponentName.substring(0, 6)}</div>
+                <div className="text-[10px] text-slate-400">상대</div>
               </div>
-            )}
-            <span className="text-xs">{opponentName.substring(0, 6)}</span>
-          </div>
-        )}
-
-        {/* 3D/2D 보기 전환 */}
-        <button
-          className="text-xs px-2 py-0.5 rounded border border-gray-300 bg-white hover:bg-gray-100 transition-colors"
-          onClick={() => setView3D((prev) => !prev)}
-        >
-          {view3D ? '2D 보기' : '3D 보기'}
-        </button>
+              {opponentPhotoURL ? (
+                <img
+                  src={opponentPhotoURL}
+                  alt="Opponent"
+                  className="w-7 h-7 rounded-full object-cover ring-2 ring-red-400"
+                />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-red-500 ring-2 ring-red-400 flex items-center justify-center">
+                  <span className="text-white text-[10px] font-bold">적</span>
+                </div>
+              )}
+            </div>
+          ) : (
+            !isPractice && <span className="text-[10px] text-slate-500">상대 대기</span>
+          )}
+          <button
+            className="btn-sub text-xs px-2 py-1 !rounded-lg"
+            onClick={() => setView3D((prev) => !prev)}
+          >
+            {view3D ? '2D 보기' : '3D 보기'}
+          </button>
+        </div>
       </div>
 
       {/* 메시지 표시 영역 */}
       {message && (
         <div
-          className={`text-xs mb-2 ${
+          className={`text-xs mb-2 px-3 py-1 rounded-full border ${
             lastMoveValid === false
-              ? 'text-red-500 font-bold'
+              ? 'bg-red-500/10 border-red-500/40 text-red-300 font-bold'
               : lastMoveValid === true
-                ? 'text-green-500'
-                : 'text-gray-600'
+                ? 'bg-green-500/10 border-green-500/40 text-green-300'
+                : 'bg-slate-800/60 border-slate-600/50 text-slate-300'
           }`}
         >
           {message}
@@ -441,7 +449,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
       {/* 관전 모드 안내 - 턴 수가 적은 쪽이 이기므로 아직 승부가 확정되지 않음 */}
       {spectating && (
-        <div className="text-xs mb-2 px-3 py-1.5 rounded bg-purple-50 text-purple-700 font-medium">
+        <div className="text-xs mb-2 px-3 py-1.5 rounded-xl bg-purple-500/10 border border-purple-400/40 text-purple-200 font-medium">
           🏁 {myFinishMoves ?? moveCount}턴으로 완주했습니다! 상대방이 더 적은 턴으로 완주하면
           패배, 같은 턴이면 무승부입니다. (관전 중)
         </div>
@@ -449,7 +457,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
       {/* 상대가 먼저 완주 -> 기록 도전 또는 포기 선택 */}
       {canForfeit && (
-        <div className="text-xs mb-2 px-3 py-1.5 rounded bg-orange-50 text-orange-700 font-medium flex items-center gap-2">
+        <div className="text-xs mb-2 px-3 py-1.5 rounded-xl bg-orange-500/10 border border-orange-400/40 text-orange-200 font-medium flex items-center gap-2">
           <span>
             상대방이 {opponentFinishMoves ?? '?'}턴으로 완주했습니다.{' '}
             {opponentFinishMoves == null
@@ -461,7 +469,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
                   : '이미 상대보다 많은 턴을 사용해 승리할 수 없습니다. 완주하거나 포기하세요.'}
           </span>
           <button
-            className="px-2 py-0.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors shrink-0"
+            className="btn-danger text-xs px-2.5 py-1 shrink-0"
             onClick={() => {
               if (window.confirm('정말 포기하시겠습니까? 게임이 바로 종료됩니다.')) {
                 onForfeit?.();
@@ -539,8 +547,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
         {/* 미니맵 - 내가 만든 맵에서 상대방 플레이 (연습/관전 중에는 표시 안 함) */}
         {!isPractice && !spectating && myMap && opponentPosition && (
           <div className="w-full md:w-64 flex justify-center">
-            <div className="bg-gray-100 p-2 rounded shadow-sm">
-              <div className="text-[10px] text-gray-500 text-center mb-1">내 맵 (상대방 진행 상황)</div>
+            <div className="game-panel !rounded-xl p-2">
+              <div className="text-[10px] text-slate-400 text-center mb-1 font-medium">내 맵 (상대방 진행 상황)</div>
               <GameBoard
                 gamePhase={GamePhase.PLAY}
                 startPosition={myMap.startPosition}
@@ -559,53 +567,35 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
       {/* 방향 컨트롤 버튼 (게임 종료 시 숨김) */}
       {!isFinished && (
-        <div className="flex justify-center gap-2 mt-3">
-          <div className="grid grid-cols-3 gap-1">
+        <div className="flex flex-col items-center mt-3 gap-1.5">
+          <div className="grid grid-cols-3 gap-1.5">
             <div className="col-start-2">
-              <button
-                className="w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center hover:bg-blue-600 disabled:bg-gray-300"
-                onClick={() => handleMove('up')}
-                disabled={!isMyTurn}
-              >
+              <button className="btn-dpad" onClick={() => handleMove('up')} disabled={!isMyTurn}>
                 ↑
               </button>
             </div>
             <div className="col-start-1 row-start-2">
-              <button
-                className="w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center hover:bg-blue-600 disabled:bg-gray-300"
-                onClick={() => handleMove('left')}
-                disabled={!isMyTurn}
-              >
+              <button className="btn-dpad" onClick={() => handleMove('left')} disabled={!isMyTurn}>
                 ←
               </button>
             </div>
             <div className="col-start-2 row-start-2">
-              <button
-                className="w-10 h-10 bg-gray-200 text-gray-700 rounded-full flex items-center justify-center"
-                disabled
-              >
-                •
-              </button>
+              <div className="w-14 h-14 rounded-2xl bg-slate-900/60 border border-slate-700/50 flex items-center justify-center">
+                <div className={`w-2.5 h-2.5 rounded-full ${isMyTurn ? 'bg-amber-400 animate-pulse' : 'bg-slate-600'}`} />
+              </div>
             </div>
             <div className="col-start-3 row-start-2">
-              <button
-                className="w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center hover:bg-blue-600 disabled:bg-gray-300"
-                onClick={() => handleMove('right')}
-                disabled={!isMyTurn}
-              >
+              <button className="btn-dpad" onClick={() => handleMove('right')} disabled={!isMyTurn}>
                 →
               </button>
             </div>
             <div className="col-start-2 row-start-3">
-              <button
-                className="w-10 h-10 bg-blue-500 text-white rounded-full flex items-center justify-center hover:bg-blue-600 disabled:bg-gray-300"
-                onClick={() => handleMove('down')}
-                disabled={!isMyTurn}
-              >
+              <button className="btn-dpad" onClick={() => handleMove('down')} disabled={!isMyTurn}>
                 ↓
               </button>
             </div>
           </div>
+          <p className="text-[10px] text-slate-500">키보드 방향키로도 이동할 수 있습니다</p>
         </div>
       )}
     </div>

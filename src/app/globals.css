@@ -2,24 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 다크 보드게임 테마 - 밤의 보드게임 카페 느낌 */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0a0f1e;
+  --foreground: #e7ecf5;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: dark;
 }
 
 body {
   color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--background);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(217, 164, 65, 0.14), transparent),
+    radial-gradient(ellipse 60% 40% at 90% 110%, rgba(59, 130, 246, 0.08), transparent);
+  background-attachment: fixed;
+  font-family: var(--font-geist-sans), 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
   overflow-x: hidden; /* 가로 스크롤 방지 */
   width: 100%;
+  min-height: 100vh;
   position: relative;
 }
 
@@ -28,42 +31,83 @@ body {
   touch-action: none; /* 브라우저 기본 터치 동작 비활성화 */
 }
 
-/* 게임 보드 관련 스타일 */
 @layer components {
-  /* 방향 버튼 터치 영역 확장 */
+  /* 게임 패널 (공통 카드) */
+  .game-panel {
+    @apply bg-slate-900/70 border border-slate-700/60 rounded-2xl shadow-lg shadow-black/40 backdrop-blur-sm;
+  }
+
+  /* 주 버튼 - 앰버 (게임 시작/확정 계열) */
+  .btn-game {
+    @apply bg-gradient-to-b from-amber-400 to-amber-500 text-slate-900 font-bold rounded-xl
+      shadow-md shadow-amber-950/50 hover:from-amber-300 hover:to-amber-400
+      active:scale-95 transition disabled:opacity-40 disabled:pointer-events-none;
+  }
+
+  /* 보조 버튼 */
+  .btn-sub {
+    @apply bg-slate-800/80 text-slate-200 border border-slate-600/70 rounded-xl
+      hover:bg-slate-700/80 hover:text-white active:scale-95 transition
+      disabled:opacity-40 disabled:pointer-events-none;
+  }
+
+  /* 위험 버튼 (포기 등) */
+  .btn-danger {
+    @apply bg-gradient-to-b from-red-500 to-red-600 text-white font-bold rounded-xl
+      shadow-md shadow-red-950/50 hover:from-red-400 hover:to-red-500
+      active:scale-95 transition disabled:opacity-40;
+  }
+
+  /* 방향 패드 버튼 */
+  .btn-dpad {
+    @apply w-14 h-14 rounded-2xl bg-slate-800 border border-slate-600/70 text-amber-300 text-xl font-bold
+      flex items-center justify-center shadow-md shadow-black/40
+      hover:bg-slate-700 hover:border-amber-400/60 active:scale-90 transition
+      disabled:opacity-30 disabled:pointer-events-none;
+  }
+
+  /* 반짝이는 턴 배지 */
+  .badge-turn {
+    @apply px-2.5 py-1 rounded-full text-xs font-bold bg-amber-400/15 text-amber-300 border border-amber-400/40;
+    animation: turn-glow 1.6s ease-in-out infinite;
+  }
+
+  /* 방향 버튼 터치 영역 확장 (기존 유지) */
   .game-direction-button {
     position: relative;
     z-index: 20;
     transition: all 300ms ease-in-out;
     will-change: background-color, opacity, transform;
   }
-  
+
   .game-direction-button:hover {
     transition-duration: 100ms;
   }
-  
-  /* 게임 셀 스타일링 */
-  [class*="relative w-12 h-12"] {
-    transition: background-color 300ms ease-in-out;
-    will-change: background-color;
-  }
-  
-  /* 미니맵 스타일 */
+
+  /* 미니맵 스타일 (기존 유지) */
   .minimap-container {
     z-index: 10;
     position: relative;
   }
-  
-  /* 모바일 최적화 스타일 */
+
+  /* 모바일 최적화 스타일 (기존 유지) */
   @media (max-width: 640px) {
     .overflow-auto {
       -webkit-overflow-scrolling: touch;
     }
-    
-    /* 모바일에서 게임 보드 크기 최적화 */
+
     .grid {
       max-width: 100%;
       margin: 0 auto;
     }
+  }
+}
+
+@keyframes turn-glow {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(251, 191, 36, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 14px rgba(251, 191, 36, 0.55);
   }
 }

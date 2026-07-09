@@ -17,25 +17,25 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
 
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!roomName.trim()) {
       setError('방 이름을 입력해주세요.');
       return;
     }
-    
+
     if (isCreating) {
       console.log('이미 방 생성이 진행 중입니다.');
       return;
     }
-    
+
     try {
       setIsCreating(true);
       setError(null);
-      
+
       console.log('방 생성 시도:', { roomName, maxPlayers: 2 });
-      
+
       const roomId = await createRoom(roomName, userId, 2);
-      
+
       if (roomId) {
         console.log('방 생성 성공:', roomId);
         localStorage.setItem('last_created_room', roomId);
@@ -53,30 +53,30 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
   };
 
   return (
-    <div className="bg-white shadow-md rounded-lg p-4 mb-4">
+    <div className="game-panel p-4">
       {!isFormOpen ? (
         <button
           onClick={() => setIsFormOpen(true)}
-          className="w-full py-2 bg-green-500 text-white text-sm rounded-lg hover:bg-green-600 transition flex items-center justify-center"
+          className="btn-game w-full py-3 text-sm flex items-center justify-center gap-2"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
+          <span className="text-base">⚔️</span>
           새 게임 방 만들기
         </button>
       ) : (
         <>
-          <h2 className="text-lg font-semibold mb-3">새 게임 방 만들기</h2>
-          
+          <h2 className="text-sm font-bold mb-3 text-slate-200 flex items-center gap-1.5">
+            ⚔️ 새 게임 방 만들기
+          </h2>
+
           {error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-3 py-2 rounded mb-3 text-sm">
+            <div className="bg-red-500/10 border border-red-500/40 text-red-300 px-3 py-2 rounded-xl mb-3 text-xs">
               {error}
             </div>
           )}
-          
+
           <form onSubmit={handleCreateRoom} className="space-y-3">
             <div>
-              <label htmlFor="roomName" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="roomName" className="block text-xs font-medium text-slate-400 mb-1">
                 방 이름
               </label>
               <input
@@ -85,27 +85,28 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
                 value={roomName}
                 onChange={(e) => setRoomName(e.target.value)}
                 placeholder="방 이름을 입력하세요"
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="w-full px-3 py-2 text-sm bg-slate-800/80 border border-slate-600/70 rounded-xl
+                  text-slate-100 placeholder:text-slate-500
+                  focus:outline-none focus:ring-2 focus:ring-amber-400/60 focus:border-transparent"
                 disabled={isCreating}
+                maxLength={30}
               />
             </div>
-            
+
             <div className="flex space-x-2 pt-1">
               <button
                 type="submit"
                 disabled={isCreating}
-                className={`flex-1 py-1.5 rounded-md text-sm ${
-                  isCreating ? 'bg-gray-400' : 'bg-blue-500 hover:bg-blue-600'
-                } text-white transition`}
+                className="btn-game flex-1 py-2 text-sm"
               >
                 {isCreating ? '생성 중...' : '방 만들기'}
               </button>
-              
+
               <button
                 type="button"
                 onClick={() => setIsFormOpen(false)}
                 disabled={isCreating}
-                className="flex-1 py-1.5 bg-gray-200 text-gray-800 text-sm rounded-md hover:bg-gray-300 transition"
+                className="btn-sub flex-1 py-2 text-sm"
               >
                 취소
               </button>
@@ -117,4 +118,4 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
   );
 };
 
-export default CreateRoomForm; 
+export default CreateRoomForm;

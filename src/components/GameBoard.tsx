@@ -476,8 +476,8 @@ const GameBoard: React.FC<GameBoardProps> = ({
     >
       {isMinimapMode ? (
         // 미니맵 모드일 때는 단순 8x8 그리드
-        <div 
-          className="grid gap-0 border border-gray-400 bg-gray-100 p-1 minimap-container rounded-md shadow-md touch-action-none mx-auto"
+        <div
+          className="grid gap-0 border-2 border-slate-500 bg-slate-300 p-1 minimap-container rounded-md shadow-md touch-action-none mx-auto"
           style={{ 
             gridTemplateColumns: `repeat(${BOARD_SIZE}, 1fr)`,
             gridTemplateRows: `repeat(${BOARD_SIZE}, 1fr)`
@@ -492,8 +492,8 @@ const GameBoard: React.FC<GameBoardProps> = ({
         </div>
       ) : (
         // 일반 모드일 때는 셀+벽+교차점을 포함한 그리드
-        <div 
-          className="grid gap-0 border border-gray-400 bg-gray-100 p-1 sm:p-2 rounded-md shadow-md touch-action-none overflow-auto mx-auto"
+        <div
+          className="grid gap-0 border-4 border-slate-600 bg-slate-300 p-1 sm:p-2 rounded-xl shadow-xl shadow-black/40 touch-action-none overflow-auto mx-auto"
           style={{ 
             gridTemplateColumns: `repeat(${BOARD_SIZE * 2 - 1}, auto)`,
             gridTemplateRows: `repeat(${BOARD_SIZE * 2 - 1}, auto)`

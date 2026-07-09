@@ -264,43 +264,62 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   // 남은 장애물 개수
   const remainingObstacles = MAX_OBSTACLES - countUniqueObstacles(obstacles);
   
+  const steps: Array<{ key: 'start' | 'end' | 'obstacles'; label: string }> = [
+    { key: 'start', label: '시작점' },
+    { key: 'end', label: '도착점' },
+    { key: 'obstacles', label: '벽 배치' },
+  ];
+  const currentStepIndex = steps.findIndex((s) => s.key === setupPhase);
+
   return (
     <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
-      <div className="w-full flex justify-between items-center mb-2 px-2">
-        <div className="text-xs font-medium">
-          {setupPhase === 'start' && '시작점을 선택하세요'}
-          {setupPhase === 'end' && '도착점을 선택하세요'}
-          {setupPhase === 'obstacles' && '벽(장애물)을 배치하세요'}
-        </div>
-        <div className="flex items-center gap-2">
-          {setupPhase === 'obstacles' && (
-            <div className="text-xs flex items-center">
-              <span className={`${remainingObstacles <= 5 ? 'text-red-500 font-bold' : ''}`}>
-                {MAX_OBSTACLES - remainingObstacles}/{MAX_OBSTACLES}
+      {/* 맵 제작 단계 스테퍼 */}
+      <div className="w-full game-panel !rounded-xl px-3 py-2 mb-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            {steps.map((s, i) => (
+              <div key={s.key} className="flex items-center gap-1.5">
+                <div
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold border ${
+                    i === currentStepIndex
+                      ? 'bg-amber-400/15 text-amber-300 border-amber-400/50'
+                      : i < currentStepIndex
+                        ? 'bg-green-400/10 text-green-300 border-green-400/40'
+                        : 'bg-slate-800/60 text-slate-500 border-slate-600/40'
+                  }`}
+                >
+                  <span>{i < currentStepIndex ? '✓' : i + 1}</span>
+                  <span>{s.label}</span>
+                </div>
+                {i < steps.length - 1 && <span className="text-slate-600 text-[10px]">›</span>}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            {setupPhase === 'obstacles' && (
+              <span className={`text-xs font-bold ${remainingObstacles <= 5 ? 'text-red-400' : 'text-amber-300'}`}>
+                🧱 {MAX_OBSTACLES - remainingObstacles}/{MAX_OBSTACLES}
               </span>
-            </div>
-          )}
-          <button
-            className="text-xs px-2 py-0.5 rounded border border-gray-300 bg-white hover:bg-gray-100 transition-colors"
-            onClick={() => setView3D((prev) => !prev)}
-          >
-            {view3D ? '2D 보기' : '3D 보기'}
-          </button>
+            )}
+            <button
+              className="btn-sub text-xs px-2 py-1 !rounded-lg"
+              onClick={() => setView3D((prev) => !prev)}
+            >
+              {view3D ? '2D 보기' : '3D 보기'}
+            </button>
+          </div>
+        </div>
+        <div className="text-xs font-medium text-slate-300 mt-1.5">
+          {setupPhase === 'start' && '시작점을 선택하세요 - 상대방은 여기서 출발합니다'}
+          {setupPhase === 'end' && '도착점을 선택하세요 - 상대방이 도달해야 하는 곳입니다'}
+          {setupPhase === 'obstacles' && '벽(장애물)을 배치하세요 - 상대방에게는 보이지 않습니다'}
         </div>
       </div>
-      
+
       {setupPhase === 'obstacles' && (
-        <div className="bg-blue-50 p-2 rounded-lg mb-2 text-xs w-full">
-          <div className="flex justify-between items-center">
-            <span>장애물 배치</span>
-            <span className="text-blue-600">
-              {remainingObstacles} 남음
-            </span>
-          </div>
-          <ul className="list-disc pl-4 mt-1">
-            <li>선 클릭: 장애물 배치/제거</li>
-            <li>시작→도착 경로 필요</li>
-          </ul>
+        <div className="w-full mb-2 px-3 py-1.5 rounded-xl bg-blue-500/10 border border-blue-400/30 text-[11px] text-blue-200 flex justify-between items-center">
+          <span>칸 사이 선을 클릭해 벽을 놓거나 제거합니다. 시작→도착 경로는 반드시 남겨야 합니다.</span>
+          <span className="font-bold text-blue-300 shrink-0 ml-2">{remainingObstacles}개 남음</span>
         </div>
       )}
       
@@ -331,7 +350,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       <div className="mt-3 flex gap-2 w-full justify-center">
         {setupPhase === 'start' && (
           <button
-            className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+            className="btn-game px-6 py-2 text-sm"
             onClick={() => {
               if (startPosition) {
                 setSetupPhase('end');
@@ -342,17 +361,17 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
             다음
           </button>
         )}
-        
+
         {setupPhase === 'end' && (
           <div className="flex gap-2">
             <button
-              className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition"
+              className="btn-sub px-4 py-2 text-sm"
               onClick={() => setSetupPhase('start')}
             >
               이전
             </button>
             <button
-              className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition"
+              className="btn-game px-6 py-2 text-sm"
               onClick={() => {
                 if (endPosition) {
                   setSetupPhase('obstacles');
@@ -364,17 +383,17 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
             </button>
           </div>
         )}
-        
+
         {setupPhase === 'obstacles' && (
           <div className="flex gap-2">
             <button
-              className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition"
+              className="btn-sub px-4 py-2 text-sm"
               onClick={() => setSetupPhase('end')}
             >
               이전
             </button>
             <button
-              className="px-3 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600 transition"
+              className="btn-game px-8 py-2 text-sm"
               onClick={handleSubmit}
               disabled={!isMapValid}
             >
@@ -383,9 +402,9 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
           </div>
         )}
       </div>
-      
+
       {setupPhase === 'obstacles' && !isMapValid && obstacles.length > 0 && (
-        <p className="text-red-500 text-sm mt-2">
+        <p className="text-red-400 text-xs mt-2 px-3 py-1 rounded-full bg-red-500/10 border border-red-500/40">
           현재 맵 구성으로는 시작점에서 도착점까지 도달할 수 없습니다.
         </p>
       )}

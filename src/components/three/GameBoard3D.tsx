@@ -441,7 +441,7 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
   const span = BOARD_SIZE * SPACING;
 
   return (
-    <div className={`w-full max-w-2xl mx-auto ${heightClassName} rounded-xl overflow-hidden shadow-md bg-gradient-to-b from-sky-100 to-slate-200`}>
+    <div className={`w-full max-w-2xl mx-auto ${heightClassName} rounded-2xl overflow-hidden border border-slate-700/60 shadow-xl shadow-black/50 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950`}>
       <Canvas
         shadows
         dpr={[1, 2]}
