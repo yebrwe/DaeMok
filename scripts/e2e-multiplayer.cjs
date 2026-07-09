@@ -86,9 +86,10 @@ async function signInWithFakeGoogle(page, acc) {
   await expectText(page, '새 게임 방 만들기', 25000);
 }
 
-// 2D 기본 보드에서 맵 제작: 시작(0,0), 도착(0,2), 벽 없음 (최단 2턴)
+// 맵 제작: 정밀 클릭을 위해 2D로 전환 후 시작(0,0), 도착(0,2), 벽 없음 (최단 2턴)
 async function setupMap(page) {
   await expectText(page, '시작점을 선택하세요');
+  await page.getByRole('button', { name: '2D 보기' }).first().click();
   const items = page.locator('div.grid').first().locator(':scope > *');
   await items.nth(0).click();
   await expectText(page, '도착점을 선택하세요');

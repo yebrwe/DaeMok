@@ -26,8 +26,8 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   const [obstacles, setObstacles] = useState<Obstacle[]>([]);
   const [setupPhase, setSetupPhase] = useState<'start' | 'end' | 'obstacles'>('start');
   const [isMapValid, setIsMapValid] = useState<boolean>(false);
-  // 맵 제작은 정밀한 배치가 필요하므로 2D가 기본, 3D는 미리보기용
-  const [view3D, setView3D] = useState<boolean>(false);
+  // 풀스크린 3D 스테이지가 기본, 정밀 배치가 필요하면 2D로 전환
+  const [view3D, setView3D] = useState<boolean>(true);
   // 아이템 배치 (게임당 1개, 벽 예산 소모)
   const [placeMode, setPlaceMode] = useState<PlaceMode>('wall');
   const [item, setItem] = useState<MapItem | null>(null);
@@ -367,128 +367,28 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   const currentStepIndex = steps.findIndex((s) => s.key === setupPhase);
 
   return (
-    <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
-      {/* 맵 제작 단계 스테퍼 */}
-      <div className="w-full game-panel !rounded-xl px-3 py-2 mb-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            {steps.map((s, i) => (
-              <div key={s.key} className="flex items-center gap-1.5">
-                <div
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold border ${
-                    i === currentStepIndex
-                      ? 'bg-amber-400/15 text-amber-300 border-amber-400/50'
-                      : i < currentStepIndex
-                        ? 'bg-green-400/10 text-green-300 border-green-400/40'
-                        : 'bg-slate-800/60 text-slate-500 border-slate-600/40'
-                  }`}
-                >
-                  <span>{i < currentStepIndex ? '✓' : i + 1}</span>
-                  <span>{s.label}</span>
-                </div>
-                {i < steps.length - 1 && <span className="text-slate-600 text-[10px]">›</span>}
-              </div>
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            {setupPhase === 'obstacles' && (
-              <span className={`text-xs font-bold ${remainingObstacles <= 5 ? 'text-red-400' : 'text-amber-300'}`}>
-                🧱 {usedBudget}/{MAX_OBSTACLES}
-                {item && <span className="text-purple-300 ml-1">(아이템 -{ITEM_COSTS[item.type]})</span>}
-              </span>
-            )}
-            <button
-              className="btn-sub text-xs px-2 py-1 !rounded-lg"
-              onClick={() => setView3D((prev) => !prev)}
-            >
-              {view3D ? '2D 보기' : '3D 보기'}
-            </button>
-          </div>
-        </div>
-        <div className="text-xs font-medium text-slate-300 mt-1.5">
-          {setupPhase === 'start' && '시작점을 선택하세요 - 상대방은 여기서 출발합니다'}
-          {setupPhase === 'end' && '도착점을 선택하세요 - 상대방이 도달해야 하는 곳입니다'}
-          {setupPhase === 'obstacles' && '벽(장애물)을 배치하세요 - 상대방에게는 보이지 않습니다'}
-        </div>
-      </div>
-
-      {setupPhase === 'obstacles' && (
-        <div className="w-full mb-2 px-3 py-1.5 rounded-xl bg-blue-500/10 border border-blue-400/30 text-[11px] text-blue-200 flex justify-between items-center">
-          <span>칸 사이 선을 클릭해 벽을 놓거나 제거합니다. 시작→도착 경로는 반드시 남겨야 합니다.</span>
-          <span className="font-bold text-blue-300 shrink-0 ml-2">{remainingObstacles}개 남음</span>
-        </div>
-      )}
-
-      {/* 아이템 팔레트 - 게임당 1개, 벽 예산 소모 */}
-      {setupPhase === 'obstacles' && (
-        <div className="w-full mb-2 game-panel !rounded-xl px-3 py-2">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <span className="text-[11px] font-bold text-purple-300">🎁 아이템 (게임당 1개)</span>
-            <div className="flex gap-1.5 flex-wrap">
-              {(['oneTimeWall', 'mine', 'wormhole', 'radar'] as ItemType[]).map((type) => (
-                <button
-                  key={type}
-                  className={`px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
-                    item?.type === type
-                      ? 'bg-purple-400/20 text-purple-200 border-purple-400/60'
-                      : placeMode === type
-                        ? 'bg-amber-400 text-slate-900 border-amber-400'
-                        : 'bg-slate-800/80 text-slate-300 border-slate-600/60 hover:border-purple-400/50'
-                  } disabled:opacity-40 disabled:pointer-events-none`}
-                  onClick={() => handleSelectItemMode(type)}
-                  disabled={!!item}
-                >
-                  {type === 'oneTimeWall' ? '🧱' : type === 'mine' ? '💣' : type === 'wormhole' ? '🌀' : '🔍'} {ITEM_LABELS[type]} -{ITEM_COSTS[type]}
-                </button>
-              ))}
-              {item && (
-                <button
-                  className="px-2 py-1 rounded-lg text-[11px] font-bold bg-red-500/10 text-red-300 border border-red-400/50 hover:bg-red-500/20 transition-colors"
-                  onClick={handleRemoveItem}
-                >
-                  ✕ 아이템 제거
-                </button>
-              )}
-            </div>
-          </div>
-          {placeMode !== 'wall' && !item && (
-            <p className="text-[11px] text-amber-300 mt-1.5">
-              {placeMode === 'oneTimeWall' && '칸 사이 선을 클릭해 1회성 벽을 배치하세요. 한 번 부딪히면 부서집니다.'}
-              {placeMode === 'mine' && '칸을 클릭해 지뢰를 배치하세요. 밟으면 2턴 전 위치로 되돌아갑니다.'}
-              {placeMode === 'wormhole' &&
-                (wormholeEntrance
-                  ? '🌀 출구가 될 칸을 클릭하세요. (입구를 밟으면 이곳으로 이동)'
-                  : '🌀 입구가 될 칸을 클릭하세요.')}
-            </p>
-          )}
-          {item && (
-            <p className="text-[11px] text-purple-200 mt-1.5">
-              {item.type === 'oneTimeWall' && '🧱 1회성 벽 배치됨 - 상대가 부딪히면 턴을 소모시키고 부서집니다.'}
-              {item.type === 'mine' && '💣 지뢰 배치됨 - 상대가 밟으면 2턴 전 위치로 되돌아갑니다.'}
-              {item.type === 'wormhole' && '🌀 웜홀 배치됨 - 입구를 밟으면 출구로 순간이동합니다. (1회성)'}
-              {item.type === 'radar' && '🔍 탐지기 확보됨 - 게임 중 1회, 내 주변 한 칸(대각선 포함)의 벽을 탐지합니다.'}
-            </p>
-          )}
-        </div>
-      )}
-      
-      <div className="flex justify-center w-full">
-        {view3D ? (
-          <GameBoard3D
-            gamePhase={GamePhase.SETUP}
-            startPosition={startPosition}
-            endPosition={endPosition}
-            obstacles={obstacles}
-            item={item}
-            onCellClick={
-              setupPhase !== 'obstacles' || placeMode === 'mine' || placeMode === 'wormhole'
-                ? handleCellClick
-                : undefined
-            }
-            onDirectionClick={setupPhase === 'obstacles' ? handleDirectionClick : undefined}
-            selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}
-          />
-        ) : (
+    <div className="absolute inset-0 overflow-hidden">
+      {/* 보드 스테이지 */}
+      {view3D ? (
+        <GameBoard3D
+          gamePhase={GamePhase.SETUP}
+          startPosition={startPosition}
+          endPosition={endPosition}
+          obstacles={obstacles}
+          item={item}
+          placeMode={placeMode}
+          pendingCell={wormholeEntrance}
+          onCellClick={
+            setupPhase !== 'obstacles' || placeMode === 'mine' || placeMode === 'wormhole'
+              ? handleCellClick
+              : undefined
+          }
+          onDirectionClick={setupPhase === 'obstacles' ? handleDirectionClick : undefined}
+          selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}
+          fullscreen
+        />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center overflow-auto py-24">
           <GameBoard
             gamePhase={GamePhase.SETUP}
             startPosition={startPosition}
@@ -500,72 +400,169 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
             onDirectionClick={handleDirectionClick}
             selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}
           />
-        )}
+        </div>
+      )}
+
+      {/* 상단 HUD: 맵 제작 단계 스테퍼 */}
+      <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 w-[96%] max-w-3xl">
+        <div className="game-panel !rounded-xl px-3 py-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5">
+              {steps.map((s, i) => (
+                <div key={s.key} className="flex items-center gap-1.5">
+                  <div
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold border ${
+                      i === currentStepIndex
+                        ? 'bg-amber-400/15 text-amber-300 border-amber-400/50'
+                        : i < currentStepIndex
+                          ? 'bg-green-400/10 text-green-300 border-green-400/40'
+                          : 'bg-slate-800/60 text-slate-500 border-slate-600/40'
+                    }`}
+                  >
+                    <span>{i < currentStepIndex ? '✓' : i + 1}</span>
+                    <span>{s.label}</span>
+                  </div>
+                  {i < steps.length - 1 && <span className="text-slate-600 text-[10px]">›</span>}
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              {setupPhase === 'obstacles' && (
+                <span className={`text-xs font-bold ${remainingObstacles <= 5 ? 'text-red-400' : 'text-amber-300'}`}>
+                  🧱 {usedBudget}/{MAX_OBSTACLES}
+                  {item && <span className="text-purple-300 ml-1">(아이템 -{ITEM_COSTS[item.type]})</span>}
+                </span>
+              )}
+              <button
+                className="btn-sub text-xs px-2 py-1 !rounded-lg"
+                onClick={() => setView3D((prev) => !prev)}
+              >
+                {view3D ? '2D 보기' : '3D 보기'}
+              </button>
+            </div>
+          </div>
+          <div className="text-xs font-medium text-slate-300 mt-1.5">
+            {setupPhase === 'start' && '시작점을 선택하세요 - 상대방은 여기서 출발합니다'}
+            {setupPhase === 'end' && '도착점을 선택하세요 - 상대방이 도달해야 하는 곳입니다'}
+            {setupPhase === 'obstacles' && '벽(장애물)을 배치하세요 - 상대방에게는 보이지 않습니다'}
+          </div>
+        </div>
       </div>
-      
-      <div className="mt-3 flex gap-2 w-full justify-center">
-        {setupPhase === 'start' && (
-          <button
-            className="btn-game px-6 py-2 text-sm"
-            onClick={() => {
-              if (startPosition) {
-                setSetupPhase('end');
-              }
-            }}
-            disabled={!startPosition}
-          >
-            다음
-          </button>
+
+      {/* 하단 HUD: 아이템 팔레트 + 진행 버튼 */}
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 w-[96%] max-w-3xl flex flex-col items-center gap-2">
+        {setupPhase === 'obstacles' && !isMapValid && obstacles.length > 0 && (
+          <p className="text-red-300 text-xs px-3 py-1 rounded-full bg-red-500/20 border border-red-500/50 backdrop-blur-sm">
+            현재 맵 구성으로는 시작점에서 도착점까지 도달할 수 없습니다.
+          </p>
         )}
 
-        {setupPhase === 'end' && (
-          <div className="flex gap-2">
+        {/* 아이템 팔레트 - 게임당 1개, 벽 예산 소모 */}
+        {setupPhase === 'obstacles' && (
+          <div className="w-full game-panel !rounded-xl px-3 py-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-[11px] font-bold text-purple-300">🎁 아이템 (게임당 1개)</span>
+              <div className="flex gap-1.5 flex-wrap">
+                {(['oneTimeWall', 'mine', 'wormhole', 'radar'] as ItemType[]).map((type) => (
+                  <button
+                    key={type}
+                    className={`px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                      item?.type === type
+                        ? 'bg-purple-400/20 text-purple-200 border-purple-400/60'
+                        : placeMode === type
+                          ? 'bg-amber-400 text-slate-900 border-amber-400'
+                          : 'bg-slate-800/80 text-slate-300 border-slate-600/60 hover:border-purple-400/50'
+                    } disabled:opacity-40 disabled:pointer-events-none`}
+                    onClick={() => handleSelectItemMode(type)}
+                    disabled={!!item}
+                  >
+                    {type === 'oneTimeWall' ? '🧱' : type === 'mine' ? '💣' : type === 'wormhole' ? '🌀' : '🔍'} {ITEM_LABELS[type]} -{ITEM_COSTS[type]}
+                  </button>
+                ))}
+                {item && (
+                  <button
+                    className="px-2 py-1 rounded-lg text-[11px] font-bold bg-red-500/10 text-red-300 border border-red-400/50 hover:bg-red-500/20 transition-colors"
+                    onClick={handleRemoveItem}
+                  >
+                    ✕ 아이템 제거
+                  </button>
+                )}
+              </div>
+            </div>
+            {placeMode !== 'wall' && !item && (
+              <p className="text-[11px] text-amber-300 mt-1.5">
+                {placeMode === 'oneTimeWall' && '칸 사이 선을 클릭해 1회성 벽을 배치하세요. 한 번 부딪히면 부서집니다.'}
+                {placeMode === 'mine' && '칸을 클릭해 지뢰를 배치하세요. 밟으면 2턴 전 위치로 되돌아갑니다.'}
+                {placeMode === 'wormhole' &&
+                  (wormholeEntrance
+                    ? '🌀 출구가 될 칸을 클릭하세요. (입구를 밟으면 이곳으로 이동)'
+                    : '🌀 입구가 될 칸을 클릭하세요.')}
+              </p>
+            )}
+            {item && (
+              <p className="text-[11px] text-purple-200 mt-1.5">
+                {item.type === 'oneTimeWall' && '🧱 1회성 벽 배치됨 - 상대가 부딪히면 턴을 소모시키고 부서집니다.'}
+                {item.type === 'mine' && '💣 지뢰 배치됨 - 상대가 밟으면 2턴 전 위치로 되돌아갑니다.'}
+                {item.type === 'wormhole' && '🌀 웜홀 배치됨 - 입구를 밟으면 출구로 순간이동합니다. (1회성)'}
+                {item.type === 'radar' && '🔍 탐지기 확보됨 - 게임 중 1회, 내 주변 한 칸(대각선 포함)의 벽을 탐지합니다.'}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* 진행 버튼 */}
+        <div className="flex gap-2 justify-center">
+          {setupPhase === 'start' && (
             <button
-              className="btn-sub px-4 py-2 text-sm"
-              onClick={() => setSetupPhase('start')}
-            >
-              이전
-            </button>
-            <button
-              className="btn-game px-6 py-2 text-sm"
+              className="btn-game px-8 py-2 text-sm"
               onClick={() => {
-                if (endPosition) {
-                  setSetupPhase('obstacles');
+                if (startPosition) {
+                  setSetupPhase('end');
                 }
               }}
-              disabled={!endPosition}
+              disabled={!startPosition}
             >
               다음
             </button>
-          </div>
-        )}
+          )}
 
-        {setupPhase === 'obstacles' && (
-          <div className="flex gap-2">
-            <button
-              className="btn-sub px-4 py-2 text-sm"
-              onClick={() => setSetupPhase('end')}
-            >
-              이전
-            </button>
-            <button
-              className="btn-game px-8 py-2 text-sm"
-              onClick={handleSubmit}
-              disabled={!isMapValid}
-            >
-              완료
-            </button>
-          </div>
-        )}
+          {setupPhase === 'end' && (
+            <>
+              <button className="btn-sub px-5 py-2 text-sm" onClick={() => setSetupPhase('start')}>
+                이전
+              </button>
+              <button
+                className="btn-game px-8 py-2 text-sm"
+                onClick={() => {
+                  if (endPosition) {
+                    setSetupPhase('obstacles');
+                  }
+                }}
+                disabled={!endPosition}
+              >
+                다음
+              </button>
+            </>
+          )}
+
+          {setupPhase === 'obstacles' && (
+            <>
+              <button className="btn-sub px-5 py-2 text-sm" onClick={() => setSetupPhase('end')}>
+                이전
+              </button>
+              <button
+                className="btn-game px-10 py-2 text-sm"
+                onClick={handleSubmit}
+                disabled={!isMapValid}
+              >
+                완료
+              </button>
+            </>
+          )}
+        </div>
       </div>
-
-      {setupPhase === 'obstacles' && !isMapValid && obstacles.length > 0 && (
-        <p className="text-red-400 text-xs mt-2 px-3 py-1 rounded-full bg-red-500/10 border border-red-500/40">
-          현재 맵 구성으로는 시작점에서 도착점까지 도달할 수 없습니다.
-        </p>
-      )}
     </div>
   );
 };
 
-export default GameSetup; 
+export default GameSetup;

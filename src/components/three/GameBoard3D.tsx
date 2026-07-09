@@ -206,10 +206,12 @@ function WallSlot({
   seg,
   occupied,
   onPlace,
+  previewColor = COLORS.wallPreview,
 }: {
   seg: WallSegment;
   occupied: boolean;
   onPlace: (position: Position, direction: Direction) => void;
+  previewColor?: string;
 }) {
   const [hovered, setHovered] = useState(false);
 
@@ -247,7 +249,7 @@ function WallSlot({
       </mesh>
 
       {/* 호버 미리보기 (빈 슬롯일 때만) */}
-      {hovered && !occupied && <WallBox seg={seg} color={COLORS.wallPreview} opacity={0.55} />}
+      {hovered && !occupied && <WallBox seg={seg} color={previewColor} opacity={0.55} />}
     </group>
   );
 }
@@ -261,6 +263,8 @@ function Tile({
   isEnd,
   onCellClick,
   beaconFlag = false,
+  placeMode = 'wall',
+  isPendingEntrance = false,
 }: {
   position: Position;
   selectable: boolean;
@@ -269,6 +273,8 @@ function Tile({
   isEnd: boolean;
   onCellClick?: (p: Position) => void;
   beaconFlag?: boolean; // 1인칭: 벽 너머로 보이는 높은 깃발
+  placeMode?: 'wall' | 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
+  isPendingEntrance?: boolean; // 웜홀 입구로 지정됨 (출구 선택 대기)
 }) {
   const [hovered, setHovered] = useState(false);
   const checker = (position.row + position.col) % 2 === 0;
@@ -347,6 +353,30 @@ function Tile({
           />
         </mesh>
       )}
+
+      {/* 지뢰 배치 미리보기 */}
+      {hovered && selectable && placeMode === 'mine' && !isStart && !isEnd && (
+        <mesh position={[0, 0.2, 0]}>
+          <sphereGeometry args={[0.15, 16, 16]} />
+          <meshStandardMaterial color="#374151" transparent opacity={0.6} />
+        </mesh>
+      )}
+
+      {/* 웜홀 배치 미리보기 */}
+      {hovered && selectable && placeMode === 'wormhole' && !isStart && !isEnd && !isPendingEntrance && (
+        <mesh position={[0, 0.1, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.3, 0.05, 10, 28]} />
+          <meshStandardMaterial color="#a855f7" emissive="#a855f7" emissiveIntensity={0.4} transparent opacity={0.6} />
+        </mesh>
+      )}
+
+      {/* 웜홀 입구 지정됨 (출구 선택 대기 중 표시) */}
+      {isPendingEntrance && (
+        <mesh position={[0, 0.1, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.3, 0.06, 12, 32]} />
+          <meshStandardMaterial color="#a855f7" emissive="#a855f7" emissiveIntensity={0.8} />
+        </mesh>
+      )}
     </group>
   );
 }
@@ -405,6 +435,9 @@ interface GameBoard3DProps {
   item?: MapItem | null; // 맵 아이템 (1회성 벽/지뢰/웜홀)
   itemConsumed?: boolean; // 아이템 사용됨 여부
   revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들 (일반 벽처럼 노란색)
+  placeMode?: 'wall' | 'oneTimeWall' | 'mine' | 'wormhole' | 'radar'; // 제작 중 배치 모드 (호버 미리보기)
+  pendingCell?: Position | null; // 웜홀 입구로 지정된 셀 (출구 선택 대기)
+  fullscreen?: boolean; // 화면 전체를 채우는 스테이지 모드
   heightClassName?: string;
 }
 
@@ -434,52 +467,91 @@ function ItemVisuals({
   }
 
   if (item.type === 'mine' && item.position) {
-    const [x, , z] = cellToWorld(item.position);
-    return consumed ? (
-      // 폭발 흔적 (검게 그을린 자국)
+    return <MineVisual position={item.position} consumed={consumed} />;
+  }
+
+  if (item.type === 'wormhole' && item.entrance && item.exit) {
+    return <WormholeVisual entrance={item.entrance} exit={item.exit} consumed={consumed} />;
+  }
+
+  return null;
+}
+
+// 지뢰 - 빨간 램프가 깜빡이는 애니메이션
+function MineVisual({ position, consumed }: { position: Position; consumed: boolean }) {
+  const lampRef = useRef<THREE.MeshStandardMaterial>(null);
+  const [x, , z] = cellToWorld(position);
+
+  useFrame((state) => {
+    if (lampRef.current) {
+      lampRef.current.emissiveIntensity = 0.4 + Math.abs(Math.sin(state.clock.elapsedTime * 3)) * 1.2;
+    }
+  });
+
+  if (consumed) {
+    // 폭발 흔적 (검게 그을린 자국)
+    return (
       <mesh position={[x, 0.09, z]}>
         <cylinderGeometry args={[0.3, 0.3, 0.03, 24]} />
         <meshStandardMaterial color="#1c1917" roughness={1} />
       </mesh>
-    ) : (
-      <group position={[x, 0.2, z]}>
-        <mesh castShadow>
-          <sphereGeometry args={[0.15, 20, 20]} />
-          <meshStandardMaterial color="#374151" roughness={0.3} metalness={0.5} />
-        </mesh>
-        <mesh position={[0, 0.13, 0]}>
-          <cylinderGeometry args={[0.02, 0.02, 0.1, 8]} />
-          <meshStandardMaterial color="#ef4444" emissive="#ef4444" emissiveIntensity={0.6} />
-        </mesh>
-      </group>
     );
   }
 
-  if (item.type === 'wormhole' && item.entrance && item.exit) {
-    const [ex, , ez] = cellToWorld(item.entrance);
-    const [xx, , xz] = cellToWorld(item.exit);
-    const opacity = consumed ? 0.35 : 0.9;
-    return (
-      <group>
-        {/* 입구 - 진한 보라 소용돌이 */}
-        <mesh position={[ex, 0.1, ez]} rotation={[-Math.PI / 2, 0, 0]}>
+  return (
+    <group position={[x, 0.2, z]}>
+      <mesh castShadow>
+        <sphereGeometry args={[0.15, 20, 20]} />
+        <meshStandardMaterial color="#374151" roughness={0.3} metalness={0.5} />
+      </mesh>
+      <mesh position={[0, 0.13, 0]}>
+        <cylinderGeometry args={[0.02, 0.02, 0.1, 8]} />
+        <meshStandardMaterial ref={lampRef} color="#ef4444" emissive="#ef4444" emissiveIntensity={0.6} />
+      </mesh>
+    </group>
+  );
+}
+
+// 웜홀 - 회전하는 소용돌이 애니메이션
+function WormholeVisual({ entrance, exit, consumed }: { entrance: Position; exit: Position; consumed: boolean }) {
+  const entranceRef = useRef<THREE.Group>(null);
+  const exitRef = useRef<THREE.Group>(null);
+  const [ex, , ez] = cellToWorld(entrance);
+  const [xx, , xz] = cellToWorld(exit);
+  const opacity = consumed ? 0.35 : 0.9;
+
+  useFrame((_, delta) => {
+    const speed = consumed ? 0.4 : 2.2;
+    if (entranceRef.current) entranceRef.current.rotation.y += delta * speed;
+    if (exitRef.current) exitRef.current.rotation.y -= delta * speed * 0.7;
+  });
+
+  return (
+    <group>
+      {/* 입구 - 진한 보라 소용돌이 */}
+      <group ref={entranceRef} position={[ex, 0.1, ez]}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
           <torusGeometry args={[0.3, 0.06, 12, 32]} />
           <meshStandardMaterial color="#a855f7" emissive="#a855f7" emissiveIntensity={consumed ? 0.1 : 0.7} transparent opacity={opacity} />
         </mesh>
-        <mesh position={[ex, 0.08, ez]}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.06, 0]}>
+          <torusGeometry args={[0.18, 0.035, 10, 28]} />
+          <meshStandardMaterial color="#c084fc" emissive="#c084fc" emissiveIntensity={consumed ? 0.1 : 0.5} transparent opacity={opacity} />
+        </mesh>
+        <mesh position={[0, -0.02, 0]}>
           <cylinderGeometry args={[0.24, 0.24, 0.03, 24]} />
           <meshStandardMaterial color="#581c87" transparent opacity={opacity} />
         </mesh>
-        {/* 출구 - 밝은 보라 고리 */}
-        <mesh position={[xx, 0.1, xz]} rotation={[-Math.PI / 2, 0, 0]}>
+      </group>
+      {/* 출구 - 밝은 보라 고리 (반대 방향 회전) */}
+      <group ref={exitRef} position={[xx, 0.1, xz]}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
           <torusGeometry args={[0.3, 0.05, 12, 32]} />
           <meshStandardMaterial color="#d8b4fe" emissive="#d8b4fe" emissiveIntensity={consumed ? 0.1 : 0.5} transparent opacity={opacity} />
         </mesh>
       </group>
-    );
-  }
-
-  return null;
+    </group>
+  );
 }
 
 function BoardContents({
@@ -499,6 +571,8 @@ function BoardContents({
   item = null,
   itemConsumed = false,
   revealedWalls = [],
+  placeMode = 'wall',
+  pendingCell = null,
 }: GameBoard3DProps) {
   const isSetup = gamePhase === GamePhase.SETUP;
   const isFirstPerson = viewMode === 'first';
@@ -560,6 +634,8 @@ function BoardContents({
           isEnd={!!endPosition && isSamePosition(position, endPosition)}
           onCellClick={onCellClick}
           beaconFlag={isFirstPerson}
+          placeMode={placeMode}
+          isPendingEntrance={!!pendingCell && isSamePosition(position, pendingCell)}
         />
       );
     }
@@ -596,6 +672,7 @@ function BoardContents({
             seg={seg}
             occupied={occupiedKeys.has(segmentKey(seg))}
             onPlace={onDirectionClick}
+            previewColor={placeMode === 'oneTimeWall' ? '#22d3ee' : COLORS.wallPreview}
           />
         ))}
 
@@ -644,7 +721,7 @@ function BoardContents({
 
 // ===== 메인 컴포넌트 (Canvas 래퍼) =====
 const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
-  const { heightClassName = 'h-[340px] sm:h-[420px] md:h-[460px]' } = props;
+  const { heightClassName = 'h-[340px] sm:h-[420px] md:h-[460px]', fullscreen = false } = props;
 
   // 언마운트 시 커서 상태 복원
   useEffect(() => {
@@ -656,7 +733,13 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
   const span = BOARD_SIZE * SPACING;
 
   return (
-    <div className={`w-full max-w-2xl mx-auto ${heightClassName} rounded-2xl overflow-hidden border border-slate-700/60 shadow-xl shadow-black/50 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950`}>
+    <div
+      className={
+        fullscreen
+          ? 'absolute inset-0 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950'
+          : `w-full max-w-2xl mx-auto ${heightClassName} rounded-2xl overflow-hidden border border-slate-700/60 shadow-xl shadow-black/50 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950`
+      }
+    >
       <Canvas
         shadows
         dpr={[1, 2]}

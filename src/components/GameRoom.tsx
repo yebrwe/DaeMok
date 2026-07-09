@@ -865,97 +865,26 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       );
     }
     
-    // 메인 게임 컨텐츠
+    // 메인 게임 컨텐츠 - 풀스크린 3D 스테이지 + 오버레이 HUD
     return (
-      <div className="container mx-auto px-2 sm:px-4 py-2 sm:py-4">
-        {/* 통합된 헤더 정보 표시 */}
-        {renderGameHeader()}
-
-        {/* 오류/안내 메시지 */}
-        {message && gameState.phase !== GamePhase.END && (
-          <div className="text-center mb-2">
-            <p className="text-xs font-medium bg-amber-500/10 border border-amber-400/40 text-amber-200 py-1 px-3 rounded-full inline-block">
-              {message}
-            </p>
-          </div>
-        )}
-
-
-        {/* 게임 종료 결과 */}
-        {gameState.phase === GamePhase.END && (
-          <div className="text-center mb-3">
-            <div className={`game-panel !rounded-xl inline-block px-8 py-3 ${
-              gameState.draw
-                ? '!border-slate-500/60'
-                : gameState.winner === userId
-                  ? '!border-green-400/60 shadow-green-500/20'
-                  : '!border-red-400/60 shadow-red-500/20'
-            }`}>
-              <p className="text-[10px] tracking-[0.3em] text-slate-500 font-bold mb-1">GAME RESULT</p>
-              <p className={`text-xl font-black ${
-                gameState.draw
-                  ? 'text-slate-300'
-                  : gameState.winner === userId
-                    ? 'text-green-400'
-                    : 'text-red-400'
-              }`}>
-                {gameState.draw ? '🤝' : gameState.winner === userId ? '🏆' : '💀'} {getWinnerMessage()}
-              </p>
-
-              {/* 재시작 버튼 (게임 보드는 아래에서 같은 인스턴스로 계속 표시됨) */}
-              <div className="flex gap-2 mt-3 justify-center">
-                <button
-                  className="btn-game px-6 py-1.5 text-sm"
-                  onClick={handleRestartGame}
-                >
-                  재시작
-                </button>
-
-                <button
-                  className="btn-sub px-4 py-1.5 text-sm"
-                  onClick={handleLeaveWithConfirm}
-                >
-                  나가기
-                </button>
+      <div className="fixed inset-0 overflow-hidden bg-slate-950">
+        {/* 게임 스테이지 (헤더 아래 영역) */}
+        <div className="absolute inset-x-0 bottom-0 top-[86px]">
+          {gameState.phase === GamePhase.SETUP && !isReady ? (
+            <GameSetup key="setup" onMapComplete={handleMapComplete} />
+          ) : gameState.phase === GamePhase.SETUP && isReady ? (
+            <div key="waiting" className="absolute inset-0 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950 flex items-center justify-center">
+              <div className="game-panel px-10 py-6 text-center">
+                <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                <p className="text-sm mt-3 text-slate-300 font-medium">상대방 준비 대기</p>
+                <p className="text-[10px] text-slate-500 mt-1">상대가 맵을 완성하면 자동으로 시작됩니다</p>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* 게임 컴포넌트 */}
-        {gameState.phase === GamePhase.SETUP && !isReady ? (
-          <div key="setup-container">
-            <GameSetup onMapComplete={handleMapComplete} />
-            <div className="flex justify-center mt-2">
-              <button
-                className="btn-sub px-4 py-1.5 text-xs"
-                onClick={handleLeaveWithConfirm}
-              >
-                나가기
-              </button>
-            </div>
-          </div>
-        ) : gameState.phase === GamePhase.SETUP && isReady ? (
-          <div key="waiting-container" className="text-center py-8">
-            <div className="game-panel inline-block px-10 py-6">
-              <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
-              <p className="text-sm mt-3 text-slate-300 font-medium">상대방 준비 대기</p>
-              <p className="text-[10px] text-slate-500 mt-1">상대가 맵을 완성하면 자동으로 시작됩니다</p>
-              <div className="flex justify-center mt-4">
-                <button
-                  className="btn-sub px-4 py-1.5 text-xs"
-                  onClick={handleLeaveWithConfirm}
-                >
-                  나가기
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : (gameState.phase === GamePhase.PLAY || gameState.phase === GamePhase.END) && opponentMap ? (
-          /* PLAY -> END 전환 시에도 같은 GamePlay 인스턴스를 유지해
-             3D 캔버스가 파괴/재생성되지 않도록 한다 */
-          <div key="gameplay-container">
+          ) : (gameState.phase === GamePhase.PLAY || gameState.phase === GamePhase.END) && opponentMap ? (
+            /* PLAY -> END 전환 시에도 같은 GamePlay 인스턴스를 유지해
+               3D 캔버스가 파괴/재생성되지 않도록 한다 */
             <GamePlay
+              key="gameplay"
               map={opponentMap}
               onGameComplete={handleGameComplete}
               userId={userId}
@@ -974,15 +903,63 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               }
               onForfeit={handleForfeit}
             />
+          ) : gameState.phase === GamePhase.END ? (
+            <div key="gameover" className="absolute inset-0 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950" />
+          ) : (
+            <div key="loading" className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center">
+                <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                <p className="text-sm mt-2 text-slate-400">게임 로딩</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 상단 헤더 (방 정보/플레이어/전적/나가기) */}
+        <div className="absolute top-0 inset-x-0 z-30 px-2 pt-2 flex justify-center pointer-events-none">
+          <div className="pointer-events-auto w-full max-w-3xl">{renderGameHeader()}</div>
+        </div>
+
+        {/* 오류/안내 메시지 */}
+        {message && gameState.phase !== GamePhase.END && (
+          <div className="absolute bottom-40 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+            <p className="text-xs font-medium bg-amber-500/20 border border-amber-400/50 text-amber-100 py-1 px-3 rounded-full backdrop-blur-sm">
+              {message}
+            </p>
           </div>
-        ) : gameState.phase === GamePhase.END ? (
-          <div key="gameover-container" className="flex flex-col items-center">
-            {/* 맵 정보가 없는 상태로 종료된 경우 (보드 없이 결과만 표시) */}
-          </div>
-        ) : (
-          <div key="loading-container" className="text-center p-3">
-            <p className="text-sm">게임 로딩</p>
-            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mt-2"></div>
+        )}
+
+        {/* 게임 종료 결과 모달 (보드는 뒤에서 계속 공개 상태로 표시됨) */}
+        {gameState.phase === GamePhase.END && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
+            <div className={`pointer-events-auto game-panel !rounded-2xl px-10 py-5 text-center shadow-2xl ${
+              gameState.draw
+                ? '!border-slate-500/60'
+                : gameState.winner === userId
+                  ? '!border-green-400/60 shadow-green-500/20'
+                  : '!border-red-400/60 shadow-red-500/20'
+            }`}>
+              <p className="text-[10px] tracking-[0.3em] text-slate-500 font-bold mb-1">GAME RESULT</p>
+              <p className={`text-2xl font-black ${
+                gameState.draw
+                  ? 'text-slate-300'
+                  : gameState.winner === userId
+                    ? 'text-green-400'
+                    : 'text-red-400'
+              }`}>
+                {gameState.draw ? '🤝' : gameState.winner === userId ? '🏆' : '💀'} {getWinnerMessage()}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-1">보드에서 상대의 벽과 아이템을 확인해보세요</p>
+
+              <div className="flex gap-2 mt-4 justify-center">
+                <button className="btn-game px-8 py-2 text-sm" onClick={handleRestartGame}>
+                  재시작
+                </button>
+                <button className="btn-sub px-5 py-2 text-sm" onClick={handleLeaveWithConfirm}>
+                  나가기
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -993,4 +970,4 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   return renderContent();
 };
 
-export default GameRoom; 
+export default GameRoom;
