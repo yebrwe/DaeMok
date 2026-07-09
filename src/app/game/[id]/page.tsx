@@ -3,11 +3,11 @@
 import React from 'react';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import { getAuth } from 'firebase/auth';
 import { getDatabase, ref, get } from 'firebase/database';
-import { firebaseInitPromise, handleDirectRoomAccess } from '@/lib/firebase';
+import { firebaseInitPromise } from '@/lib/firebase';
 
-export default function GamePage({ params }: { params: { id: string } }) {
+export default function GamePage({ params }: { params: Promise<{ id: string }> }) {
   const unwrappedParams = React.use(params);
   const gameId = unwrappedParams.id;
   

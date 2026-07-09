@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useRef, useCallback } from 'react';
-import { CellType, CollisionWall, Direction, GameMap, GamePhase, Obstacle, Position } from '@/types/game';
-import { BOARD_SIZE, canMove, isSamePosition } from '@/lib/gameUtils';
+import { CellType, CollisionWall, Direction, GamePhase, Obstacle, Position } from '@/types/game';
+import { BOARD_SIZE, isSamePosition } from '@/lib/gameUtils';
 
 interface GameBoardProps {
   gamePhase: GamePhase;
@@ -17,6 +17,7 @@ interface GameBoardProps {
   selectionMode?: 'start' | 'end' | 'none';
   collisionWalls?: CollisionWall[];
   playerPhotoURL?: string;
+  revealObstacles?: boolean; // 게임 종료 후 벽 공개
 }
 
 const GameBoard: React.FC<GameBoardProps> = ({
@@ -32,6 +33,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
   selectionMode = 'none',
   collisionWalls = [],
   playerPhotoURL,
+  revealObstacles = false,
 }) => {
   const [hoveredCell, setHoveredCell] = useState<Position | null>(null);
   const [hoveredWall, setHoveredWall] = useState<{position: Position, direction: Direction} | null>(null);
@@ -169,12 +171,6 @@ const GameBoard: React.FC<GameBoardProps> = ({
         onMouseLeave={() => {
           if (isMouseDownRef.current) return; // 마우스 드래그 중에는 이벤트 무시
           !isMinimapMode && setHoveredCellWithDebounce(null);
-        }}
-        onTouchStart={() => !isMinimapMode && setHoveredCellWithDebounce(position)}
-        onTouchEnd={() => {
-          if (!readOnly && !isMinimapMode && onCellClick) {
-            onCellClick(position);
-          }
         }}
       >
         {/* 시작점 마커 */}
@@ -326,10 +322,16 @@ const GameBoard: React.FC<GameBoardProps> = ({
             <div className="w-3/4 h-1/2 bg-red-500" />
           </div>
         )}
+        {/* 게임 종료: 아직 충돌하지 않은 벽 공개 */}
+        {gamePhase === GamePhase.PLAY && revealObstacles && isBlocked && !isCollision && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-3/4 h-1/2 bg-amber-400" />
+          </div>
+        )}
       </div>
     );
   };
-  
+
   // 벽 렌더링 함수 (세로 벽)
   const renderVerticalWall = (row: number, col: number) => {
     const position = { row: Math.floor(row/2), col: Math.floor(col/2) };
@@ -416,6 +418,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {gamePhase === GamePhase.PLAY && isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="w-1/2 h-3/4 bg-red-500" />
+          </div>
+        )}
+        {/* 게임 종료: 아직 충돌하지 않은 벽 공개 */}
+        {gamePhase === GamePhase.PLAY && revealObstacles && isBlocked && !isCollision && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-1/2 h-3/4 bg-amber-400" />
           </div>
         )}
       </div>

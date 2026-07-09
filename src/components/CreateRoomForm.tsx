@@ -46,7 +46,7 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
       }
     } catch (error) {
       console.error('방 생성 오류:', error);
-      setError('방 생성 중 오류가 발생했습니다.');
+      setError(error instanceof Error ? error.message : '방 생성 중 오류가 발생했습니다.');
     } finally {
       setIsCreating(false);
     }

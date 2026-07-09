@@ -9,7 +9,7 @@ import { useRoomPresence } from '@/hooks/useRoomPresence';
 import { getDatabase, ref, get, update, serverTimestamp } from 'firebase/database';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 
-export default function RoomPage({ params }: { params: { id: string } }) {
+export default function RoomPage({ params }: { params: Promise<{ id: string }> }) {
   const unwrappedParams = React.use(params);
   const roomId = unwrappedParams.id;
   const { user, loading } = useAuth();

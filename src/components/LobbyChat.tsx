@@ -79,34 +79,33 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
     // 사용자 온라인 상태 업데이트
     const updateOnlineStatus = async () => {
       try {
-        await updateUserOnlineStatus(currentUserId, true);
+        await updateUserOnlineStatus(currentUserId);
         console.log('로비에서 사용자를 온라인으로 표시:', currentUserId);
       } catch (error) {
         console.error('온라인 상태 업데이트 오류:', error);
       }
     };
-    
+
     // 초기 온라인 상태 설정
     updateOnlineStatus();
-    
-    // 연결 상태 모니터링
+
+    // 페이지 언로드 시 오프라인으로 표시 (리스너는 한 번만 등록)
+    const handleBeforeUnload = () => {
+      const db = getDatabase();
+      const userStatusRef = ref(db, `lobbyOnline/${currentUserId}`);
+      // 동기적으로 업데이트 (beforeunload에서는 비동기 작업이 완료되지 않을 수 있음)
+      update(userStatusRef, { isOnline: false, lastSeen: serverTimestamp() });
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    // 연결 상태 모니터링 - 재연결 시 온라인 상태 복구
     const database = getDatabase();
     const connectedRef = ref(database, '.info/connected');
-    
+
     const connectedListener = onValue(connectedRef, (snap) => {
-      const connected = snap.val();
-      if (connected) {
+      if (snap.val()) {
         console.log('Firebase에 연결됨, 온라인 상태 업데이트');
         updateOnlineStatus();
-        
-        // 페이지 언로드 시 오프라인으로 표시
-        window.addEventListener('beforeunload', () => {
-          console.log('페이지 언로드: 로비에서 사용자를 오프라인으로 표시');
-          const db = getDatabase();
-          const userStatusRef = ref(db, `lobbyOnline/${currentUserId}`);
-          // 동기적으로 업데이트 (beforeunload에서는 비동기 작업이 완료되지 않을 수 있음)
-          update(userStatusRef, { isOnline: false, lastSeen: serverTimestamp() });
-        });
       }
     });
     
@@ -123,8 +122,9 @@ const LobbyChat: React.FC<LobbyChatProps> = ({ currentUserId }) => {
     
     return () => {
       console.log('LobbyChat 언마운트 - 리스너 정리');
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       connectedListener(); // 연결 상태 리스너 해제
-      
+
       if (typeof unsubscribeOnlineUsers === 'function') {
         unsubscribeOnlineUsers(); // 온라인 사용자 목록 구독 해제
       }

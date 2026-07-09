@@ -110,13 +110,14 @@ export default function PracticePage() {
             </ul>
           </div>
           
-          <GamePlay 
+          <GamePlay
             key={gameKey}
-            map={map} 
-            onGameComplete={handleGameComplete} 
-            userId="practice-user" 
-            roomId="practice-room" 
-            currentTurn="practice-user" 
+            map={map}
+            onGameComplete={handleGameComplete}
+            userId="practice-user"
+            roomId="practice-room"
+            currentTurn="practice-user"
+            isPractice
           />
         </div>
       )}

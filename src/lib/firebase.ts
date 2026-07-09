@@ -1,18 +1,19 @@
 'use client';
 
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, onValue, set, push, update, remove, get, onDisconnect, serverTimestamp } from 'firebase/database';
-import { 
-  getAuth, 
-  GoogleAuthProvider, 
-  signInWithPopup, 
-  signOut, 
-  setPersistence, 
+import { getDatabase, ref, onValue, set, push, update, remove, get, onDisconnect, serverTimestamp, runTransaction, connectDatabaseEmulator } from 'firebase/database';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+  setPersistence,
   browserLocalPersistence,
   onIdTokenChanged,
   User,
   Auth,
-  onAuthStateChanged
+  onAuthStateChanged,
+  connectAuthEmulator
 } from 'firebase/auth';
 import { getAnalytics, isSupported } from 'firebase/analytics';
 import { Room, GameState, GamePhase, SocketEvents, GameMap, UserProfile } from '@/types/game';
@@ -51,6 +52,14 @@ export const firebaseInitPromise = (async () => {
       });
     
     database = getDatabase(app);
+
+    // 로컬 에뮬레이터 연결 (E2E 테스트용 - NEXT_PUBLIC_FIREBASE_EMULATOR=1 빌드에서만)
+    if (process.env.NEXT_PUBLIC_FIREBASE_EMULATOR === '1' && typeof window !== 'undefined') {
+      connectAuthEmulator(auth, 'http://localhost:9099', { disableWarnings: true });
+      connectDatabaseEmulator(database, 'localhost', 9000);
+      console.log('Firebase 에뮬레이터에 연결됨 (auth:9099, database:9000)');
+    }
+
     console.log('Firebase 초기화 완료');
     return { app, auth, database };
   } catch (error) {
@@ -203,29 +212,28 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
     const roomExists = Object.values(existingRooms).some(
       (room: any) => room.name === name && room.createdBy === creatorId
     );
-    
+
     if (roomExists) {
       console.log('이미 같은 이름의 방이 존재합니다:', name);
-      return null;
+      throw new Error('이미 같은 이름의 방이 존재합니다. 다른 이름을 사용해주세요.');
     }
-    
+
     // 기본 방 정보 생성
     const newRoomRef = push(roomsRef);
     const roomId = newRoomRef.key;
-    
+
     if (!roomId) {
       console.error('방 ID 생성 실패');
       return null;
     }
-    
+
     // 방 생성 시간
     const now = serverTimestamp();
-    
+
     // 초기 게임 상태 설정
     const initialGameState = {
       phase: 'setup', // setup, play, end
-      turn: 0,
-      currentPlayer: creatorId,
+      currentTurn: creatorId, // 첫 게임 선턴은 방장
       players: {
         [creatorId]: {
           id: creatorId,
@@ -235,11 +243,7 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
           lastSeen: now
         }
       },
-      map: null,
-      obstacles: [],
-      winner: null,
-      startedAt: null,
-      endedAt: null
+      winner: null
     };
     
     // 방 데이터 구조
@@ -275,7 +279,7 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
     return roomId;
   } catch (error) {
     console.error('방 생성 중 오류:', error);
-    return null;
+    throw error;
   } finally {
     // 방 생성 작업 완료
     roomCreationInProgress = false;
@@ -305,18 +309,21 @@ export const joinRoom = async (roomId: string, userId: string): Promise<boolean>
     }
     
     const roomData = snapshot.val();
-    
-    // 최대 인원 제한 체크
-    if (roomData.players && roomData.players.length >= roomData.maxPlayers) {
+
+    // 이미 참여 중인 사용자는 인원 제한과 무관하게 재입장 허용
+    const currentPlayers: string[] = roomData.players ? [...roomData.players] : [];
+    const alreadyJoined = currentPlayers.includes(userId);
+
+    // 최대 인원 제한 체크 (신규 입장자만)
+    if (!alreadyJoined && currentPlayers.length >= roomData.maxPlayers) {
       console.error('방 인원이 가득 참:', roomId);
       return false;
     }
-    
+
     // 플레이어 목록에 사용자 추가
-    const updatedPlayers = roomData.players ? [...roomData.players] : [];
-    if (!updatedPlayers.includes(userId)) {
-      updatedPlayers.push(userId);
-      await update(roomRef, { players: updatedPlayers });
+    if (!alreadyJoined) {
+      currentPlayers.push(userId);
+      await update(roomRef, { players: currentPlayers });
     }
     
     // 게임 상태에 플레이어 추가 (위치 정보 포함)
@@ -371,102 +378,71 @@ export const getGameState = (roomId: string, callback: (gameState: GameState) =>
   });
 };
 
+// 게임 시작 시도 - 트랜잭션으로 안전하게 SETUP -> PLAY 전환
+// 두 클라이언트가 동시에 호출해도 한 번만 시작되며, 서로의 데이터를 덮어쓰지 않음
+export const tryStartGame = async (roomId: string): Promise<boolean> => {
+  if (!database) {
+    console.error('Firebase Database가 초기화되지 않았습니다.');
+    return false;
+  }
+
+  const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
+
+  try {
+    const result = await runTransaction(gameStateRef, (state: any) => {
+      // 로컬 캐시가 비어 있으면 그대로 반환 -> 서버 데이터로 재시도됨
+      if (!state) return state;
+
+      // 이미 시작되었거나 종료된 게임이면 중단
+      if (state.phase !== GamePhase.SETUP) return;
+
+      const players = state.players || {};
+      const maps = state.maps || {};
+      const playerIds = Object.keys(players);
+
+      const enoughPlayers = playerIds.length >= 2;
+      const allReady = playerIds.every((id) => players[id]?.isReady);
+      const allMapsReady = playerIds.every((id) => maps[id]);
+
+      // 시작 조건 미충족 -> 중단 (다른 클라이언트가 나중에 다시 시도)
+      if (!enoughPlayers || !allReady || !allMapsReady) return;
+
+      // 각 플레이어는 상대방이 만든 맵의 시작 위치에서 출발
+      for (const playerId of playerIds) {
+        const opponentId = playerIds.find((id) => id !== playerId);
+        if (opponentId && maps[opponentId]?.startPosition) {
+          players[playerId].position = maps[opponentId].startPosition;
+        }
+      }
+
+      return {
+        ...state,
+        phase: GamePhase.PLAY,
+        currentTurn: state.currentTurn || playerIds[0],
+        players,
+      };
+    }, { applyLocally: false });
+
+    if (result.committed) {
+      console.log('게임 시작됨:', roomId);
+    }
+    return result.committed;
+  } catch (error) {
+    console.error('게임 시작 트랜잭션 오류:', error);
+    return false;
+  }
+};
+
 // 플레이어 준비 상태 설정
 export const setPlayerReady = async (roomId: string, userId: string, isReady: boolean): Promise<void> => {
   try {
     const playerRef = ref(database, `rooms/${roomId}/gameState/players/${userId}`);
     await update(playerRef, { isReady });
-    
-    // 모든 플레이어가 준비 상태이고 맵도 설정되었는지 확인
-    const roomRef = ref(database, `rooms/${roomId}`);
-    
-    return new Promise<void>((resolve, reject) => {
-      onValue(roomRef, async (snapshot) => {
-        try {
-          const room = snapshot.val() as Room;
-          
-          if (!room || !room.gameState) {
-            console.error('방 정보가 없습니다!', { room });
-            resolve();
-            return;
-          }
-          
-          console.log('플레이어 준비 상태 설정 후 게임 상태 확인:', {
-            phase: room.gameState.phase,
-            players: Object.keys(room.gameState.players || {}),
-            playersReady: Object.values(room.gameState.players || {}).map(p => p.isReady),
-            maps: Object.keys(room.gameState.maps || {})
-          });
-          
-          // 게임 시작 조건 확인 - gameState.players 객체를 기준으로 검사
-          const playerValues = Object.values(room.gameState.players || {});
-          const allPlayersReady = playerValues.length > 0 && playerValues.every(p => p.isReady);
-          const playerIds = Object.keys(room.gameState.players || {});
-          const mapsKeys = Object.keys(room.gameState.maps || {});
-          
-          // players 배열이 비어 있더라도 gameState.players 객체로 플레이어 수 확인
-          const allMapsReady = mapsKeys.length > 0 && mapsKeys.length === playerIds.length;
-          const enoughPlayers = playerIds.length >= 2;
-          
-          console.log('준비 상태 설정 후 게임 시작 조건 확인:', {
-            allPlayersReady,
-            allMapsReady,
-            enoughPlayers,
-            playerValues,
-            playerIds,
-            mapsKeys,
-            playersLength: playerIds.length
-          });
-          
-          // 모든 게임 시작 조건이 충족되면 게임 시작
-          if (allPlayersReady && allMapsReady && enoughPlayers) {
-            console.log('setPlayerReady에서 모든 게임 시작 조건 충족! 게임을 시작합니다');
-            const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
-            
-            // 중요: currentTurn 값 유지하기
-            const currentTurn = room.gameState.currentTurn || Object.keys(room.gameState.players)[0];
-            
-            console.log('게임 시작 전 턴 정보:', {
-              setupTurn: room.gameState.currentTurn,
-              startingTurn: currentTurn
-            });
-            
-            // 플레이어 시작 위치 설정
-            const updatedPlayers = { ...room.gameState.players };
-            
-            for (const playerId of playerIds) {
-              const opponentIds = playerIds.filter(id => id !== playerId);
-              if (opponentIds.length > 0) {
-                const opponentId = opponentIds[0]; // 첫 번째 상대만 사용
-                if (room.gameState.maps?.[opponentId]) {
-                  updatedPlayers[playerId].position = room.gameState.maps[opponentId].startPosition;
-                  console.log(`플레이어 ${playerId}의 시작 위치 설정:`, updatedPlayers[playerId].position);
-                } else {
-                  console.error(`상대 ${opponentId}의 맵이 없습니다!`);
-                }
-              }
-            }
-            
-            const updateData = {
-              phase: GamePhase.PLAY,
-              currentTurn,
-              players: updatedPlayers
-            };
-            
-            console.log('게임 상태 업데이트:', updateData);
-            await update(gameStateRef, updateData);
-            console.log('게임 상태 업데이트 완료! 게임 시작됨');
-          } else {
-            console.log('아직 게임 시작 조건이 충족되지 않았습니다. 대기 중...');
-          }
-          
-          resolve();
-        } catch (error) {
-          console.error('준비 상태 설정 중 오류 발생:', error);
-          reject(error);
-        }
-      }, { onlyOnce: true });
-    });
+
+    // 모든 플레이어가 준비되면 게임 시작
+    if (isReady) {
+      await tryStartGame(roomId);
+    }
   } catch (error) {
     console.error('플레이어 준비 상태 설정 중 오류 발생:', error);
     throw error;
@@ -486,108 +462,16 @@ export const placeObstacles = async (roomId: string, userId: string, map: GameMa
   }
 
   try {
-    console.log('맵 설정 중...', { roomId, userId, map });
+    console.log('맵 설정 중...', { roomId, userId });
     const mapRef = ref(database, `rooms/${roomId}/gameState/maps/${userId}`);
     await set(mapRef, map);
-    console.log('맵 설정 완료');
-    
+
     // 맵 설정 후 자동으로 준비 상태로 설정
     const playerRef = ref(database, `rooms/${roomId}/gameState/players/${userId}`);
     await update(playerRef, { isReady: true });
-    console.log('플레이어 준비 상태 업데이트 완료');
-    
-    // 다른 플레이어도 준비 상태인지 확인하고 게임 시작 조건 확인
-    console.log('방 정보 조회 시작');
-    const roomRef = ref(database, `rooms/${roomId}`);
-    
-    return new Promise<void>((resolve, reject) => {
-      onValue(roomRef, async (snapshot) => {
-        try {
-          console.log('방 정보 수신 완료');
-          const room = snapshot.val() as Room;
-          
-          if (!room || !room.gameState) {
-            console.error('방 정보가 없습니다!', { room });
-            resolve();
-            return;
-          }
-          
-          console.log('맵 설정 후 게임 상태 확인:', {
-            phase: room.gameState.phase,
-            players: Object.keys(room.gameState.players || {}),
-            playersReady: Object.values(room.gameState.players || {}).map(p => p.isReady),
-            maps: Object.keys(room.gameState.maps || {})
-          });
-          
-          // 게임 시작 조건 확인 - gameState.players 객체를 기준으로 검사
-          const playerValues = Object.values(room.gameState.players || {});
-          const allPlayersReady = playerValues.length > 0 && playerValues.every(p => p.isReady);
-          const playerIds = Object.keys(room.gameState.players || {});
-          const mapsKeys = Object.keys(room.gameState.maps || {});
-          
-          // players 배열이 비어 있더라도 gameState.players 객체로 플레이어 수 확인
-          const allMapsReady = mapsKeys.length > 0 && mapsKeys.length === playerIds.length;
-          const enoughPlayers = playerIds.length >= 2;
-          
-          console.log('게임 시작 조건 상세 확인:', {
-            allPlayersReady,
-            allMapsReady,
-            enoughPlayers,
-            playerValues,
-            playerIds,
-            mapsKeys,
-            playersLength: playerIds.length
-          });
-          
-          // 모든 게임 시작 조건이 충족되면 게임 시작
-          if (allPlayersReady && allMapsReady && enoughPlayers) {
-            console.log('모든 게임 시작 조건 충족! 게임을 시작합니다');
-            const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
-            
-            // 중요: currentTurn 값 유지하기
-            const currentTurn = room.gameState.currentTurn || Object.keys(room.gameState.players)[0];
-            
-            console.log('게임 시작 전 턴 정보:', {
-              setupTurn: room.gameState.currentTurn,
-              startingTurn: currentTurn
-            });
-            
-            // 플레이어 시작 위치 설정
-            const updatedPlayers = { ...room.gameState.players };
-            
-            for (const playerId of playerIds) {
-              const opponentIds = playerIds.filter(id => id !== playerId);
-              if (opponentIds.length > 0) {
-                const opponentId = opponentIds[0]; // 첫 번째 상대만 사용
-                if (room.gameState.maps?.[opponentId]) {
-                  updatedPlayers[playerId].position = room.gameState.maps[opponentId].startPosition;
-                  console.log(`플레이어 ${playerId}의 시작 위치 설정:`, updatedPlayers[playerId].position);
-                } else {
-                  console.error(`상대 ${opponentId}의 맵이 없습니다!`);
-                }
-              }
-            }
-            
-            const updateData = {
-              phase: GamePhase.PLAY,
-              currentTurn,
-              players: updatedPlayers
-            };
-            
-            console.log('게임 상태 업데이트:', updateData);
-            await update(gameStateRef, updateData);
-            console.log('게임 상태 업데이트 완료! 게임 시작됨');
-          } else {
-            console.log('아직 게임 시작 조건이 충족되지 않았습니다. 대기 중...');
-          }
-          
-          resolve();
-        } catch (error) {
-          console.error('게임 시작 처리 중 오류 발생:', error);
-          reject(error);
-        }
-      }, { onlyOnce: true });
-    });
+
+    // 모든 플레이어가 준비되면 게임 시작 (트랜잭션이라 중복 호출돼도 안전)
+    await tryStartGame(roomId);
   } catch (error) {
     console.error('맵 설정 중 오류 발생:', error);
     throw error;
@@ -1174,31 +1058,3 @@ export const getRoomOnlineUsers = (roomId: string, callback: (users: UserProfile
     callback(users);
   });
 };
-
-// 게임 시작 함수 수정
-export const startGame = async (roomId: string) => {
-  const database = getDatabase();
-  const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
-  
-  // 먼저 현재 게임 상태 가져오기
-  const snapshot = await get(gameStateRef);
-  if (!snapshot.exists()) return false;
-  
-  const gameState = snapshot.val();
-  
-  // 중요: currentTurn 값 유지하기
-  const currentTurn = gameState.currentTurn || Object.keys(gameState.players)[0];
-  
-  console.log('게임 시작 전 턴 정보:', {
-    setupTurn: gameState.currentTurn,
-    startingTurn: currentTurn
-  });
-  
-  // 게임 상태 업데이트 - currentTurn 유지
-  await update(gameStateRef, {
-    phase: 'play',
-    currentTurn: currentTurn  // 설정 단계의 턴 정보 유지
-  });
-  
-  return true;
-}; 

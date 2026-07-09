@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Direction, GameMap, GamePhase, Obstacle, Position } from '@/types/game';
 import GameBoard from './GameBoard';
+import GameBoard3D from './three/GameBoard3D';
 import { isValidMap, BOARD_SIZE } from '@/lib/gameUtils';
 
 interface GameSetupProps {
@@ -17,6 +18,8 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   const [obstacles, setObstacles] = useState<Obstacle[]>([]);
   const [setupPhase, setSetupPhase] = useState<'start' | 'end' | 'obstacles'>('start');
   const [isMapValid, setIsMapValid] = useState<boolean>(false);
+  // 맵 제작은 정밀한 배치가 필요하므로 2D가 기본, 3D는 미리보기용
+  const [view3D, setView3D] = useState<boolean>(false);
   
   // 고유한 벽의 수 계산 함수
   const countUniqueObstacles = (obstacleList: Obstacle[]): number => {
@@ -264,18 +267,26 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   return (
     <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
       <div className="w-full flex justify-between items-center mb-2 px-2">
-        <div className="text-xs">
-          {setupPhase === 'start' && '시작점'}
-          {setupPhase === 'end' && '도착점'}
-          {setupPhase === 'obstacles' && '장애물'}
+        <div className="text-xs font-medium">
+          {setupPhase === 'start' && '시작점을 선택하세요'}
+          {setupPhase === 'end' && '도착점을 선택하세요'}
+          {setupPhase === 'obstacles' && '벽(장애물)을 배치하세요'}
         </div>
-        {setupPhase === 'obstacles' && (
-          <div className="text-xs flex items-center">
-            <span className={`${remainingObstacles <= 5 ? 'text-red-500 font-bold' : ''}`}>
-              {MAX_OBSTACLES - remainingObstacles}/{MAX_OBSTACLES}
-            </span>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {setupPhase === 'obstacles' && (
+            <div className="text-xs flex items-center">
+              <span className={`${remainingObstacles <= 5 ? 'text-red-500 font-bold' : ''}`}>
+                {MAX_OBSTACLES - remainingObstacles}/{MAX_OBSTACLES}
+              </span>
+            </div>
+          )}
+          <button
+            className="text-xs px-2 py-0.5 rounded border border-gray-300 bg-white hover:bg-gray-100 transition-colors"
+            onClick={() => setView3D((prev) => !prev)}
+          >
+            {view3D ? '2D 보기' : '3D 보기'}
+          </button>
+        </div>
       </div>
       
       {setupPhase === 'obstacles' && (
@@ -294,14 +305,27 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       )}
       
       <div className="flex justify-center w-full">
-        <GameBoard
-          gamePhase={GamePhase.SETUP}
-          startPosition={startPosition}
-          endPosition={endPosition}
-          obstacles={obstacles}
-          onCellClick={handleCellClick}
-          onDirectionClick={handleDirectionClick}
-        />
+        {view3D ? (
+          <GameBoard3D
+            gamePhase={GamePhase.SETUP}
+            startPosition={startPosition}
+            endPosition={endPosition}
+            obstacles={obstacles}
+            onCellClick={setupPhase !== 'obstacles' ? handleCellClick : undefined}
+            onDirectionClick={setupPhase === 'obstacles' ? handleDirectionClick : undefined}
+            selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}
+          />
+        ) : (
+          <GameBoard
+            gamePhase={GamePhase.SETUP}
+            startPosition={startPosition}
+            endPosition={endPosition}
+            obstacles={obstacles}
+            onCellClick={handleCellClick}
+            onDirectionClick={handleDirectionClick}
+            selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}
+          />
+        )}
       </div>
       
       <div className="mt-3 flex gap-2 w-full justify-center">

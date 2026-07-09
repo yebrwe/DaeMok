@@ -43,6 +43,9 @@ export interface Player {
   isOnline?: boolean;
   lastSeen?: any; // serverTimestamp 타입
   photoURL?: string | null; // 프로필 이미지 URL 추가
+  finished?: boolean; // 도착점 골인 여부 (골인 후에는 관전)
+  finishMoves?: number; // 완주에 소모한 턴 수 (승패 판정 기준)
+  forfeited?: boolean; // 포기 여부
 }
 
 // 게임 맵 타입
@@ -68,6 +71,7 @@ export interface GameState {
   maps?: Record<string, GameMap>;
   currentTurn?: string | null;
   winner?: string | null;
+  draw?: boolean; // 동일한 턴 수로 완주 -> 무승부
   collisionWalls?: any[];
   turnMessage?: string;
   turnMessageTimestamp?: any;

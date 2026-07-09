@@ -1,21 +1,19 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { GameMap, GamePhase, Player } from '@/types/game';
+import { GameMap, GamePhase } from '@/types/game';
 import GameSetup from './GameSetup';
 import GamePlay from './GamePlay';
 import { useGameState } from '@/hooks/useFirebase';
-import { 
-  placeObstacles, 
-  setPlayerReady, 
-  endGame, 
+import {
+  placeObstacles,
   leaveRoom,
   tryRestoreAuth,
   updateRoomUserStatus,
   getRoomOnlineUsers
 } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
-import { getDatabase, ref, update, get, remove, onValue, query, orderByChild, equalTo, serverTimestamp } from 'firebase/database';
+import { getDatabase, ref, update, get, remove, onValue, serverTimestamp } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
 
 // 컴포넌트 마운트 시 사용자 상태 확인
@@ -116,6 +114,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     [userId: string]: {
       wins: number;
       losses: number;
+      draws?: number;
       displayName?: string;
     }
   }>({});
@@ -165,11 +164,29 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   
   // 승자 메시지 함수를 useCallback으로 메모이제이션
   const getWinnerMessage = useCallback(() => {
-    if (!gameState || !gameState.winner) return '';
-    
+    if (!gameState) return '';
+
+    const players = gameState.players || {};
+    const myMoves = players[userId]?.finishMoves;
+
+    // 같은 턴 수로 완주 -> 무승부
+    if (gameState.draw) {
+      return `무승부입니다! (둘 다 ${myMoves ?? '같은'}턴 소모)`;
+    }
+
+    if (!gameState.winner) return '';
+
     const isWinner = gameState.winner === userId;
-    return isWinner ? '승리했습니다!' : '패배했습니다.';
-  }, [gameState?.winner, userId]);
+
+    if (isWinner) {
+      const opponentForfeited = Object.entries(players).some(
+        ([id, p]) => id !== userId && p.forfeited
+      );
+      return opponentForfeited ? '승리했습니다! (상대방 포기)' : '승리했습니다! (더 적은 턴으로 완주)';
+    }
+
+    return players[userId]?.forfeited ? '포기하여 패배했습니다.' : '패배했습니다.';
+  }, [gameState, userId]);
   
   // 현재 턴 표시 함수 추가
   const renderTurnIndicator = () => {
@@ -187,86 +204,29 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 게임 상태 변경 감지
   useEffect(() => {
     if (!gameState) return;
-    
-    // 디버깅: ID 체크
-    console.log('현재 사용자 ID 확인:', userId);
-    if (!userId) {
-      console.error('GameRoom: 유효하지 않은 사용자 ID');
-    }
-    
-    // 상세 게임 상태 로깅
-    console.log('게임 상태 변경 감지:', {
-      phase: gameState.phase,
-      playersCount: gameState.players ? Object.keys(gameState.players).length : 0,
-      mapsCount: gameState.maps ? Object.keys(gameState.maps).length : 0,
-      currentTurn: gameState.currentTurn,
-      winner: gameState.winner,
-      userId: userId
-    });
-    
-    // 플레이어 ID 로깅 (디버깅용)
-    if (gameState.players) {
-      console.log('방 내 모든 플레이어 ID:', Object.keys(gameState.players));
-    }
-    
-    // 플레이어 정보 로깅
-    if (gameState.players) {
-      console.log('플레이어 정보:', Object.values(gameState.players).map(p => ({
-        id: p.id,
-        isReady: p.isReady,
-        position: p.position
-      })));
-    }
-    
-    // 플레이어 정보 업데이트
+
+    // 플레이어 준비 상태 동기화
     if (gameState.players) {
       const me = gameState.players[userId];
       if (me) {
         setIsReady(me.isReady);
-        console.log(`내 준비 상태: ${me.isReady}`);
-      }
-      
-      // 새로고침 후에도 상대방 정보가 제대로 표시되도록 수정
-      const playerIds = Object.keys(gameState.players);
-      
-      // 방에 다른 플레이어가 있는지 확인하고 표시
-      if (playerIds.length > 1) {
-        console.log('다른 플레이어가 방에 있습니다.');
-      } else {
-        console.log('현재 방에 혼자 있습니다.');
       }
     }
-    
-    // 게임 맵 업데이트
+
+    // 게임 맵 동기화
     if (gameState.maps) {
-      console.log('게임 맵 정보:', Object.keys(gameState.maps));
-      
-      // 내 맵과 상대방 맵 구분
       const mapEntries = Object.entries(gameState.maps);
       for (const [playerId, map] of mapEntries) {
         if (playerId === userId) {
           setMyMap(map);
-          console.log('내 맵 설정됨');
         } else {
           setOpponentMap(map);
-          console.log('상대방 맵 설정됨');
         }
       }
-    }
-    
-    // 선턴 정보 명확하게 로깅
-    if (gameState.phase === GamePhase.SETUP && gameState.currentTurn) {
-      console.log('세팅 단계 선턴 정보:', {
-        currentTurn: gameState.currentTurn,
-        isMyTurn: gameState.currentTurn === userId,
-        userId: userId
-      });
-    } else if (gameState.phase === GamePhase.PLAY && gameState.currentTurn) {
-      console.log('게임 시작 후 턴 정보:', {
-        currentTurn: gameState.currentTurn,
-        isMyTurn: gameState.currentTurn === userId,
-        userId: userId
-      });
+    } else if (gameState.phase === GamePhase.SETUP) {
+      // 재시작 등으로 맵이 제거되면 로컬 상태도 초기화 (상대 클라이언트에서도 반영)
+      setMyMap(null);
+      setOpponentMap(null);
     }
   }, [gameState, userId]);
   
@@ -293,31 +253,17 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   
   // 맵 설정 완료 처리
   const handleMapComplete = async (map: GameMap) => {
-    console.log('맵 설정 완료 처리 시작');
     try {
       if (!userId) {
         console.error('유효하지 않은 사용자 ID');
         setMessage('유효하지 않은 사용자 ID입니다. 다시 로그인해주세요.');
         return;
       }
-      
-      // 맵 저장
-      console.log('맵 저장 시작');
+
+      // 맵 저장 (내부에서 준비 상태 설정 + 게임 시작 조건 확인까지 처리)
       await placeObstacles(roomId, userId, map);
-      
-      // 플레이어 준비 상태로 변경
-      console.log('플레이어 준비 상태 변경');
-      await setPlayerReady(roomId, userId, true);
+
       setIsReady(true);
-      
-      // 디버깅: 현재 턴 정보 확인
-      console.log('맵 설정 완료 후 turnInfo 확인:', {
-        currentTurn: gameState?.currentTurn,
-        userId: userId,
-        isMyTurn: gameState?.currentTurn === userId
-      });
-      
-      // 맵 설정
       setMyMap(map);
     } catch (error) {
       console.error('맵 설정 중 오류 발생:', error);
@@ -325,88 +271,138 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
-  // 게임 종료 처리
+  // 골인 처리 - 승자는 게임이 끝날 때 "소모한 턴 수가 적은 쪽"으로 결정
+  // 먼저 골인해도 상대가 더 적은 턴으로 완주하면 역전됨. 같은 턴 수면 무승부.
   const handleGameComplete = async (moves: number) => {
-    console.log(`게임 완료! 총 ${moves}번 이동했습니다.`);
-    
-    // 게임 종료 상태로 변경하되, 화면은 유지
-    if (gameState?.phase !== GamePhase.END) {
-      // updateGamePhase 함수 정의
-      const updateGamePhase = async (phase: GamePhase) => {
-        const database = getDatabase();
-        const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
-        await update(gameStateRef, { phase });
-      };
-      
-      await updateGamePhase(GamePhase.END);
-    }
-    
-    // Firebase에 승리자 정보 기록
+    console.log(`완주! 총 ${moves}턴 소모.`);
+
     const database = getDatabase();
     const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
-    
+
     try {
-      await update(gameStateRef, { 
-        winner: userId,
-        phase: GamePhase.END 
-      });
-      
-      // 전적 업데이트
-      await updateGameStats(userId);
-      
-      // 승리 메시지 표시
-      setMessage(`축하합니다! ${moves}번 이동으로 게임을 완료했습니다. 다시 게임을 시작하려면 재시작 버튼을 클릭하세요.`);
+      // 최신 상태 기준으로 판단 (props의 gameState는 오래됐을 수 있음)
+      const snapshot = await get(gameStateRef);
+      if (!snapshot.exists()) return;
+      const currentState = snapshot.val();
+
+      const players = currentState.players || {};
+      const playerIds = Object.keys(players);
+      const others = playerIds.filter((id) => id !== userId);
+      const unfinishedOthers = others.filter((id) => !players[id]?.finished);
+
+      // 완주 기록 + 턴/종료 처리를 하나의 원자적 업데이트로
+      const updates: Record<string, unknown> = {
+        [`players/${userId}/finished`]: true,
+        [`players/${userId}/finishMoves`]: moves,
+      };
+
+      if (unfinishedOthers.length > 0) {
+        // 아직 완주하지 않은 상대가 있으면 게임 계속 -> 남은 플레이어가 연속으로 턴 진행
+        updates.currentTurn = unfinishedOthers[0];
+        await update(gameStateRef, updates);
+        return;
+      }
+
+      // 마지막 완주자 -> 턴 수 비교로 승자 결정
+      const finalMoves: Array<[string, number]> = playerIds.map((id) => [
+        id,
+        id === userId ? moves : players[id]?.finishMoves ?? Number.MAX_SAFE_INTEGER,
+      ]);
+      const minMoves = Math.min(...finalMoves.map(([, count]) => count));
+      const bestPlayers = finalMoves.filter(([, count]) => count === minMoves).map(([id]) => id);
+
+      updates.phase = GamePhase.END;
+      if (bestPlayers.length === 1) {
+        updates.winner = bestPlayers[0];
+        updates.draw = null;
+      } else {
+        updates.winner = null;
+        updates.draw = true;
+      }
+
+      await update(gameStateRef, updates);
+
+      // 전적 기록 (무승부면 null)
+      await updateGameStats(bestPlayers.length === 1 ? bestPlayers[0] : null);
     } catch (error) {
-      console.error('게임 완료 처리 중 오류:', error);
-      setMessage('게임 완료 처리 중 오류가 발생했습니다.');
+      console.error('완주 처리 중 오류:', error);
+      setMessage('완주 처리 중 오류가 발생했습니다.');
+    }
+  };
+
+  // 포기 처리 - 상대가 먼저 완주한 뒤 남은 플레이어가 포기하면 완주한 상대의 승리로 종료
+  const handleForfeit = async () => {
+    const database = getDatabase();
+    const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
+
+    try {
+      const snapshot = await get(gameStateRef);
+      if (!snapshot.exists()) return;
+      const players = snapshot.val().players || {};
+      const finishedOpponent =
+        Object.keys(players).find((id) => id !== userId && players[id]?.finished) || null;
+
+      await update(gameStateRef, {
+        phase: GamePhase.END,
+        winner: finishedOpponent,
+        [`players/${userId}/forfeited`]: true,
+      });
+
+      if (finishedOpponent) {
+        await updateGameStats(finishedOpponent);
+      }
+      console.log('포기 처리 완료');
+    } catch (error) {
+      console.error('포기 처리 중 오류:', error);
+      setMessage('포기 처리 중 오류가 발생했습니다.');
     }
   };
   
-  // 전적 업데이트 함수
-  const updateGameStats = async (winnerId: string) => {
+  // 전적 업데이트 함수 (winnerId가 null이면 무승부)
+  const updateGameStats = async (winnerId: string | null) => {
     if (!roomId || !gameState || !gameState.players) return;
-    
+
     const database = getDatabase();
     const statsRef = ref(database, `rooms/${roomId}/stats`);
-    
+
     try {
       // 현재 전적 정보 가져오기
       const statsSnapshot = await get(statsRef);
       const currentStats = statsSnapshot.exists() ? statsSnapshot.val() : {};
-      
+
       // 업데이트할 전적 정보 준비
       const updatedStats: any = { ...currentStats };
-      
+
       // 모든 플레이어에 대해 전적 업데이트
       Object.keys(gameState.players).forEach(playerId => {
-        // 플레이어 정보 가져오기
         const player = gameState.players[playerId];
-        const isWinner = playerId === winnerId;
-        
-        // 플레이어의 현재 전적 정보 가져오기 (없으면 초기화)
+
         if (!updatedStats[playerId]) {
           updatedStats[playerId] = {
             wins: 0,
             losses: 0,
+            draws: 0,
             displayName: player.displayName || '알 수 없음'
           };
         }
-        
-        // 승패 업데이트
-        if (isWinner) {
+
+        // 승패/무승부 업데이트
+        if (winnerId === null) {
+          updatedStats[playerId].draws = (updatedStats[playerId].draws || 0) + 1;
+        } else if (playerId === winnerId) {
           updatedStats[playerId].wins = (updatedStats[playerId].wins || 0) + 1;
         } else {
           updatedStats[playerId].losses = (updatedStats[playerId].losses || 0) + 1;
         }
-        
+
         // 표시 이름 업데이트 (변경되었을 수 있음)
         updatedStats[playerId].displayName = player.displayName || updatedStats[playerId].displayName;
       });
-      
+
       // Firebase에 업데이트된 전적 저장
       await update(statsRef, updatedStats);
       console.log('전적 업데이트 완료:', updatedStats);
-      
+
     } catch (error) {
       console.error('전적 업데이트 중 오류:', error);
     }
@@ -520,6 +516,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       const restartData = {
         phase: GamePhase.SETUP,
         winner: null,
+        draw: null,
         currentTurn: firstTurnPlayerId,
         maps: null,
         collisionWalls: null,
@@ -547,14 +544,17 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       
       if (players) {
         const updatedPlayers: Record<string, any> = {};
-        
+
         Object.keys(players).forEach(playerId => {
           updatedPlayers[playerId] = {
             ...players[playerId],
-            isReady: false
+            isReady: false,
+            finished: null,   // 완주/포기 상태 초기화 (null이면 RTDB에서 키 제거)
+            finishMoves: null,
+            forfeited: null
           };
         });
-        
+
         await update(playersRef, updatedPlayers);
       }
       
@@ -797,36 +797,26 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           const playerPath = `rooms/${roomId}/gameState/players/${userId}`;
           const playerRef = ref(database, playerPath);
           const playerSnapshot = await get(playerRef);
-          
-          let initialPosition = { row: 0, col: 0 };
-          
-          // 이전 위치 정보가 있으면 사용, 아니면 초기 위치 사용
+
           if (playerSnapshot.exists()) {
-            const playerData = playerSnapshot.val();
-            // lastPosition이 있으면 사용, 아니면 현재 position 사용
-            initialPosition = playerData.lastPosition || playerData.position || initialPosition;
-            
-            // 플레이어 정보 업데이트 (마지막 위치 보존)
+            // 기존 플레이어: 진행 중인 게임 정보(position, isReady)는 건드리지 않고
+            // 프로필/접속 정보만 갱신 (새로고침 시 위치가 초기화되는 버그 방지)
             await update(ref(database, playerPath), {
               id: userId,
-              position: initialPosition,
-              lastPosition: initialPosition,  // 마지막 위치 정보 저장
-              isReady: false,
               isOnline: true,
-              displayName: displayName, // 구글 표시 이름 추가
-              photoURL: photoURL, // 프로필 이미지 URL 추가
+              displayName: displayName,
+              photoURL: photoURL,
               lastSeen: serverTimestamp()
             });
           } else {
             // 새 플레이어 추가
             await update(ref(database, playerPath), {
               id: userId,
-              position: initialPosition,
-              lastPosition: initialPosition,  // 마지막 위치 정보도 저장
+              position: { row: 0, col: 0 },
               isReady: false,
               isOnline: true,
-              displayName: displayName, // 구글 표시 이름 추가
-              photoURL: photoURL, // 프로필 이미지 URL 추가
+              displayName: displayName,
+              photoURL: photoURL,
               lastSeen: serverTimestamp()
             });
           }
@@ -981,9 +971,15 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           <div className="text-xs">
             {roomStats[userId] ? (
               <span>
-                전적: <span className="text-green-600">{roomStats[userId].wins}</span>승 
-                <span className="mx-0.5">-</span> 
+                전적: <span className="text-green-600">{roomStats[userId].wins}</span>승
+                <span className="mx-0.5">-</span>
                 <span className="text-red-600">{roomStats[userId].losses}</span>패
+                {(roomStats[userId].draws || 0) > 0 && (
+                  <>
+                    <span className="mx-0.5">-</span>
+                    <span className="text-gray-600">{roomStats[userId].draws}</span>무
+                  </>
+                )}
               </span>
             ) : (
               <span>전적: 0승 0패</span>
@@ -1008,9 +1004,13 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           
           {/* 턴 표시 */}
           {gameState.phase === GamePhase.PLAY && (
-            <div className={`px-1 rounded ${gameState.currentTurn === userId ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
-              {gameState.currentTurn === userId ? '내 턴' : '상대 턴'}
-            </div>
+            me?.finished ? (
+              <div className="px-1 rounded bg-purple-100 text-purple-700">관전 중</div>
+            ) : (
+              <div className={`px-1 rounded ${gameState.currentTurn === userId ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+                {gameState.currentTurn === userId ? '내 턴' : '상대 턴'}
+              </div>
+            )
           )}
           
           {/* 상대방 정보 */}
@@ -1087,7 +1087,16 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       <div className="container mx-auto px-2 sm:px-4 py-2 sm:py-4">
         {/* 통합된 헤더 정보 표시 */}
         {renderGameHeader()}
-        
+
+        {/* 오류/안내 메시지 */}
+        {message && gameState.phase !== GamePhase.END && (
+          <div className="text-center mb-2">
+            <p className="text-xs font-medium bg-amber-50 text-amber-700 py-1 px-2 rounded inline-block">
+              {message}
+            </p>
+          </div>
+        )}
+
         {/* 선턴 메시지 표시 */}
         {gameState.phase === GamePhase.SETUP && (
           <div className="text-center mb-2">
@@ -1107,23 +1116,17 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         {/* 게임 종료 메시지 */}
         {gameState.phase === GamePhase.END && (
           <div className="text-center mb-2">
-            <p className={`text-sm font-bold ${gameState.winner === userId ? 'text-green-500' : 'text-red-500'}`}>
+            <p className={`text-sm font-bold ${
+              gameState.draw
+                ? 'text-gray-600'
+                : gameState.winner === userId
+                  ? 'text-green-500'
+                  : 'text-red-500'
+            }`}>
               {getWinnerMessage()}
             </p>
-            
-            {/* 게임 종료 후에도 게임 상태는 계속 표시 */}
-            {myMap && opponentMap && (
-              <GamePlay
-                map={opponentMap}
-                userId={userId}
-                roomId={roomId}
-                currentTurn={gameState?.currentTurn || null}
-                myMap={myMap}
-                gameEnded={true}
-              />
-            )}
-            
-            {/* 재시작 버튼 */}
+
+            {/* 재시작 버튼 (게임 보드는 아래에서 같은 인스턴스로 계속 표시됨) */}
             <div className="flex gap-3 mt-3 justify-center">
               <button
                 className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
@@ -1168,20 +1171,34 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               </button>
             </div>
           </div>
-        ) : gameState.phase === GamePhase.PLAY && opponentMap ? (
+        ) : (gameState.phase === GamePhase.PLAY || gameState.phase === GamePhase.END) && opponentMap ? (
+          /* PLAY -> END 전환 시에도 같은 GamePlay 인스턴스를 유지해
+             3D 캔버스가 파괴/재생성되지 않도록 한다 */
           <div key="gameplay-container">
-            <GamePlay 
-              map={opponentMap} 
-              onGameComplete={handleGameComplete} 
+            <GamePlay
+              map={opponentMap}
+              onGameComplete={handleGameComplete}
               userId={userId}
               roomId={roomId}
-              currentTurn={gameState.currentTurn}
+              currentTurn={gameState.currentTurn || null}
               myMap={myMap || undefined}
+              gameEnded={gameState.phase === GamePhase.END}
+              myFinished={!!gameState.players?.[userId]?.finished}
+              myFinishMoves={gameState.players?.[userId]?.finishMoves ?? null}
+              opponentFinished={Object.entries(gameState.players || {}).some(
+                ([id, p]) => id !== userId && p.finished
+              )}
+              opponentFinishMoves={
+                Object.entries(gameState.players || {}).find(
+                  ([id, p]) => id !== userId && p.finished
+                )?.[1]?.finishMoves ?? null
+              }
+              onForfeit={handleForfeit}
             />
           </div>
         ) : gameState.phase === GamePhase.END ? (
           <div key="gameover-container" className="flex flex-col items-center">
-            {/* 중복된 나가기 버튼 제거 */}
+            {/* 맵 정보가 없는 상태로 종료된 경우 (보드 없이 결과만 표시) */}
           </div>
         ) : (
           <div key="loading-container" className="text-center p-3">
