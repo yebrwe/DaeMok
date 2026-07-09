@@ -409,11 +409,17 @@ const GameBoard: React.FC<GameBoardProps> = ({
             <div className="w-3/4 h-1/2 bg-amber-400" />
           </div>
         )}
-        {/* 1회성 벽 아이템: 제작/공개 시 청록색, 부서진 후엔 회색 잔해 */}
-        {isItemWall(position, direction) && (showItemsFully || itemConsumed) && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className={`w-3/4 h-1/2 ${itemConsumed ? 'bg-slate-400/70' : 'bg-cyan-400'}`} />
-          </div>
+        {/* 1회성 벽 아이템: 내 맵(제작/미니맵)에서만 청록색으로 구분, 종료 공개 시엔 일반 벽처럼 위장 */}
+        {isItemWall(position, direction) && showItemsFully && (
+          gamePhase === GamePhase.SETUP || isMinimapMode ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className={`w-3/4 h-1/2 ${itemConsumed ? 'bg-slate-400/70' : 'bg-cyan-400'}`} />
+            </div>
+          ) : !itemConsumed ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-3/4 h-1/2 bg-amber-400" />
+            </div>
+          ) : null
         )}
         {/* 탐지기로 밝혀낸 벽 (1회성 벽도 일반 벽으로 위장) */}
         {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
@@ -520,11 +526,17 @@ const GameBoard: React.FC<GameBoardProps> = ({
             <div className="w-1/2 h-3/4 bg-amber-400" />
           </div>
         )}
-        {/* 1회성 벽 아이템: 제작/공개 시 청록색, 부서진 후엔 회색 잔해 */}
-        {isItemWall(position, direction) && (showItemsFully || itemConsumed) && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className={`w-1/2 h-3/4 ${itemConsumed ? 'bg-slate-400/70' : 'bg-cyan-400'}`} />
-          </div>
+        {/* 1회성 벽 아이템: 내 맵(제작/미니맵)에서만 청록색으로 구분, 종료 공개 시엔 일반 벽처럼 위장 */}
+        {isItemWall(position, direction) && showItemsFully && (
+          gamePhase === GamePhase.SETUP || isMinimapMode ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className={`w-1/2 h-3/4 ${itemConsumed ? 'bg-slate-400/70' : 'bg-cyan-400'}`} />
+            </div>
+          ) : !itemConsumed ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-1/2 h-3/4 bg-amber-400" />
+            </div>
+          ) : null
         )}
         {/* 탐지기로 밝혀낸 벽 (1회성 벽도 일반 벽으로 위장) */}
         {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&

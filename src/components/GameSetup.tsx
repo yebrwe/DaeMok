@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import { Direction, GameMap, GamePhase, ItemType, MapItem, Obstacle, Position } from '@/types/game';
 import GameBoard from './GameBoard';
-import GameBoard3D from './three/GameBoard3D';
 import {
   isValidMap,
   BOARD_SIZE,
@@ -26,8 +25,6 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   const [obstacles, setObstacles] = useState<Obstacle[]>([]);
   const [setupPhase, setSetupPhase] = useState<'start' | 'end' | 'obstacles'>('start');
   const [isMapValid, setIsMapValid] = useState<boolean>(false);
-  // 풀스크린 3D 스테이지가 기본, 정밀 배치가 필요하면 2D로 전환
-  const [view3D, setView3D] = useState<boolean>(true);
   // 아이템 배치 (게임당 1개, 벽 예산 소모)
   const [placeMode, setPlaceMode] = useState<PlaceMode>('wall');
   const [item, setItem] = useState<MapItem | null>(null);
@@ -368,40 +365,20 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
 
   return (
     <div className="absolute inset-0 overflow-hidden">
-      {/* 보드 스테이지 */}
-      {view3D ? (
-        <GameBoard3D
+      {/* 보드 스테이지 - 맵 제작은 정밀한 배치를 위해 2D 고정 */}
+      <div className="absolute inset-0 flex items-center justify-center overflow-auto py-24 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950">
+        <GameBoard
           gamePhase={GamePhase.SETUP}
           startPosition={startPosition}
           endPosition={endPosition}
           obstacles={obstacles}
           item={item}
-          placeMode={placeMode}
           pendingCell={wormholeEntrance}
-          onCellClick={
-            setupPhase !== 'obstacles' || placeMode === 'mine' || placeMode === 'wormhole'
-              ? handleCellClick
-              : undefined
-          }
-          onDirectionClick={setupPhase === 'obstacles' ? handleDirectionClick : undefined}
+          onCellClick={handleCellClick}
+          onDirectionClick={handleDirectionClick}
           selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}
-          fullscreen
         />
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center overflow-auto py-24">
-          <GameBoard
-            gamePhase={GamePhase.SETUP}
-            startPosition={startPosition}
-            endPosition={endPosition}
-            obstacles={obstacles}
-            item={item}
-            pendingCell={wormholeEntrance}
-            onCellClick={handleCellClick}
-            onDirectionClick={handleDirectionClick}
-            selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}
-          />
-        </div>
-      )}
+      </div>
 
       {/* 상단 HUD: 맵 제작 단계 스테퍼 */}
       <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 w-[96%] max-w-3xl">
@@ -433,12 +410,6 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
                   {item && <span className="text-purple-300 ml-1">(아이템 -{ITEM_COSTS[item.type]})</span>}
                 </span>
               )}
-              <button
-                className="btn-sub text-xs px-2 py-1 !rounded-lg"
-                onClick={() => setView3D((prev) => !prev)}
-              >
-                {view3D ? '2D 보기' : '3D 보기'}
-              </button>
             </div>
           </div>
           <div className="text-xs font-medium text-slate-300 mt-1.5">
@@ -491,7 +462,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
             </div>
             {placeMode !== 'wall' && !item && (
               <p className="text-[11px] text-amber-300 mt-1.5">
-                {placeMode === 'oneTimeWall' && '칸 사이 선을 클릭해 1회성 벽을 배치하세요. 한 번 부딪히면 부서집니다.'}
+                {placeMode === 'oneTimeWall' && '칸 사이 선을 클릭해 1회성 벽을 배치하세요. 상대에겐 일반 벽과 똑같이 한 번 막힌 뒤, 다음 시도부터 통과됩니다.'}
                 {placeMode === 'mine' && '칸을 클릭해 지뢰를 배치하세요. 밟으면 2턴 전 위치로 되돌아갑니다.'}
                 {placeMode === 'wormhole' &&
                   (wormholeEntrance
@@ -501,7 +472,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
             )}
             {item && (
               <p className="text-[11px] text-purple-200 mt-1.5">
-                {item.type === 'oneTimeWall' && '🧱 1회성 벽 배치됨 - 상대가 부딪히면 턴을 소모시키고 부서집니다.'}
+                {item.type === 'oneTimeWall' && '🧱 1회성 벽 배치됨 - 일반 벽처럼 한 번 막고, 다음 시도부터 조용히 통과됩니다.'}
                 {item.type === 'mine' && '💣 지뢰 배치됨 - 상대가 밟으면 2턴 전 위치로 되돌아갑니다.'}
                 {item.type === 'wormhole' && '🌀 웜홀 배치됨 - 입구를 밟으면 출구로 순간이동합니다. (1회성)'}
                 {item.type === 'radar' && '🔍 탐지기 확보됨 - 게임 중 1회, 내 주변 한 칸(대각선 포함)의 벽을 탐지합니다.'}

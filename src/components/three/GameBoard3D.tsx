@@ -25,6 +25,10 @@ const WALL_HEIGHT = 0.5;
 const WALL_THICKNESS = 0.16;
 const CENTER = ((BOARD_SIZE - 1) * SPACING) / 2;
 
+// 3인칭 카메라: 보드 전체가 여유 있게 보이는 최대 시야 (줌 고정)
+const SPAN = BOARD_SIZE * SPACING;
+const TP_CAMERA_POS: [number, number, number] = [CENTER, SPAN * 1.6, CENTER + SPAN * 1.7];
+
 // 색상 팔레트
 const COLORS = {
   tileA: '#f1e9d8',
@@ -191,8 +195,7 @@ function FirstPersonRig({ position, facing }: { position: Position; facing: Dire
 function ThirdPersonReset() {
   const { camera } = useThree();
   useEffect(() => {
-    const span = BOARD_SIZE * SPACING;
-    camera.position.set(CENTER, span * 1.25, CENTER + span * 1.32);
+    camera.position.set(...TP_CAMERA_POS);
     camera.lookAt(CENTER, 0, CENTER);
     const cam = camera as THREE.PerspectiveCamera;
     cam.fov = 42;
@@ -458,12 +461,10 @@ function ItemVisuals({
   if (item.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
     const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
     if (!seg) return null;
-    return consumed ? (
-      // 부서진 잔해 (낮고 반투명한 회색)
-      <WallBox seg={seg} color="#94a3b8" opacity={0.45} height={0.18} />
-    ) : (
-      <WallBox seg={seg} color="#22d3ee" opacity={0.92} height={wallHeight} />
-    );
+    // 위장 벽: 공개 시에도 일반 벽과 동일하게 표시 (가짜라는 표시 없음)
+    // 이미 통과된 경우엔 표시하지 않음 (실제로 사라진 벽)
+    if (consumed) return null;
+    return <WallBox seg={seg} color={COLORS.reveal} opacity={0.75} height={wallHeight} />;
   }
 
   if (item.type === 'mine' && item.position) {
@@ -743,7 +744,7 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
       <Canvas
         shadows
         dpr={[1, 2]}
-        camera={{ position: [CENTER, span * 1.25, CENTER + span * 1.32], fov: 42 }}
+        camera={{ position: TP_CAMERA_POS, fov: 42 }}
       >
         {/* 조명 */}
         <ambientLight intensity={0.75} />
@@ -771,8 +772,7 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
               makeDefault
               target={[CENTER, 0, CENTER]}
               enablePan={false}
-              minDistance={4.5}
-              maxDistance={18}
+              enableZoom={false}
               maxPolarAngle={Math.PI * 0.44}
             />
           </>

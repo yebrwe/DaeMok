@@ -334,14 +334,27 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
       const canMoveResult = canMove(playerPosition, direction, obstacles);
 
-      // 1회성 벽 아이템: 한 번은 벽처럼 막고(턴 소모), 부딪히면 부서짐
+      // 1회성 벽 아이템: 일반 벽과 완전히 똑같이 한 번 막는다 (메시지/빨간 흔적 동일 - 위장 유지)
+      // 조용히 소모되어, 같은 곳을 다시 시도하면 그때는 통과된다
       if (canMoveResult && isBlockedByOneTimeWall(playerPosition, direction, item, itemConsumed)) {
         setLastMoveValid(false);
         setMoveCount(moveCount + 1);
-        setMessage('💥 벽에 부딪혔습니다! ...그런데 벽이 부서졌습니다. 이제 지나갈 수 있습니다.');
+        setMessage('이동할 수 없습니다. 벽에 부딪혔습니다!');
         consumeOpponentItem();
-        if (!isPractice) {
+
+        const disguisedCollision: CollisionWall = {
+          playerId: userId,
+          position: playerPosition,
+          direction,
+          timestamp: Date.now(),
+          mapOwnerId: isPractice ? 'practice' : opponentId || '',
+        };
+
+        if (isPractice) {
+          setCollisionWalls((prev) => [...prev, disguisedCollision]);
+        } else {
           const database = getDatabase();
+          push(ref(database, `rooms/${roomId}/gameState/collisionWalls`), disguisedCollision).catch(() => {});
           update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
         }
         return;

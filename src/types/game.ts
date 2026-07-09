@@ -53,7 +53,7 @@ export type ItemType = 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
 
 export interface MapItem {
   type: ItemType;
-  // oneTimeWall: 한 번 부딪히면 부서지는 벽 (벽 2개 소모)
+  // oneTimeWall: 일반 벽과 똑같이 한 번 막은 뒤, 다음 시도부터 통과되는 위장 벽 (벽 5개 소모)
   wallPosition?: Position;
   wallDirection?: Direction;
   // mine: 밟으면 2턴 전 위치로 되돌아감 (벽 3개 소모)

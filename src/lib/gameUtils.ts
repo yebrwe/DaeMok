@@ -8,7 +8,7 @@ export const MAX_OBSTACLES = 20;
 
 // 아이템 비용 (벽 개수 기준)
 export const ITEM_COSTS: Record<ItemType, number> = {
-  oneTimeWall: 2,
+  oneTimeWall: 5,
   mine: 3,
   wormhole: 5,
   radar: 3,
