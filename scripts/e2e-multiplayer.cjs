@@ -1,39 +1,41 @@
 /**
- * 멀티플레이 E2E 테스트 (턴 수 승리 조건 + 관전 + 포기 + 무승부)
+ * 멀티플레이 E2E 테스트 (구글 로그인 + 턴 수 승리 + 관전 + 포기 + 무승부 + 보안 규칙)
  *
- * 권장: Firebase 로컬 에뮬레이터로 실행 (프로덕션 DB를 전혀 건드리지 않음)
+ * ⚠️ Firebase 로컬 에뮬레이터 전용입니다. (구글 로그인은 실서버에서 자동화 불가)
+ *    에뮬레이터가 database.rules.json을 로드하므로 세분화된 보안 규칙 검증을 겸합니다.
+ *
+ * 실행 방법:
  *   1. npm i -D playwright                          (이미 있으면 생략)
- *   2. npx firebase-tools emulators:start --only auth,database --project demo-daemok
+ *   2. npx firebase-tools emulators:start --only auth,database --project daemok-155c1
+ *      (Java 21+ 필요. ⚠️ 프로젝트 ID를 demo-* 로 띄우면 앱이 쓰는 네임스페이스에
+ *       보안 규칙이 적용되지 않아 규칙 검증이 무의미해짐 - 반드시 daemok-155c1 사용)
  *   3. NEXT_PUBLIC_FIREBASE_EMULATOR=1 npm run build && npm run start
  *   4. EMULATOR=1 node scripts/e2e-multiplayer.cjs
  *
- * EMULATOR=1 없이 실행하면 실제 Firebase(daemok-155c1)에 테스트 계정 2개와
- * 방 1개를 만들고, 종료 시 자동으로 모두 삭제합니다.
- *
  * 검증 시나리오:
- *   [1게임] 회원가입 x2 -> 방 생성/참가 -> 맵 제작 x2 -> 자동 시작(방장 선턴)
- *     -> 턴 교대 -> A 선완주(2턴, 관전 전환) -> B 혼자 연속 턴 -> B 승리 불가 상태
- *     -> B 포기 -> A 승리 / B 패배
- *   [2게임] 재시작(패배자 B 선턴) -> B 선완주(2턴) -> A도 2턴 완주 -> 무승부
+ *   구글 로그인(에뮬레이터 가짜 계정) x2 -> 방 생성/참가 -> 맵 제작 x2 -> 자동 시작(방장 선턴)
+ *   [1게임] 턴 교대 -> A 선완주(관전 전환) -> B 혼자 연속 턴 -> 승리 불가 안내 -> B 포기 -> A 승리
+ *   [2게임] 재시작(패배자 선턴) -> B 선완주 -> A 동턴 완주 -> 무승부
  *   마지막: 방장 나가기 -> 방 삭제 -> 상대 자동 리디렉션
  */
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-const IS_EMULATOR = process.env.EMULATOR === '1';
+if (process.env.EMULATOR !== '1') {
+  console.error('이 테스트는 에뮬레이터 전용입니다. EMULATOR=1 로 실행하세요.');
+  process.exit(1);
+}
+
 const OUT = path.join(__dirname, '..', 'e2e-artifacts');
 fs.mkdirSync(OUT, { recursive: true });
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
-const API_KEY = 'AIzaSyBxHJ14JjS3DOHHR9xwLGjIKdBJp8cD448';
-const DB = 'https://daemok-155c1-default-rtdb.asia-southeast1.firebasedatabase.app';
-
 const STAMP = Date.now();
 const ROOM_NAME = `e2e테스트-${STAMP % 1000000}`;
 const ACCOUNTS = {
-  a: { email: `daemok.e2e.a.${STAMP}@example.com`, password: 'test1234!', name: 'TestA' },
-  b: { email: `daemok.e2e.b.${STAMP}@example.com`, password: 'test1234!', name: 'TestB' },
+  a: { email: `daemok.e2e.a.${STAMP}@example.com`, name: 'TestA' },
+  b: { email: `daemok.e2e.b.${STAMP}@example.com`, name: 'TestB' },
 };
 
 function step(msg) { console.log('STEP:', msg); }
@@ -44,13 +46,42 @@ async function expectText(page, text, timeout = 20000) {
   ok(`saw: ${JSON.stringify(text)}`);
 }
 
-async function signUp(page, acc) {
+// 구글 로그인 - 에뮬레이터의 가짜 계정 팝업을 자동 조작
+async function signInWithFakeGoogle(page, acc) {
   await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
-  await page.getByRole('button', { name: '계정이 없으신가요? 회원가입' }).click();
-  await page.fill('#displayName', acc.name);
-  await page.fill('#email', acc.email);
-  await page.fill('#password', acc.password);
-  await page.getByRole('button', { name: '가입하기' }).click();
+
+  const [popup] = await Promise.all([
+    page.waitForEvent('popup'),
+    page.getByRole('button', { name: /Google 계정으로 시작하기/ }).click(),
+  ]);
+
+  try {
+    await popup.waitForLoadState('domcontentloaded');
+
+    // "Add new account" 버튼 (에뮬레이터 위젯)
+    const addBtn = popup.getByRole('button', { name: /add new account/i });
+    await addBtn.waitFor({ timeout: 10000 });
+    await addBtn.click();
+
+    // 이메일 / 표시 이름 입력
+    const emailInput = popup.locator('#email-input, input[type="email"]').first();
+    await emailInput.waitFor({ timeout: 10000 });
+    await emailInput.fill(acc.email);
+
+    const nameInput = popup.locator('#display-name-input, input[placeholder*="isplay"], #displayName').first();
+    if (await nameInput.count()) {
+      await nameInput.fill(acc.name);
+    }
+
+    // "Sign in with Google.com" 제출
+    await popup.getByRole('button', { name: /sign in with google/i }).click();
+  } catch (e) {
+    // 실패 시 팝업 DOM을 덤프해 셀렉터 진단에 사용
+    const html = await popup.content().catch(() => '(no content)');
+    console.error('팝업 조작 실패. 팝업 HTML 앞부분:\n', html.slice(0, 3000));
+    throw e;
+  }
+
   await expectText(page, '게임 대기실', 25000);
 }
 
@@ -65,56 +96,6 @@ async function setupMap(page) {
   await page.getByRole('button', { name: '완료' }).click();
 }
 
-// ===== 테스트 데이터 정리 (실서버 실행 시에만) =====
-async function restSignIn(email, password) {
-  const res = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, returnSecureToken: true }),
-    }
-  );
-  if (!res.ok) throw new Error(`signIn ${email}: ${res.status}`);
-  return res.json();
-}
-
-async function cleanup(roomId) {
-  if (IS_EMULATOR) {
-    console.log('--- 에뮬레이터 모드: 정리 생략 (에뮬레이터 종료 시 데이터 소멸) ---');
-    return;
-  }
-  console.log('--- 테스트 데이터 정리 시작 ---');
-  for (const key of ['a', 'b']) {
-    const acc = ACCOUNTS[key];
-    try {
-      const { idToken, localId } = await restSignIn(acc.email, acc.password);
-
-      if (key === 'a' && roomId) {
-        const check = await fetch(`${DB}/rooms/${roomId}.json?shallow=true&auth=${idToken}`);
-        if ((await check.text()) !== 'null') {
-          console.log(`  방 ${roomId} 잔존 -> 삭제`);
-          await fetch(`${DB}/rooms/${roomId}.json?auth=${idToken}`, { method: 'DELETE' });
-        }
-      }
-
-      for (const p of [`userStatus/${localId}`, `lobbyOnline/${localId}`, `users/${localId}`, `userRooms/${localId}`, `status/${localId}`]) {
-        const r = await fetch(`${DB}/${p}.json?auth=${idToken}`, { method: 'DELETE' });
-        console.log(`  DELETE ${p} -> ${r.status}`);
-      }
-
-      const del = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:delete?key=${API_KEY}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idToken }) }
-      );
-      console.log(`  계정 삭제 ${acc.email} -> ${del.status}`);
-    } catch (e) {
-      console.error(`  정리 실패 (${acc.email}):`, e.message);
-    }
-  }
-  console.log('--- 정리 완료 ---');
-}
-
 (async () => {
   const browser = await chromium.launch({
     channel: process.env.CHROME_PATH ? undefined : 'chrome',
@@ -126,22 +107,28 @@ async function cleanup(roomId) {
   const ctxB = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const pageA = await ctxA.newPage();
   const pageB = await ctxB.newPage();
+  // 보안 규칙 위반(PERMISSION_DENIED)이 있으면 콘솔에 드러나도록 수집
+  for (const [tag, p] of [['A', pageA], ['B', pageB]]) {
+    p.on('console', (m) => {
+      if (m.type() === 'error' && /permission|denied/i.test(m.text())) {
+        console.log(`[${tag} PERMISSION]`, m.text().slice(0, 250));
+      }
+    });
+    p.on('pageerror', (e) => console.log(`[${tag} pageerror]`, String(e).slice(0, 300)));
+  }
   pageB.on('dialog', (d) => d.accept()); // 포기 확인 다이얼로그 자동 수락
 
-  let roomId = null;
-
   try {
-    step('1: 테스트 계정 2개 회원가입');
-    await signUp(pageA, ACCOUNTS.a);
-    await signUp(pageB, ACCOUNTS.b);
+    step('1: 구글 로그인 x2 (에뮬레이터 가짜 계정)');
+    await signInWithFakeGoogle(pageA, ACCOUNTS.a);
+    await signInWithFakeGoogle(pageB, ACCOUNTS.b);
 
     step('2: A가 방 생성');
     await pageA.getByRole('button', { name: '새 게임 방 만들기' }).click();
     await pageA.fill('#roomName', ROOM_NAME);
     await pageA.getByRole('button', { name: '방 만들기' }).click();
     await pageA.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
-    roomId = pageA.url().split('/rooms/')[1];
-    ok(`방 생성됨: ${roomId}`);
+    ok(`방 생성됨: ${pageA.url().split('/rooms/')[1]}`);
 
     step('3: A 맵 제작 완료 -> 상대 대기');
     await setupMap(pageA);
@@ -153,7 +140,7 @@ async function cleanup(roomId) {
     await card.getByRole('button', { name: '참가하기' }).click();
     await pageB.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
 
-    step('5: B 맵 제작 완료 -> 게임 자동 시작');
+    step('5: B 맵 제작 완료 -> 게임 자동 시작 (보안 규칙 하 트랜잭션)');
     await setupMap(pageB);
     await expectText(pageA, '이동: 0');
     await expectText(pageB, '이동: 0');
@@ -169,22 +156,22 @@ async function cleanup(roomId) {
     await expectText(pageB, '이동: 1');
     await expectText(pageA, '내 턴');
     await pageA.keyboard.press('ArrowRight');
-    await expectText(pageA, '턴으로 완주했습니다'); // 관전 배너: "🏁 2턴으로 완주했습니다!"
+    await expectText(pageA, '턴으로 완주했습니다');
 
     step('8: A = 관전 모드(승부 미확정), B = 목표 턴 수 + 포기 버튼');
     await expectText(pageA, '관전 중');
     await pageA.waitForTimeout(1000);
     await pageA.screenshot({ path: `${OUT}/mp-01-A-spectate.png` });
     await expectText(pageB, '상대방이 2턴으로 완주했습니다');
-    await expectText(pageB, '다음 이동에 바로 골인하면 무승부입니다'); // B는 1턴 사용 상태
+    await expectText(pageB, '다음 이동에 바로 골인하면 무승부입니다');
     await pageB.getByRole('button', { name: '포기하기' }).waitFor({ timeout: 15000 });
     await pageB.screenshot({ path: `${OUT}/mp-02-B-forfeit-option.png` });
 
     step('9: [probe] B 혼자 연속 턴 + 승리 불가 상태 전환');
-    await pageB.keyboard.press('ArrowDown'); // 일부러 우회 (2턴 사용 -> 최소 3턴 완주 = 승리 불가)
+    await pageB.keyboard.press('ArrowDown');
     await expectText(pageB, '이동: 2');
     await pageB.waitForTimeout(1500);
-    await expectText(pageB, '내 턴'); // 턴이 넘어가지 않고 유지
+    await expectText(pageB, '내 턴');
     await expectText(pageB, '승리할 수 없습니다');
     await pageA.waitForTimeout(500);
     await pageA.screenshot({ path: `${OUT}/mp-03-A-watching-B-move.png` });
@@ -201,7 +188,6 @@ async function cleanup(roomId) {
     await expectText(pageA, '시작점을 선택하세요');
     await expectText(pageB, '시작점을 선택하세요');
     await expectText(pageB, '선턴입니다. 맵을 설정해주세요.');
-    await pageB.screenshot({ path: `${OUT}/mp-06-B-first-turn.png` });
 
     step('12: [2게임] 맵 제작 x2 -> 시작 (B 선턴)');
     await setupMap(pageA);
@@ -218,7 +204,7 @@ async function cleanup(roomId) {
     await expectText(pageA, '이동: 1');
     await expectText(pageB, '내 턴');
     await pageB.keyboard.press('ArrowRight');
-    await expectText(pageB, '턴으로 완주했습니다'); // B 관전 전환
+    await expectText(pageB, '턴으로 완주했습니다');
     await expectText(pageA, '상대방이 2턴으로 완주했습니다');
     await expectText(pageA, '다음 이동에 바로 골인하면 무승부입니다');
 
@@ -228,7 +214,7 @@ async function cleanup(roomId) {
     await expectText(pageB, '무승부입니다!');
     await pageA.screenshot({ path: `${OUT}/mp-07-draw.png` });
 
-    step('15: A(방장) 나가기 -> 방 삭제 -> B 자동 리디렉션');
+    step('15: A(방장) 나가기 -> 방 삭제(방장 권한) -> B 자동 리디렉션');
     await pageA.getByRole('button', { name: '나가기' }).first().click();
     await pageA.waitForURL(/\/rooms$/, { timeout: 20000 });
     await pageB.waitForURL(/\/rooms$/, { timeout: 25000 });
@@ -241,6 +227,6 @@ async function cleanup(roomId) {
     process.exitCode = 1;
   } finally {
     await browser.close();
-    await cleanup(roomId);
+    console.log('--- 에뮬레이터 모드: 데이터는 에뮬레이터 종료 시 소멸 ---');
   }
 })();

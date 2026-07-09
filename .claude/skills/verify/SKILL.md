@@ -16,11 +16,12 @@ npm run start          # 프로덕션 서버, http://localhost:3000
 ## 검증 표면
 
 - `/practice` — 로그인 불필요. GameSetup(3D/2D 보드, 시작/도착/벽 배치) + GamePlay(이동, 벽 충돌, 골인) 전체 루프를 Firebase 쓰기 없이 구동 가능 (연습 모드는 isPractice로 Firebase 차단됨).
-- `/rooms`, `/rooms/[id]` — Firebase 이메일/비밀번호 인증 필요. **멀티플레이 검증은 로컬 에뮬레이터로** (프로덕션 DB 안 건드림):
+- `/rooms`, `/rooms/[id]` — 구글 로그인 필요. **멀티플레이 검증은 로컬 에뮬레이터로** (프로덕션 DB 안 건드림, 구글 로그인은 에뮬레이터 가짜 계정 팝업을 자동 조작):
   1. Java 21+ 필요 (없으면 Adoptium JRE 21 tarball을 받아 PATH에 추가 — sudo 불필요)
-  2. `npx firebase-tools emulators:start --only auth,database --project demo-daemok` (firebase.json/database.rules.json 리포에 있음)
+  2. `npx firebase-tools emulators:start --only auth,database --project daemok-155c1` — ⚠️ **반드시 실제 프로젝트 ID로**. `demo-*`로 띄우면 database.rules.json이 `demo-*-default-rtdb` 네임스페이스에만 적용되고 앱이 쓰는 `daemok-155c1-default-rtdb`는 전부 허용으로 동작해 규칙 검증이 무의미해짐 (실제로 이 함정에 빠진 적 있음)
   3. `NEXT_PUBLIC_FIREBASE_EMULATOR=1 npm run build && npm run start` (빌드타임 env로 에뮬레이터 연결이 인라인됨 — 배포 전 반드시 env 없이 재빌드)
-  4. `EMULATOR=1 CHROME_PATH=/usr/bin/google-chrome node scripts/e2e-multiplayer.cjs` — 2계정 대전→관전→포기→재시작(패자 선턴)→무승부→방 삭제까지 검증. EMULATOR=1 없이 돌리면 프로덕션에 쓰고 자동 정리하므로 사용자 승인 필요.
+  4. `EMULATOR=1 CHROME_PATH=/usr/bin/google-chrome node scripts/e2e-multiplayer.cjs` — 구글 로그인 x2→대전→관전→포기→재시작(패자 선턴)→무승부→방 삭제 + 보안 규칙 검증(스크립트가 PERMISSION_DENIED 콘솔을 수집). 에뮬레이터 전용.
+  5. 규칙 부정 케이스는 REST로 확인: 비인증 `curl http://localhost:9000/rooms.json?ns=daemok-155c1-default-rtdb` → Permission denied여야 함. 인증 토큰은 auth 에뮬레이터 `accounts:signUp` REST로 발급 가능.
 
 ## 헤드리스 브라우저 구동 (WSL2)
 

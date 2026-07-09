@@ -623,26 +623,18 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             
             // 2. 잠시 대기하여 다른 플레이어들이 상태 변경을 감지할 시간을 줌
             await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            // 3. 방에 있는 모든 플레이어 목록 가져오기
-            const playersRef = ref(database, `rooms/${roomId}/players`);
-            const playersSnapshot = await get(playersRef);
-            const players = playersSnapshot.val() || [];
-            
-            // 4. 각 플레이어의 상태 업데이트 (userRooms 제거)
-            for (const playerId of players) {
-              if (playerId) {
-                // 플레이어 상태 업데이트
-                await update(ref(database, `userStatus/${playerId}`), {
-                  currentRoom: null,
-                  lastActivity: serverTimestamp()
-                });
-              }
-            }
-            
-            // 5. 방 자체를 삭제
+
+            // 3. 방 자체를 삭제
+            // (다른 플레이어의 userStatus는 보안 규칙상 본인만 쓸 수 있으므로 건드리지 않음.
+            //  각 클라이언트가 방 삭제를 감지해 스스로 정리함 - restoreRoomSession 참고)
             await remove(roomRef);
             console.log('방이 삭제되었습니다:', roomId);
+
+            // 4. 내 상태 정리
+            await update(ref(database, `userStatus/${userId}`), {
+              currentRoom: null,
+              lastActivity: serverTimestamp()
+            });
           } else {
             // 일반 참여자인 경우: 자신만 방에서 나가기
             const success = await leaveRoom(roomId, userId);
