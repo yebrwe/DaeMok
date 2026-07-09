@@ -8,7 +8,7 @@ import { CollisionWall, Direction, GamePhase, MapItem, Obstacle, Position } from
 import { BOARD_SIZE, isSamePosition } from '@/lib/gameUtils';
 
 // 1인칭 시점 상수
-const EYE_HEIGHT = 0.55; // 말 눈높이
+const EYE_HEIGHT = 0.6; // 말 눈높이
 const FP_WALL_HEIGHT = 1.35; // 1인칭에서 벽 높이 (눈높이보다 높아 시야 차단)
 const FACING_VECTOR: Record<Direction, [number, number]> = {
   up: [0, -1], // -Z
@@ -164,11 +164,11 @@ function FirstPersonRig({ position, facing }: { position: Position; facing: Dire
     return new THREE.Vector3(x, EYE_HEIGHT, z);
   }, [position]);
 
-  // 마운트 시 시야각을 1인칭에 맞게 확장
+  // 마운트 시 시야각을 1인칭 최대 시야로 확장
   useEffect(() => {
     const cam = camera as THREE.PerspectiveCamera;
     const prevFov = cam.fov;
-    cam.fov = 72;
+    cam.fov = 96;
     cam.updateProjectionMatrix();
     return () => {
       cam.fov = prevFov;
