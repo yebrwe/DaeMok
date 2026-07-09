@@ -1,21 +1,11 @@
 'use client';
 
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
-import { Canvas, useFrame, useThree, ThreeEvent } from '@react-three/fiber';
+import { Canvas, useFrame, ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { CollisionWall, Direction, GamePhase, MapItem, Obstacle, Position } from '@/types/game';
 import { BOARD_SIZE, isSamePosition } from '@/lib/gameUtils';
-
-// 1인칭 시점 상수
-const EYE_HEIGHT = 0.6; // 말 눈높이
-const FP_WALL_HEIGHT = 1.35; // 1인칭에서 벽 높이 (눈높이보다 높아 시야 차단)
-const FACING_VECTOR: Record<Direction, [number, number]> = {
-  up: [0, -1], // -Z
-  down: [0, 1], // +Z
-  left: [-1, 0], // -X
-  right: [1, 0], // +X
-};
 
 // ===== 보드 배치 상수 =====
 const TILE = 1; // 타일 한 변 크기
@@ -45,14 +35,28 @@ const COLORS = {
   player: '#3b82f6',
 };
 
+// 보드 위 액션 이펙트 (지뢰 폭발/웜홀/탐지 파동/충돌 스파크/골인 축포)
+export interface BoardFx {
+  key: number;
+  type: 'bump' | 'mine' | 'wormhole' | 'radar' | 'goal';
+  at?: Position;
+  to?: Position;
+  dir?: Direction;
+}
+
 // 셀 좌표 -> 3D 위치
 function cellToWorld(position: Position): [number, number, number] {
   return [position.col * SPACING, 0, position.row * SPACING];
 }
 
+const DIR_VECTOR: Record<Direction, [number, number]> = {
+  up: [0, -1],
+  down: [0, 1],
+  left: [-1, 0],
+  right: [1, 0],
+};
+
 // ===== 벽 세그먼트 모델 =====
-// 같은 벽을 양쪽 셀에서 두 번 그리지 않도록 정규화한 표현
-// H(r,c): (r,c)와 (r+1,c) 사이의 가로 벽 / V(r,c): (r,c)와 (r,c+1) 사이의 세로 벽
 interface WallSegment {
   type: 'H' | 'V';
   row: number;
@@ -90,10 +94,8 @@ function dedupeSegments(items: { position: Position; direction: Direction }[]): 
 
 function segmentToWorld(seg: WallSegment): [number, number, number] {
   if (seg.type === 'H') {
-    // 행 사이 벽: X축 방향으로 길게
     return [seg.col * SPACING, WALL_HEIGHT / 2, seg.row * SPACING + SPACING / 2];
   }
-  // 열 사이 벽: Z축 방향으로 길게
   return [seg.col * SPACING + SPACING / 2, WALL_HEIGHT / 2, seg.row * SPACING];
 }
 
@@ -103,7 +105,6 @@ function segmentSize(seg: WallSegment): [number, number, number] {
     : [WALL_THICKNESS, WALL_HEIGHT, TILE + GAP * 0.6];
 }
 
-// 세그먼트 -> 콜백용 (position, direction) 변환
 function segmentToObstacle(seg: WallSegment): { position: Position; direction: Direction } {
   return seg.type === 'H'
     ? { position: { row: seg.row, col: seg.col }, direction: 'down' }
@@ -112,7 +113,6 @@ function segmentToObstacle(seg: WallSegment): { position: Position; direction: D
 
 // ===== 개별 3D 요소 =====
 
-// 벽 박스 (설치됨/충돌/공개)
 function WallBox({ seg, color, opacity = 1, height = WALL_HEIGHT }: { seg: WallSegment; color: string; opacity?: number; height?: number }) {
   const [x, , z] = segmentToWorld(seg);
   const size = segmentSize(seg);
@@ -129,82 +129,6 @@ function WallBox({ seg, color, opacity = 1, height = WALL_HEIGHT }: { seg: WallS
   );
 }
 
-// 1인칭용 보드 외곽 벽 (미로에 갇힌 느낌 + 보드 밖 방향 시각화)
-function BorderWalls() {
-  const span = BOARD_SIZE * SPACING - GAP;
-  const half = span / 2;
-  const t = 0.18;
-  const walls: Array<{ pos: [number, number, number]; size: [number, number, number] }> = [
-    { pos: [CENTER, FP_WALL_HEIGHT / 2, CENTER - half - GAP / 2 - t / 2], size: [span + t * 2, FP_WALL_HEIGHT, t] },
-    { pos: [CENTER, FP_WALL_HEIGHT / 2, CENTER + half + GAP / 2 + t / 2], size: [span + t * 2, FP_WALL_HEIGHT, t] },
-    { pos: [CENTER - half - GAP / 2 - t / 2, FP_WALL_HEIGHT / 2, CENTER], size: [t, FP_WALL_HEIGHT, span + t * 2] },
-    { pos: [CENTER + half + GAP / 2 + t / 2, FP_WALL_HEIGHT / 2, CENTER], size: [t, FP_WALL_HEIGHT, span + t * 2] },
-  ];
-  return (
-    <group>
-      {walls.map((w, i) => (
-        <mesh key={`border-${i}`} position={w.pos} castShadow receiveShadow>
-          <boxGeometry args={w.size} />
-          <meshStandardMaterial color={COLORS.base} roughness={0.85} />
-        </mesh>
-      ))}
-    </group>
-  );
-}
-
-// 1인칭 카메라 리그 - 플레이어 위치/방향으로 부드럽게 이동·회전
-function FirstPersonRig({ position, facing }: { position: Position; facing: Direction }) {
-  const { camera } = useThree();
-  // lookAt은 일반 Object3D에선 +Z, 카메라에선 -Z를 대상으로 향하게 하므로
-  // 반드시 카메라 타입 더미로 쿼터니언을 계산해야 시선 방향이 뒤집히지 않는다
-  const dummyRef = useRef(new THREE.PerspectiveCamera());
-
-  const targetPos = useMemo(() => {
-    const [x, , z] = cellToWorld(position);
-    return new THREE.Vector3(x, EYE_HEIGHT, z);
-  }, [position]);
-
-  // 마운트 시 시야각을 1인칭 최대 시야로 확장
-  useEffect(() => {
-    const cam = camera as THREE.PerspectiveCamera;
-    const prevFov = cam.fov;
-    cam.fov = 96;
-    cam.updateProjectionMatrix();
-    return () => {
-      cam.fov = prevFov;
-      cam.updateProjectionMatrix();
-    };
-  }, [camera]);
-
-  useFrame((_, delta) => {
-    const t = 1 - Math.pow(0.0002, delta);
-    camera.position.lerp(targetPos, t);
-
-    // 바라볼 방향 쿼터니언 계산 후 슬러프 (부드러운 회전)
-    const [dx, dz] = FACING_VECTOR[facing];
-    const dummy = dummyRef.current;
-    dummy.position.copy(camera.position);
-    dummy.lookAt(camera.position.x + dx, EYE_HEIGHT, camera.position.z + dz);
-    camera.quaternion.slerp(dummy.quaternion, t);
-  });
-
-  return null;
-}
-
-// 3인칭 복귀 시 카메라를 오버헤드 기본 위치로 되돌림
-function ThirdPersonReset() {
-  const { camera } = useThree();
-  useEffect(() => {
-    camera.position.set(...TP_CAMERA_POS);
-    camera.lookAt(CENTER, 0, CENTER);
-    const cam = camera as THREE.PerspectiveCamera;
-    cam.fov = 42;
-    cam.updateProjectionMatrix();
-  }, [camera]);
-  return null;
-}
-
-// 설치 단계에서 클릭할 수 있는 벽 슬롯 (호버 시 미리보기 표시)
 function WallSlot({
   seg,
   occupied,
@@ -221,7 +145,6 @@ function WallSlot({
   const handleClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation();
-      // 카메라 드래그와 클릭 구분
       if (e.delta > 4) return;
       const { position, direction } = segmentToObstacle(seg);
       onPlace(position, direction);
@@ -233,7 +156,6 @@ function WallSlot({
 
   return (
     <group>
-      {/* 넉넉한 히트 영역 (투명) */}
       <mesh
         position={segmentToWorld(seg)}
         onClick={handleClick}
@@ -251,13 +173,11 @@ function WallSlot({
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
 
-      {/* 호버 미리보기 (빈 슬롯일 때만) */}
       {hovered && !occupied && <WallBox seg={seg} color={previewColor} opacity={0.55} />}
     </group>
   );
 }
 
-// 바닥 타일
 function Tile({
   position,
   selectable,
@@ -265,7 +185,6 @@ function Tile({
   isStart,
   isEnd,
   onCellClick,
-  beaconFlag = false,
   placeMode = 'wall',
   isPendingEntrance = false,
 }: {
@@ -275,9 +194,8 @@ function Tile({
   isStart: boolean;
   isEnd: boolean;
   onCellClick?: (p: Position) => void;
-  beaconFlag?: boolean; // 1인칭: 벽 너머로 보이는 높은 깃발
   placeMode?: 'wall' | 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
-  isPendingEntrance?: boolean; // 웜홀 입구로 지정됨 (출구 선택 대기)
+  isPendingEntrance?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const checker = (position.row + position.col) % 2 === 0;
@@ -314,36 +232,11 @@ function Tile({
         <meshStandardMaterial color={color} roughness={0.8} />
       </mesh>
 
-      {/* 시작점 패드 */}
-      {isStart && (
-        <mesh position={[0, 0.09, 0]} receiveShadow>
-          <cylinderGeometry args={[0.36, 0.36, 0.05, 32]} />
-          <meshStandardMaterial color={COLORS.start} emissive={COLORS.start} emissiveIntensity={0.25} />
-        </mesh>
-      )}
+      {/* 시작점 패드 (은은한 펄스) */}
+      {isStart && <StartPad />}
 
-      {/* 도착점 패드 + 깃발 (1인칭에서는 벽 너머로 보이도록 높게 - 길잡이 역할) */}
-      {isEnd && (
-        <group position={[0, 0.09, 0]}>
-          <mesh receiveShadow>
-            <cylinderGeometry args={[0.36, 0.36, 0.05, 32]} />
-            <meshStandardMaterial color={COLORS.end} emissive={COLORS.end} emissiveIntensity={0.2} />
-          </mesh>
-          <mesh position={[0, beaconFlag ? 1.1 : 0.4, 0]} castShadow>
-            <cylinderGeometry args={[0.03, 0.03, beaconFlag ? 2.2 : 0.8, 8]} />
-            <meshStandardMaterial color="#78716c" />
-          </mesh>
-          <mesh position={[0.16, beaconFlag ? 2.06 : 0.66, 0]} castShadow>
-            <boxGeometry args={[0.32, 0.2, 0.02]} />
-            <meshStandardMaterial
-              color={COLORS.end}
-              emissive={COLORS.end}
-              emissiveIntensity={beaconFlag ? 0.5 : 0}
-              side={THREE.DoubleSide}
-            />
-          </mesh>
-        </group>
-      )}
+      {/* 도착점 패드 + 펄럭이는 깃발 */}
+      {isEnd && <GoalFlag />}
 
       {/* 시작/도착 선택 모드 호버 미리보기 */}
       {hovered && selectable && selectionMode !== 'none' && !isStart && !isEnd && (
@@ -384,87 +277,444 @@ function Tile({
   );
 }
 
-// 플레이어 말 (이동 애니메이션 포함)
-function Pawn({ position, color }: { position: Position; color: string }) {
-  const groupRef = useRef<THREE.Group>(null);
+// 시작점 패드 - 은은한 펄스
+function StartPad() {
+  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  useFrame((state) => {
+    if (matRef.current) {
+      matRef.current.emissiveIntensity = 0.2 + Math.abs(Math.sin(state.clock.elapsedTime * 1.6)) * 0.25;
+    }
+  });
+  return (
+    <mesh position={[0, 0.09, 0]} receiveShadow>
+      <cylinderGeometry args={[0.36, 0.36, 0.05, 32]} />
+      <meshStandardMaterial ref={matRef} color={COLORS.start} emissive={COLORS.start} emissiveIntensity={0.25} />
+    </mesh>
+  );
+}
+
+// 도착점 깃발 - 좌우로 살랑이는 애니메이션
+function GoalFlag() {
+  const flagRef = useRef<THREE.Mesh>(null);
+  useFrame((state) => {
+    if (flagRef.current) {
+      flagRef.current.rotation.y = Math.sin(state.clock.elapsedTime * 2.4) * 0.35;
+    }
+  });
+  return (
+    <group position={[0, 0.09, 0]}>
+      <mesh receiveShadow>
+        <cylinderGeometry args={[0.36, 0.36, 0.05, 32]} />
+        <meshStandardMaterial color={COLORS.end} emissive={COLORS.end} emissiveIntensity={0.2} />
+      </mesh>
+      <mesh position={[0, 0.4, 0]} castShadow>
+        <cylinderGeometry args={[0.03, 0.03, 0.8, 8]} />
+        <meshStandardMaterial color="#78716c" />
+      </mesh>
+      <group position={[0, 0.66, 0]}>
+        <mesh ref={flagRef} position={[0.16, 0, 0]} castShadow>
+          <boxGeometry args={[0.32, 0.2, 0.02]} />
+          <meshStandardMaterial color={COLORS.end} side={THREE.DoubleSide} />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
+// ===== 캐릭터 (플레이어 말) =====
+// 대기 숨쉬기 / 칸 이동 호핑 + 이동 방향 바라보기 / 충돌 부들부들 / 순간이동 팝 / 골인 세리머니
+function Pawn({
+  position,
+  color,
+  fx,
+  celebrating = false,
+}: {
+  position: Position;
+  color: string;
+  fx?: BoardFx | null;
+  celebrating?: boolean;
+}) {
+  const outerRef = useRef<THREE.Group>(null); // 위치 이동 담당
+  const innerRef = useRef<THREE.Group>(null); // 점프/흔들림/회전/스케일 담당
+  const yawRef = useRef(0);
+  const bumpUntilRef = useRef(0);
+  const popUntilRef = useRef(0);
+  const lastFxKeyRef = useRef(0);
+
   const target = useMemo(() => {
     const [x, , z] = cellToWorld(position);
     return new THREE.Vector3(x, 0, z);
   }, [position]);
 
   useFrame((state, delta) => {
-    const g = groupRef.current;
-    if (!g) return;
-    // 부드러운 이동 (프레임레이트 독립적인 지수 감쇠)
-    const t = 1 - Math.pow(0.0005, delta);
-    g.position.lerp(target, t);
-    // 이동 중 살짝 통통 튀는 효과
-    const dist = g.position.distanceTo(target);
-    g.position.y = Math.min(dist * 1.2, 0.35) * Math.abs(Math.sin(state.clock.elapsedTime * 8));
+    const outer = outerRef.current;
+    const inner = innerRef.current;
+    if (!outer || !inner) return;
+
+    const now = state.clock.elapsedTime;
+
+    // 충돌 이펙트 트리거 감지
+    if (fx && fx.type === 'bump' && fx.key !== lastFxKeyRef.current) {
+      lastFxKeyRef.current = fx.key;
+      bumpUntilRef.current = now + 0.5;
+    }
+
+    const dist = outer.position.distanceTo(target);
+
+    // 순간이동(지뢰 넉백/웜홀): 멀리 이동하면 스르륵이 아니라 "뿅" 나타난다
+    if (dist > SPACING * 1.6) {
+      outer.position.copy(target);
+      popUntilRef.current = now + 0.4;
+    } else {
+      const t = 1 - Math.pow(0.0004, delta);
+      outer.position.lerp(target, t);
+    }
+
+    // 이동 방향 바라보기
+    const dx = target.x - outer.position.x;
+    const dz = target.z - outer.position.z;
+    if (Math.abs(dx) + Math.abs(dz) > 0.02) {
+      yawRef.current = Math.atan2(dx, dz);
+    }
+    if (!celebrating) {
+      inner.rotation.y += (yawRef.current - inner.rotation.y) * Math.min(1, delta * 10);
+    }
+
+    // 칸 이동 호핑 (한 칸 = 한 번의 포물선 점프) + 대기 숨쉬기
+    const hop = Math.sin(Math.min(dist / SPACING, 1) * Math.PI) * 0.3;
+    const idle = dist < 0.02 ? Math.abs(Math.sin(now * 2.2)) * 0.03 : 0;
+    let y = hop + idle;
+
+    // 골인 세리머니: 빙글빙글 + 폴짝폴짝
+    if (celebrating) {
+      inner.rotation.y += delta * 7;
+      y += Math.abs(Math.sin(now * 6)) * 0.35;
+    }
+
+    // 충돌 부들부들
+    let jx = 0;
+    let jz = 0;
+    if (now < bumpUntilRef.current) {
+      const k = (bumpUntilRef.current - now) / 0.5;
+      jx = Math.sin(now * 55) * 0.06 * k;
+      jz = Math.cos(now * 43) * 0.05 * k;
+    }
+
+    // 순간이동 팝 (작아졌다 커지며 등장)
+    let scale = 1;
+    if (now < popUntilRef.current) {
+      const p = 1 - (popUntilRef.current - now) / 0.4;
+      scale = 0.3 + 0.7 * (1 - Math.pow(1 - p, 2));
+    }
+
+    inner.position.set(jx, y, jz);
+    inner.scale.setScalar(scale);
+
+    // 숨쉬기 스쿼시
+    const breathe = dist < 0.02 && !celebrating ? 1 + Math.sin(now * 2.2) * 0.02 : 1;
+    inner.scale.y = scale * breathe;
   });
 
   return (
-    <group ref={groupRef} position={target.toArray()}>
-      {/* 몸통 */}
-      <mesh position={[0, 0.33, 0]} castShadow>
-        <cylinderGeometry args={[0.14, 0.24, 0.42, 24]} />
-        <meshStandardMaterial color={color} roughness={0.35} />
-      </mesh>
-      {/* 머리 */}
-      <mesh position={[0, 0.64, 0]} castShadow>
-        <sphereGeometry args={[0.17, 24, 24]} />
-        <meshStandardMaterial color={color} roughness={0.3} />
-      </mesh>
+    <group ref={outerRef} position={target.toArray()}>
+      <group ref={innerRef}>
+        {/* 몸통 */}
+        <mesh position={[0, 0.33, 0]} castShadow>
+          <cylinderGeometry args={[0.14, 0.24, 0.42, 24]} />
+          <meshStandardMaterial color={color} roughness={0.35} />
+        </mesh>
+        {/* 머리 */}
+        <mesh position={[0, 0.64, 0]} castShadow>
+          <sphereGeometry args={[0.17, 24, 24]} />
+          <meshStandardMaterial color={color} roughness={0.3} />
+        </mesh>
+        {/* 눈 (이동 방향을 바라보는 캐릭터 느낌) */}
+        <mesh position={[0.06, 0.68, 0.13]}>
+          <sphereGeometry args={[0.045, 12, 12]} />
+          <meshStandardMaterial color="#ffffff" />
+        </mesh>
+        <mesh position={[-0.06, 0.68, 0.13]}>
+          <sphereGeometry args={[0.045, 12, 12]} />
+          <meshStandardMaterial color="#ffffff" />
+        </mesh>
+        <mesh position={[0.06, 0.68, 0.165]}>
+          <sphereGeometry args={[0.02, 8, 8]} />
+          <meshStandardMaterial color="#1e293b" />
+        </mesh>
+        <mesh position={[-0.06, 0.68, 0.165]}>
+          <sphereGeometry args={[0.02, 8, 8]} />
+          <meshStandardMaterial color="#1e293b" />
+        </mesh>
+      </group>
     </group>
   );
 }
 
-// ===== 보드 내용물 =====
-interface GameBoard3DProps {
-  gamePhase: GamePhase;
-  startPosition?: Position;
-  endPosition?: Position;
-  playerPosition?: Position;
-  obstacles: Obstacle[];
-  collisionWalls?: CollisionWall[];
-  onCellClick?: (position: Position) => void;
-  onDirectionClick?: (position: Position, direction: Direction) => void;
-  readOnly?: boolean;
-  selectionMode?: 'start' | 'end' | 'none';
-  revealObstacles?: boolean; // 게임 종료 후 상대 벽 공개
-  pawnColor?: string; // 말 색상 (기본 파랑, 관전 시 상대 말은 빨강)
-  viewMode?: 'first' | 'third'; // 1인칭(미로 체험) / 3인칭(오버헤드)
-  facing?: Direction; // 1인칭에서 바라보는 방향
-  item?: MapItem | null; // 맵 아이템 (1회성 벽/지뢰/웜홀)
-  itemConsumed?: boolean; // 아이템 사용됨 여부
-  revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들 (일반 벽처럼 노란색)
-  placeMode?: 'wall' | 'oneTimeWall' | 'mine' | 'wormhole' | 'radar'; // 제작 중 배치 모드 (호버 미리보기)
-  pendingCell?: Position | null; // 웜홀 입구로 지정된 셀 (출구 선택 대기)
-  fullscreen?: boolean; // 화면 전체를 채우는 스테이지 모드
-  heightClassName?: string;
+// ===== 액션 이펙트 =====
+
+// 파편 방향 (고정 시드 - 매 렌더 동일)
+const BURST_DIRS: Array<[number, number, number]> = [
+  [0.9, 1.6, 0.2], [-0.7, 1.9, 0.5], [0.3, 1.4, -0.9], [-0.4, 2.1, -0.5],
+  [1.1, 1.2, -0.3], [-1.0, 1.5, -0.1], [0.1, 2.3, 0.8], [0.6, 1.1, 1.0],
+];
+
+// 지뢰 폭발: 팽창하는 화염구 + 사방으로 튀는 파편
+function MineExplosionFX({ at }: { at: Position }) {
+  const [x, , z] = cellToWorld(at);
+  const fireRef = useRef<THREE.Mesh>(null);
+  const fireMatRef = useRef<THREE.MeshStandardMaterial>(null);
+  const debrisRefs = useRef<Array<THREE.Mesh | null>>([]);
+  const startRef = useRef<number | null>(null);
+  const [done, setDone] = useState(false);
+  const LIFE = 0.9;
+
+  useFrame((state, delta) => {
+    if (startRef.current === null) startRef.current = state.clock.elapsedTime;
+    const t = state.clock.elapsedTime - startRef.current;
+    if (t > LIFE) {
+      if (!done) setDone(true);
+      return;
+    }
+    const p = t / LIFE;
+
+    if (fireRef.current && fireMatRef.current) {
+      fireRef.current.scale.setScalar(0.2 + p * 1.6);
+      fireMatRef.current.opacity = Math.max(0, 0.95 * (1 - p * 1.2));
+    }
+    debrisRefs.current.forEach((m, i) => {
+      if (!m) return;
+      const d = BURST_DIRS[i % BURST_DIRS.length];
+      m.position.x += d[0] * delta * 1.6;
+      m.position.z += d[2] * delta * 1.6;
+      m.position.y = Math.max(0.05, 0.2 + d[1] * t - 4.5 * t * t);
+      m.rotation.x += delta * 9;
+      m.rotation.y += delta * 7;
+    });
+  });
+
+  if (done) return null;
+
+  return (
+    <group position={[x, 0.2, z]}>
+      <mesh ref={fireRef}>
+        <sphereGeometry args={[0.3, 20, 20]} />
+        <meshStandardMaterial ref={fireMatRef} color="#f97316" emissive="#f97316" emissiveIntensity={1.6} transparent opacity={0.95} />
+      </mesh>
+      {BURST_DIRS.map((_, i) => (
+        <mesh key={i} ref={(el) => { debrisRefs.current[i] = el; }} position={[0, 0.1, 0]} castShadow>
+          <boxGeometry args={[0.07, 0.07, 0.07]} />
+          <meshStandardMaterial color={i % 2 ? '#57534e' : '#f59e0b'} />
+        </mesh>
+      ))}
+    </group>
+  );
 }
 
-// 맵 아이템 3D 렌더링 (1회성 벽 / 지뢰 / 웜홀)
+// 웜홀 이동: 입구/출구에서 확장되며 사라지는 보라 고리
+function WormholeFX({ at, to }: { at: Position; to?: Position }) {
+  const [ex, , ez] = cellToWorld(at);
+  const exit = to ? cellToWorld(to) : null;
+  const inRef = useRef<THREE.Mesh>(null);
+  const inMat = useRef<THREE.MeshStandardMaterial>(null);
+  const outRef = useRef<THREE.Mesh>(null);
+  const outMat = useRef<THREE.MeshStandardMaterial>(null);
+  const startRef = useRef<number | null>(null);
+  const [done, setDone] = useState(false);
+  const LIFE = 1.0;
+
+  useFrame((state) => {
+    if (startRef.current === null) startRef.current = state.clock.elapsedTime;
+    const t = state.clock.elapsedTime - startRef.current;
+    if (t > LIFE) {
+      if (!done) setDone(true);
+      return;
+    }
+    const p1 = Math.min(1, t / 0.5);
+    if (inRef.current && inMat.current) {
+      inRef.current.scale.setScalar(0.4 + p1 * 2.2);
+      inRef.current.rotation.z += 0.15;
+      inMat.current.opacity = Math.max(0, 0.9 * (1 - p1));
+    }
+    const p2 = Math.max(0, Math.min(1, (t - 0.35) / 0.55));
+    if (outRef.current && outMat.current) {
+      outRef.current.scale.setScalar(0.4 + p2 * 2.2);
+      outRef.current.rotation.z -= 0.15;
+      outMat.current.opacity = p2 > 0 ? Math.max(0, 0.9 * (1 - p2)) : 0;
+    }
+  });
+
+  if (done) return null;
+
+  return (
+    <group>
+      <mesh ref={inRef} position={[ex, 0.15, ez]} rotation={[-Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.3, 0.05, 10, 32]} />
+        <meshStandardMaterial ref={inMat} color="#a855f7" emissive="#a855f7" emissiveIntensity={1.4} transparent opacity={0.9} />
+      </mesh>
+      {exit && (
+        <mesh ref={outRef} position={[exit[0], 0.15, exit[2]]} rotation={[-Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.3, 0.05, 10, 32]} />
+          <meshStandardMaterial ref={outMat} color="#d8b4fe" emissive="#d8b4fe" emissiveIntensity={1.4} transparent opacity={0} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+// 탐지기: 바닥을 훑고 지나가는 레이더 파동
+function RadarFX({ at }: { at: Position }) {
+  const [x, , z] = cellToWorld(at);
+  const ringRef = useRef<THREE.Mesh>(null);
+  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  const startRef = useRef<number | null>(null);
+  const [done, setDone] = useState(false);
+  const LIFE = 1.1;
+
+  useFrame((state) => {
+    if (startRef.current === null) startRef.current = state.clock.elapsedTime;
+    const t = state.clock.elapsedTime - startRef.current;
+    if (t > LIFE) {
+      if (!done) setDone(true);
+      return;
+    }
+    const p = t / LIFE;
+    if (ringRef.current && matRef.current) {
+      const r = 0.3 + p * SPACING * 2.2;
+      ringRef.current.scale.setScalar(r);
+      matRef.current.opacity = Math.max(0, 0.8 * (1 - p));
+    }
+  });
+
+  if (done) return null;
+
+  return (
+    <mesh ref={ringRef} position={[x, 0.12, z]} rotation={[-Math.PI / 2, 0, 0]}>
+      <torusGeometry args={[1, 0.035, 10, 48]} />
+      <meshStandardMaterial ref={matRef} color="#fbbf24" emissive="#fbbf24" emissiveIntensity={1.4} transparent opacity={0.8} />
+    </mesh>
+  );
+}
+
+// 벽 충돌: 부딪힌 지점에서 튀는 스파크
+function BumpFX({ at, dir }: { at: Position; dir?: Direction }) {
+  const [x, , z] = cellToWorld(at);
+  const offset = dir ? DIR_VECTOR[dir] : [0, 0];
+  const px = x + offset[0] * (SPACING / 2);
+  const pz = z + offset[1] * (SPACING / 2);
+  const sparkRefs = useRef<Array<THREE.Mesh | null>>([]);
+  const startRef = useRef<number | null>(null);
+  const [done, setDone] = useState(false);
+  const LIFE = 0.5;
+
+  useFrame((state, delta) => {
+    if (startRef.current === null) startRef.current = state.clock.elapsedTime;
+    const t = state.clock.elapsedTime - startRef.current;
+    if (t > LIFE) {
+      if (!done) setDone(true);
+      return;
+    }
+    sparkRefs.current.forEach((m, i) => {
+      if (!m) return;
+      const d = BURST_DIRS[(i * 2) % BURST_DIRS.length];
+      m.position.x += d[0] * delta * 0.9;
+      m.position.z += d[2] * delta * 0.9;
+      m.position.y = Math.max(0.05, 0.3 + d[1] * 0.5 * t - 3.5 * t * t);
+      const s = Math.max(0.01, 1 - t / LIFE);
+      m.scale.setScalar(s);
+    });
+  });
+
+  if (done) return null;
+
+  return (
+    <group position={[px, 0.1, pz]}>
+      {[0, 1, 2, 3, 4].map((i) => (
+        <mesh key={i} ref={(el) => { sparkRefs.current[i] = el; }} position={[0, 0.25, 0]}>
+          <sphereGeometry args={[0.05, 8, 8]} />
+          <meshStandardMaterial color="#fbbf24" emissive="#fbbf24" emissiveIntensity={2} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+// 골인: 도착점에서 터지는 축포
+function GoalFX({ at }: { at: Position }) {
+  const [x, , z] = cellToWorld(at);
+  const confettiRefs = useRef<Array<THREE.Mesh | null>>([]);
+  const startRef = useRef<number | null>(null);
+  const [done, setDone] = useState(false);
+  const LIFE = 1.4;
+  const CONFETTI_COLORS = ['#f59e0b', '#22c55e', '#3b82f6', '#ef4444', '#a855f7', '#eab308', '#14b8a6', '#f97316'];
+
+  useFrame((state, delta) => {
+    if (startRef.current === null) startRef.current = state.clock.elapsedTime;
+    const t = state.clock.elapsedTime - startRef.current;
+    if (t > LIFE) {
+      if (!done) setDone(true);
+      return;
+    }
+    confettiRefs.current.forEach((m, i) => {
+      if (!m) return;
+      const d = BURST_DIRS[i % BURST_DIRS.length];
+      m.position.x += d[0] * delta * 1.1;
+      m.position.z += d[2] * delta * 1.1;
+      m.position.y = Math.max(0.05, 0.3 + d[1] * 1.2 * t - 3.2 * t * t);
+      m.rotation.x += delta * 8;
+      m.rotation.z += delta * 6;
+    });
+  });
+
+  if (done) return null;
+
+  return (
+    <group position={[x, 0.3, z]}>
+      {CONFETTI_COLORS.map((c, i) => (
+        <mesh key={i} ref={(el) => { confettiRefs.current[i] = el; }} position={[0, 0.2, 0]}>
+          <boxGeometry args={[0.09, 0.02, 0.09]} />
+          <meshStandardMaterial color={c} emissive={c} emissiveIntensity={0.5} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function FxLayer({ fx }: { fx?: BoardFx | null }) {
+  if (!fx || !fx.at) return null;
+  switch (fx.type) {
+    case 'mine':
+      return <MineExplosionFX key={fx.key} at={fx.at} />;
+    case 'wormhole':
+      return <WormholeFX key={fx.key} at={fx.at} to={fx.to} />;
+    case 'radar':
+      return <RadarFX key={fx.key} at={fx.at} />;
+    case 'bump':
+      return <BumpFX key={fx.key} at={fx.at} dir={fx.dir} />;
+    case 'goal':
+      return <GoalFX key={fx.key} at={fx.at} />;
+    default:
+      return null;
+  }
+}
+
+// ===== 맵 아이템 표시 =====
 function ItemVisuals({
   item,
   consumed,
   visible,
-  wallHeight,
 }: {
   item: MapItem;
   consumed: boolean;
-  visible: boolean; // 미사용 상태도 표시할지 (제작/공개), consumed면 항상 흔적 표시
-  wallHeight: number;
+  visible: boolean;
 }) {
   if (!visible && !consumed) return null;
 
   if (item.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
     const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
     if (!seg) return null;
-    // 위장 벽: 공개 시에도 일반 벽과 동일하게 표시 (가짜라는 표시 없음)
-    // 이미 통과된 경우엔 표시하지 않음 (실제로 사라진 벽)
+    // 위장 벽: 공개 시에도 일반 벽과 동일하게 표시, 통과된 뒤엔 표시하지 않음
     if (consumed) return null;
-    return <WallBox seg={seg} color={COLORS.reveal} opacity={0.75} height={wallHeight} />;
+    return <WallBox seg={seg} color={COLORS.reveal} opacity={0.75} />;
   }
 
   if (item.type === 'mine' && item.position) {
@@ -478,7 +728,6 @@ function ItemVisuals({
   return null;
 }
 
-// 지뢰 - 빨간 램프가 깜빡이는 애니메이션
 function MineVisual({ position, consumed }: { position: Position; consumed: boolean }) {
   const lampRef = useRef<THREE.MeshStandardMaterial>(null);
   const [x, , z] = cellToWorld(position);
@@ -490,7 +739,6 @@ function MineVisual({ position, consumed }: { position: Position; consumed: bool
   });
 
   if (consumed) {
-    // 폭발 흔적 (검게 그을린 자국)
     return (
       <mesh position={[x, 0.09, z]}>
         <cylinderGeometry args={[0.3, 0.3, 0.03, 24]} />
@@ -513,7 +761,6 @@ function MineVisual({ position, consumed }: { position: Position; consumed: bool
   );
 }
 
-// 웜홀 - 회전하는 소용돌이 애니메이션
 function WormholeVisual({ entrance, exit, consumed }: { entrance: Position; exit: Position; consumed: boolean }) {
   const entranceRef = useRef<THREE.Group>(null);
   const exitRef = useRef<THREE.Group>(null);
@@ -529,7 +776,6 @@ function WormholeVisual({ entrance, exit, consumed }: { entrance: Position; exit
 
   return (
     <group>
-      {/* 입구 - 진한 보라 소용돌이 */}
       <group ref={entranceRef} position={[ex, 0.1, ez]}>
         <mesh rotation={[-Math.PI / 2, 0, 0]}>
           <torusGeometry args={[0.3, 0.06, 12, 32]} />
@@ -544,7 +790,6 @@ function WormholeVisual({ entrance, exit, consumed }: { entrance: Position; exit
           <meshStandardMaterial color="#581c87" transparent opacity={opacity} />
         </mesh>
       </group>
-      {/* 출구 - 밝은 보라 고리 (반대 방향 회전) */}
       <group ref={exitRef} position={[xx, 0.1, xz]}>
         <mesh rotation={[-Math.PI / 2, 0, 0]}>
           <torusGeometry args={[0.3, 0.05, 12, 32]} />
@@ -553,6 +798,31 @@ function WormholeVisual({ entrance, exit, consumed }: { entrance: Position; exit
       </group>
     </group>
   );
+}
+
+// ===== 보드 내용물 =====
+interface GameBoard3DProps {
+  gamePhase: GamePhase;
+  startPosition?: Position;
+  endPosition?: Position;
+  playerPosition?: Position;
+  obstacles: Obstacle[];
+  collisionWalls?: CollisionWall[];
+  onCellClick?: (position: Position) => void;
+  onDirectionClick?: (position: Position, direction: Direction) => void;
+  readOnly?: boolean;
+  selectionMode?: 'start' | 'end' | 'none';
+  revealObstacles?: boolean; // 게임 종료 후 상대 벽 공개
+  pawnColor?: string; // 말 색상 (기본 파랑, 관전 시 상대 말은 빨강)
+  item?: MapItem | null;
+  itemConsumed?: boolean;
+  revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들
+  placeMode?: 'wall' | 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
+  pendingCell?: Position | null;
+  fx?: BoardFx | null; // 액션 이펙트
+  celebrating?: boolean; // 골인 세리머니
+  fullscreen?: boolean;
+  heightClassName?: string;
 }
 
 function BoardContents({
@@ -568,40 +838,36 @@ function BoardContents({
   selectionMode = 'none',
   revealObstacles = false,
   pawnColor,
-  viewMode = 'third',
   item = null,
   itemConsumed = false,
   revealedWalls = [],
   placeMode = 'wall',
   pendingCell = null,
+  fx = null,
+  celebrating = false,
 }: GameBoard3DProps) {
   const isSetup = gamePhase === GamePhase.SETUP;
-  const isFirstPerson = viewMode === 'first';
-  const wallHeight = isFirstPerson ? FP_WALL_HEIGHT : WALL_HEIGHT;
 
-  // 설치된 장애물 세그먼트 (설정 단계 또는 게임 종료 후 공개)
   const obstacleSegments = useMemo(
     () => dedupeSegments(obstacles || []),
     [obstacles]
   );
 
-  // 충돌한 벽 세그먼트 (플레이 중 빨간색)
   const collisionSegments = useMemo(
     () => dedupeSegments(collisionWalls || []),
     [collisionWalls]
   );
 
-  // 탐지기로 밝혀낸 벽 세그먼트 (노란색 - 일반 벽과 동일하게 표시)
   const radarSegments = useMemo(
     () => dedupeSegments(revealedWalls || []),
     [revealedWalls]
   );
+
   const collisionKeys = useMemo(
     () => new Set(collisionSegments.map(segmentKey)),
     [collisionSegments]
   );
 
-  // 모든 벽 슬롯 (설치 단계 전용)
   const allSlots = useMemo(() => {
     const slots: WallSegment[] = [];
     for (let r = 0; r < BOARD_SIZE - 1; r++)
@@ -613,7 +879,6 @@ function BoardContents({
 
   const occupiedKeys = useMemo(() => {
     const keys = new Set(obstacleSegments.map(segmentKey));
-    // 1회성 벽 아이템 자리도 점유된 것으로 취급 (호버 미리보기 방지)
     if (item?.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
       const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
       if (seg) keys.add(segmentKey(seg));
@@ -634,7 +899,6 @@ function BoardContents({
           isStart={!!startPosition && isSamePosition(position, startPosition)}
           isEnd={!!endPosition && isSamePosition(position, endPosition)}
           onCellClick={onCellClick}
-          beaconFlag={isFirstPerson}
           placeMode={placeMode}
           isPendingEntrance={!!pendingCell && isSamePosition(position, pendingCell)}
         />
@@ -677,10 +941,10 @@ function BoardContents({
           />
         ))}
 
-      {/* 플레이 단계: 충돌한 벽 (빨간색) - 1인칭에서는 시야를 가리는 높은 벽 */}
+      {/* 플레이 단계: 충돌한 벽 (빨간색) */}
       {gamePhase === GamePhase.PLAY &&
         collisionSegments.map((seg) => (
-          <WallBox key={`col-${segmentKey(seg)}`} seg={seg} color={COLORS.collision} height={wallHeight} />
+          <WallBox key={`col-${segmentKey(seg)}`} seg={seg} color={COLORS.collision} />
         ))}
 
       {/* 게임 종료: 공개된 벽 (반투명 주황) - 충돌한 벽은 빨간색 유지 */}
@@ -688,33 +952,32 @@ function BoardContents({
         obstacleSegments
           .filter((seg) => !collisionKeys.has(segmentKey(seg)))
           .map((seg) => (
-            <WallBox key={`rev-${segmentKey(seg)}`} seg={seg} color={COLORS.reveal} opacity={0.75} height={wallHeight} />
+            <WallBox key={`rev-${segmentKey(seg)}`} seg={seg} color={COLORS.reveal} opacity={0.75} />
           ))}
 
-      {/* 탐지기로 밝혀낸 벽 (게임 종료 공개 전까지만 - 이후엔 정식 공개와 겹침 방지) */}
+      {/* 탐지기로 밝혀낸 벽 (게임 종료 공개 전까지만) */}
       {gamePhase === GamePhase.PLAY && !revealObstacles &&
         radarSegments
           .filter((seg) => !collisionKeys.has(segmentKey(seg)))
           .map((seg) => (
-            <WallBox key={`radar-${segmentKey(seg)}`} seg={seg} color={COLORS.wall} height={wallHeight} />
+            <WallBox key={`radar-${segmentKey(seg)}`} seg={seg} color={COLORS.wall} />
           ))}
 
-      {/* 맵 아이템 (제작/공개 시 전체 표시, 사용된 뒤엔 흔적 표시) */}
+      {/* 맵 아이템 */}
       {item && (
         <ItemVisuals
           item={item}
           consumed={!!itemConsumed}
           visible={isSetup || !!revealObstacles}
-          wallHeight={wallHeight}
         />
       )}
 
-      {/* 1인칭: 보드 외곽 벽 (미로 느낌) */}
-      {isFirstPerson && <BorderWalls />}
+      {/* 액션 이펙트 */}
+      <FxLayer fx={fx} />
 
-      {/* 플레이어 말 (1인칭에서는 내가 말 그 자체이므로 숨김) */}
-      {playerPosition && !isFirstPerson && (
-        <Pawn position={playerPosition} color={pawnColor || COLORS.player} />
+      {/* 플레이어 캐릭터 */}
+      {playerPosition && (
+        <Pawn position={playerPosition} color={pawnColor || COLORS.player} fx={fx} celebrating={celebrating} />
       )}
     </group>
   );
@@ -724,14 +987,11 @@ function BoardContents({
 const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
   const { heightClassName = 'h-[340px] sm:h-[420px] md:h-[460px]', fullscreen = false } = props;
 
-  // 언마운트 시 커서 상태 복원
   useEffect(() => {
     return () => {
       document.body.style.cursor = 'auto';
     };
   }, []);
-
-  const span = BOARD_SIZE * SPACING;
 
   return (
     <div
@@ -763,20 +1023,13 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
 
         <BoardContents {...props} />
 
-        {props.viewMode === 'first' && props.playerPosition ? (
-          <FirstPersonRig position={props.playerPosition} facing={props.facing || 'up'} />
-        ) : (
-          <>
-            <ThirdPersonReset />
-            <OrbitControls
-              makeDefault
-              target={[CENTER, 0, CENTER]}
-              enablePan={false}
-              enableZoom={false}
-              maxPolarAngle={Math.PI * 0.44}
-            />
-          </>
-        )}
+        <OrbitControls
+          makeDefault
+          target={[CENTER, 0, CENTER]}
+          enablePan={false}
+          enableZoom={false}
+          maxPolarAngle={Math.PI * 0.44}
+        />
       </Canvas>
     </div>
   );

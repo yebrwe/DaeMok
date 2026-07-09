@@ -14,7 +14,7 @@
  *
  * 검증 시나리오 (자유 이동 - 턴 대기 없음, 최종 턴 수 비교로 승부):
  *   구글 로그인(에뮬레이터 가짜 계정) x2 -> 방 생성/참가 -> 맵 제작 x2 -> 자동 시작
- *   [1게임] 1인칭 기본 확인 -> A 연속 이동 선완주(관전 전환) -> B 헛걸음 -> 승리 불가 안내
+ *   [1게임] 3인칭 기본(1인칭 제거) 확인 -> A 연속 이동 선완주(관전 전환) -> B 헛걸음 -> 승리 불가 안내
  *           -> B 포기 -> A 승리
  *   [2게임] 재시작 -> B 선완주 -> A 동턴 완주 -> 무승부
  *   마지막: 방장 나가기 -> 방 즉시 삭제 -> 상대 자동 리디렉션
@@ -150,11 +150,11 @@ async function setupMap(page) {
     await expectText(pageA, '이동: 0');
     await expectText(pageB, '이동: 0');
 
-    step('6: 1인칭이 기본 시점인지 확인 후 3인칭으로 전환');
-    await pageA.getByRole('button', { name: '1인칭' }).waitFor({ timeout: 10000 });
-    await pageA.getByRole('button', { name: '3인칭' }).click();
-    await pageB.getByRole('button', { name: '3인칭' }).click();
-    ok('양쪽 3인칭 전환');
+    step('6: 3인칭이 기본 시점 (1인칭 버튼 제거 확인)');
+    await pageA.getByRole('button', { name: '3인칭' }).waitFor({ timeout: 10000 });
+    const fpCount = await pageA.getByRole('button', { name: '1인칭' }).count();
+    if (fpCount > 0) throw new Error('1인칭 버튼이 아직 남아 있음');
+    ok('3인칭 기본 + 1인칭 제거');
 
     step('7: [1게임] 자유 이동 - A가 연속 2번 이동해 즉시 완주 (턴 대기 없음)');
     await pageA.keyboard.press('ArrowRight');
@@ -193,15 +193,13 @@ async function setupMap(page) {
     await expectText(pageA, '시작점을 선택하세요');
     await expectText(pageB, '시작점을 선택하세요');
 
-    step('12: [2게임] 맵 제작 x2 -> 방장 시작 -> 3인칭 전환');
+    step('12: [2게임] 맵 제작 x2 -> 방장 시작');
     await setupMap(pageA);
     await setupMap(pageB);
     await expectText(pageA, '모두 준비되었습니다');
     await pageA.getByRole('button', { name: '게임 시작' }).click();
     await expectText(pageA, '이동: 0');
     await expectText(pageB, '이동: 0');
-    await pageA.getByRole('button', { name: '3인칭' }).click();
-    await pageB.getByRole('button', { name: '3인칭' }).click();
 
     step('13: B 2턴 선완주 -> A는 목표/무승부 안내');
     await pageB.keyboard.press('ArrowRight');
@@ -263,8 +261,6 @@ async function setupMap(page) {
     ok('3인 게임 시작 (순환 릴레이 배정)');
 
     step('18: A 2턴 완주 / B 헛걸음 후 4턴 완주 / C에게 목표 안내');
-    await pageA.getByRole('button', { name: '3인칭' }).click();
-    await pageB.getByRole('button', { name: '3인칭' }).click();
     await pageA.keyboard.press('ArrowRight');
     await expectText(pageA, '이동: 1');
     await pageA.keyboard.press('ArrowRight');
