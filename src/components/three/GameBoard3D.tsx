@@ -42,6 +42,7 @@ export interface BoardFx {
   at?: Position;
   to?: Position;
   dir?: Direction;
+  delay?: number; // 발동 연출 지연 (말이 해당 칸에 도착하는 시점과 동기화)
 }
 
 // 셀 좌표 -> 3D 위치
@@ -322,14 +323,17 @@ function GoalFlag() {
 }
 
 // ===== 캐릭터 (플레이어 말) =====
-// 대기 숨쉬기 / 칸 이동 호핑 + 이동 방향 바라보기 / 충돌 부들부들 / 순간이동 팝 / 골인 세리머니
+// 대기 숨쉬기 / 칸 이동 폴짝폴짝 호핑(경유지 경로 지원) + 이동 방향 바라보기
+// 충돌 부들부들 / 웜홀 스파게티화 흡입·방출 / 골인 세리머니
 function Pawn({
   position,
+  via = null,
   color,
   fx,
   celebrating = false,
 }: {
   position: Position;
+  via?: Position[] | null; // 경유지 - 지뢰 넉백(뒤로 폴짝 2번) 등 경로 이동
   color: string;
   fx?: BoardFx | null;
   celebrating?: boolean;
@@ -340,11 +344,33 @@ function Pawn({
   const bumpUntilRef = useRef(0);
   const popUntilRef = useRef(0);
   const lastFxKeyRef = useRef(0);
+  // 웜홀 트랜싯: 다음 원거리 점프를 스파게티화 흡입/방출로 연출
+  const wormholePendingRef = useRef(false);
+  const transitRef = useRef<{ phase: 'suck' | 'emerge'; progress: number } | null>(null);
 
-  const target = useMemo(() => {
-    const [x, , z] = cellToWorld(position);
-    return new THREE.Vector3(x, 0, z);
-  }, [position]);
+  // 이동 경로: 경유지(via)를 거쳐 최종 칸까지 한 칸씩 폴짝폴짝
+  const waypoints = useMemo(() => {
+    return [...(via ?? []), position].map((p) => {
+      const [x, , z] = cellToWorld(p);
+      return new THREE.Vector3(x, 0, z);
+    });
+  }, [position, via]);
+
+  const queueRef = useRef<THREE.Vector3[]>([]);
+  const lastWaypointsRef = useRef<THREE.Vector3[] | null>(null);
+  if (lastWaypointsRef.current !== waypoints) {
+    lastWaypointsRef.current = waypoints;
+    queueRef.current = [...waypoints];
+  }
+
+  // 첫 렌더 위치. 이후에는 useFrame이 위치를 전담한다 -
+  // position을 그대로 group prop으로 넘기면 React가 매 렌더마다 위치를 목표점으로
+  // 덮어써서 lerp/호핑이 전부 무효화된다 (스냅 버그)
+  const initialPosRef = useRef<[number, number, number] | null>(null);
+  if (initialPosRef.current === null) {
+    const last = waypoints[waypoints.length - 1];
+    initialPosRef.current = [last.x, 0, last.z];
+  }
 
   useFrame((state, delta) => {
     const outer = outerRef.current;
@@ -353,18 +379,65 @@ function Pawn({
 
     const now = state.clock.elapsedTime;
 
-    // 충돌 이펙트 트리거 감지
-    if (fx && fx.type === 'bump' && fx.key !== lastFxKeyRef.current) {
+    // 이펙트 트리거 감지
+    if (fx && fx.key !== lastFxKeyRef.current) {
       lastFxKeyRef.current = fx.key;
-      bumpUntilRef.current = now + 0.5;
+      if (fx.type === 'bump') bumpUntilRef.current = now + 0.5;
+      if (fx.type === 'wormhole') wormholePendingRef.current = true;
     }
 
-    const dist = outer.position.distanceTo(target);
+    // 다음 웨이포인트 (도착하면 큐에서 꺼내 다음 칸으로)
+    let target = queueRef.current[0];
+    if (!target) return;
+    let dist = outer.position.distanceTo(target);
+    while (dist < 0.07 && queueRef.current.length > 1) {
+      queueRef.current.shift();
+      target = queueRef.current[0];
+      dist = outer.position.distanceTo(target);
+    }
 
-    // 순간이동(지뢰 넉백/웜홀): 멀리 이동하면 스르륵이 아니라 "뿅" 나타난다
+    // ---- 웜홀 트랜싯 (스파게티화) ----
+    const transit = transitRef.current;
+    if (transit) {
+      transit.progress = Math.min(1, transit.progress + delta / 0.5);
+      const p = transit.progress;
+      if (transit.phase === 'suck') {
+        // 가늘고 길게 늘어나며 회전 가속, 포탈 속으로 침몰
+        const sy = 1 + 1.5 * p;
+        const sxz = Math.max(0.03, 1 - p);
+        inner.scale.set(sxz, sy, sxz);
+        inner.position.set(0, -2.3 * Math.pow(p, 1.6), 0);
+        inner.rotation.y += delta * (6 + 20 * p);
+        if (p >= 1) {
+          outer.position.copy(target); // 출구로 순간 이동 (화면상으론 이미 사라진 상태)
+          transitRef.current = { phase: 'emerge', progress: 0 };
+        }
+      } else {
+        // 출구에서 늘어난 채 솟아나와 원래 모습으로
+        const q = 1 - p;
+        const sy = 1 + 1.5 * q;
+        const sxz = Math.max(0.03, p);
+        inner.scale.set(sxz, sy, sxz);
+        inner.position.set(0, -2.3 * Math.pow(q, 1.6), 0);
+        inner.rotation.y += delta * (6 + 20 * q);
+        if (p >= 1) {
+          transitRef.current = null;
+          inner.scale.set(1, 1, 1);
+        }
+      }
+      return; // 트랜싯 중엔 호핑/숨쉬기/흔들림 스킵
+    }
+
+    // 원거리 점프: 웜홀이면 스파게티화 트랜싯, 그 외(관전 전환 등)는 뿅 팝
     if (dist > SPACING * 1.6) {
+      if (wormholePendingRef.current) {
+        wormholePendingRef.current = false;
+        transitRef.current = { phase: 'suck', progress: 0 };
+        return;
+      }
       outer.position.copy(target);
       popUntilRef.current = now + 0.4;
+      dist = 0;
     } else {
       const t = 1 - Math.pow(0.0004, delta);
       outer.position.lerp(target, t);
@@ -381,7 +454,7 @@ function Pawn({
     }
 
     // 칸 이동 호핑 (한 칸 = 한 번의 포물선 점프) + 대기 숨쉬기
-    const hop = Math.sin(Math.min(dist / SPACING, 1) * Math.PI) * 0.3;
+    const hop = Math.sin(Math.min(dist / SPACING, 1) * Math.PI) * 0.34;
     const idle = dist < 0.02 ? Math.abs(Math.sin(now * 2.2)) * 0.03 : 0;
     let y = hop + idle;
 
@@ -416,7 +489,7 @@ function Pawn({
   });
 
   return (
-    <group ref={outerRef} position={target.toArray()}>
+    <group ref={outerRef} position={initialPosRef.current}>
       <group ref={innerRef}>
         {/* 몸통 */}
         <mesh position={[0, 0.33, 0]} castShadow>
@@ -459,18 +532,21 @@ const BURST_DIRS: Array<[number, number, number]> = [
 ];
 
 // 지뢰 폭발: 팽창하는 화염구 + 사방으로 튀는 파편
-function MineExplosionFX({ at }: { at: Position }) {
+function MineExplosionFX({ at, delay = 0 }: { at: Position; delay?: number }) {
   const [x, , z] = cellToWorld(at);
   const fireRef = useRef<THREE.Mesh>(null);
   const fireMatRef = useRef<THREE.MeshStandardMaterial>(null);
   const debrisRefs = useRef<Array<THREE.Mesh | null>>([]);
   const startRef = useRef<number | null>(null);
+  const [started, setStarted] = useState(delay === 0);
   const [done, setDone] = useState(false);
   const LIFE = 0.9;
 
   useFrame((state, delta) => {
     if (startRef.current === null) startRef.current = state.clock.elapsedTime;
-    const t = state.clock.elapsedTime - startRef.current;
+    const t = state.clock.elapsedTime - startRef.current - delay;
+    if (t < 0) return; // 말이 지뢰 칸에 도착할 때까지 대기
+    if (!started) setStarted(true);
     if (t > LIFE) {
       if (!done) setDone(true);
       return;
@@ -495,7 +571,7 @@ function MineExplosionFX({ at }: { at: Position }) {
   if (done) return null;
 
   return (
-    <group position={[x, 0.2, z]}>
+    <group position={[x, 0.2, z]} visible={started}>
       <mesh ref={fireRef}>
         <sphereGeometry args={[0.3, 20, 20]} />
         <meshStandardMaterial ref={fireMatRef} color="#f97316" emissive="#f97316" emissiveIntensity={1.6} transparent opacity={0.95} />
@@ -511,7 +587,7 @@ function MineExplosionFX({ at }: { at: Position }) {
 }
 
 // 웜홀 이동: 입구/출구에서 확장되며 사라지는 보라 고리
-function WormholeFX({ at, to }: { at: Position; to?: Position }) {
+function WormholeFX({ at, to, delay = 0 }: { at: Position; to?: Position; delay?: number }) {
   const [ex, , ez] = cellToWorld(at);
   const exit = to ? cellToWorld(to) : null;
   const inRef = useRef<THREE.Mesh>(null);
@@ -520,22 +596,24 @@ function WormholeFX({ at, to }: { at: Position; to?: Position }) {
   const outMat = useRef<THREE.MeshStandardMaterial>(null);
   const startRef = useRef<number | null>(null);
   const [done, setDone] = useState(false);
-  const LIFE = 1.0;
+  const LIFE = 1.7; // 흡입(0.5s) + 방출(0.5s)에 맞춰 링 연출
 
   useFrame((state) => {
     if (startRef.current === null) startRef.current = state.clock.elapsedTime;
-    const t = state.clock.elapsedTime - startRef.current;
+    const t = state.clock.elapsedTime - startRef.current - delay;
     if (t > LIFE) {
       if (!done) setDone(true);
       return;
     }
-    const p1 = Math.min(1, t / 0.5);
+    // 입구 링: 말이 빨려들어가는 동안 확장
+    const p1 = Math.max(0, Math.min(1, t / 0.6));
     if (inRef.current && inMat.current) {
       inRef.current.scale.setScalar(0.4 + p1 * 2.2);
       inRef.current.rotation.z += 0.15;
-      inMat.current.opacity = Math.max(0, 0.9 * (1 - p1));
+      inMat.current.opacity = t < 0 ? 0 : Math.max(0, 0.9 * (1 - p1));
     }
-    const p2 = Math.max(0, Math.min(1, (t - 0.35) / 0.55));
+    // 출구 링: 말이 솟아나오는 시점(흡입 완료 후)에 확장
+    const p2 = Math.max(0, Math.min(1, (t - 0.5) / 0.6));
     if (outRef.current && outMat.current) {
       outRef.current.scale.setScalar(0.4 + p2 * 2.2);
       outRef.current.rotation.z -= 0.15;
@@ -683,9 +761,9 @@ function FxLayer({ fx }: { fx?: BoardFx | null }) {
   if (!fx || !fx.at) return null;
   switch (fx.type) {
     case 'mine':
-      return <MineExplosionFX key={fx.key} at={fx.at} />;
+      return <MineExplosionFX key={fx.key} at={fx.at} delay={fx.delay ?? 0} />;
     case 'wormhole':
-      return <WormholeFX key={fx.key} at={fx.at} to={fx.to} />;
+      return <WormholeFX key={fx.key} at={fx.at} to={fx.to} delay={fx.delay ?? 0} />;
     case 'radar':
       return <RadarFX key={fx.key} at={fx.at} />;
     case 'bump':
@@ -702,18 +780,22 @@ function ItemVisuals({
   item,
   consumed,
   visible,
+  setup = false,
 }: {
   item: MapItem;
   consumed: boolean;
   visible: boolean;
+  setup?: boolean;
 }) {
   if (!visible && !consumed) return null;
 
   if (item.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
     const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
     if (!seg) return null;
-    // 위장 벽: 공개 시에도 일반 벽과 동일하게 표시, 통과된 뒤엔 표시하지 않음
+    // 위장 벽: 어디서든 일반 벽과 픽셀 단위로 동일하게 - 제작 중엔 노란 벽,
+    // 종료 공개 시엔 공개 벽과 같은 색. 통과된 뒤엔 표시하지 않음
     if (consumed) return null;
+    if (setup) return <WallBox seg={seg} color={COLORS.wall} />;
     return <WallBox seg={seg} color={COLORS.reveal} opacity={0.75} />;
   }
 
@@ -820,6 +902,7 @@ interface GameBoard3DProps {
   placeMode?: 'wall' | 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
   pendingCell?: Position | null;
   fx?: BoardFx | null; // 액션 이펙트
+  pawnVia?: Position[] | null; // 말 이동 경유지 (지뢰 넉백 등 경로 연출)
   celebrating?: boolean; // 골인 세리머니
   fullscreen?: boolean;
   heightClassName?: string;
@@ -844,6 +927,7 @@ function BoardContents({
   placeMode = 'wall',
   pendingCell = null,
   fx = null,
+  pawnVia = null,
   celebrating = false,
 }: GameBoard3DProps) {
   const isSetup = gamePhase === GamePhase.SETUP;
@@ -937,7 +1021,7 @@ function BoardContents({
             seg={seg}
             occupied={occupiedKeys.has(segmentKey(seg))}
             onPlace={onDirectionClick}
-            previewColor={placeMode === 'oneTimeWall' ? '#22d3ee' : COLORS.wallPreview}
+            previewColor={COLORS.wallPreview}
           />
         ))}
 
@@ -969,6 +1053,7 @@ function BoardContents({
           item={item}
           consumed={!!itemConsumed}
           visible={isSetup || !!revealObstacles}
+          setup={isSetup}
         />
       )}
 
@@ -977,7 +1062,7 @@ function BoardContents({
 
       {/* 플레이어 캐릭터 */}
       {playerPosition && (
-        <Pawn position={playerPosition} color={pawnColor || COLORS.player} fx={fx} celebrating={celebrating} />
+        <Pawn position={playerPosition} via={pawnVia} color={pawnColor || COLORS.player} fx={fx} celebrating={celebrating} />
       )}
     </group>
   );

@@ -76,6 +76,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const [viewMode, setViewMode] = useState<ViewMode>('third');
   // 액션 이펙트 (지뢰 폭발/웜홀/탐지 파동/충돌 스파크/골인 축포)
   const [fx, setFx] = useState<BoardFx | null>(null);
+  // 말 이동 경유지: 지뢰 넉백은 [지뢰 칸, 직전 칸]을 거쳐 뒤로 폴짝폴짝, 웜홀은 입구를 거쳐 흡입
+  const [moveVia, setMoveVia] = useState<Position[] | null>(null);
   const fxKeyRef = useRef(0);
   const fireFx = useCallback((partial: Omit<BoardFx, 'key'>) => {
     fxKeyRef.current += 1;
@@ -356,24 +358,31 @@ const GamePlay: React.FC<GamePlayProps> = ({
           let moveMessage = '이동했습니다.';
           let moveValidState: boolean | null = true;
 
+          let viaPath: Position[] | null = null;
+
           if (item && !itemConsumed) {
             if (item.type === 'mine' && item.position && isSamePosition(newPosition, item.position)) {
               const history = positionHistoryRef.current;
               finalPosition = history.length >= 2 ? history[history.length - 2] : history[0] ?? startPosition;
               moveMessage = '💥 지뢰를 밟아 2턴 전 위치로 되돌아갔습니다!';
               moveValidState = false;
-              fireFx({ type: 'mine', at: item.position });
+              // 지뢰 칸에 폴짝 올라선 순간 폭발 -> 왔던 길로 뒤로 폴짝 2번
+              viaPath = [newPosition, playerPosition];
+              fireFx({ type: 'mine', at: item.position, delay: 0.35 });
               consumeOpponentItem();
             } else if (item.type === 'wormhole' && item.entrance && isSamePosition(newPosition, item.entrance)) {
               finalPosition = item.exit ?? newPosition;
               moveMessage = '🌀 웜홀에 빨려들어가 다른 곳으로 이동했습니다!';
               moveValidState = null;
-              fireFx({ type: 'wormhole', at: item.entrance, to: item.exit });
+              // 입구까지 폴짝 이동한 뒤 스파게티화되어 빨려들어감
+              viaPath = [item.entrance];
+              fireFx({ type: 'wormhole', at: item.entrance, to: item.exit, delay: 0.35 });
               consumeOpponentItem();
             }
           }
 
           setLastMoveValid(moveValidState);
+          setMoveVia(viaPath);
           setPlayerPosition(finalPosition);
           positionHistoryRef.current = [...positionHistoryRef.current, finalPosition];
           setMoveCount(newCount);
@@ -502,6 +511,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
           item: myItem,
           itemConsumed: myItemConsumed,
           fx: null as BoardFx | null,
+          pawnVia: null as Position[] | null,
           celebrating: false,
         }
       : {
@@ -516,6 +526,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
           item,
           itemConsumed,
           fx,
+          pawnVia: moveVia,
           celebrating: iAmDone, // 골인 세리머니 (관전 전환 전 + 종료 후 결과 화면)
         };
 
@@ -537,6 +548,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
           itemConsumed={board.itemConsumed}
           revealedWalls={spectating ? [] : revealedWalls}
           fx={board.fx}
+          pawnVia={board.pawnVia}
           celebrating={board.celebrating}
           fullscreen
         />

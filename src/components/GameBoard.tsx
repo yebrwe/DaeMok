@@ -195,7 +195,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
       const color = hit
         ? 'bg-red-500'
         : itemWall
-          ? itemConsumed ? 'bg-slate-400' : 'bg-cyan-400'
+          ? itemConsumed ? 'bg-slate-400' : 'bg-yellow-500'
           : 'bg-yellow-500';
       return (
         <div
@@ -409,12 +409,18 @@ const GameBoard: React.FC<GameBoardProps> = ({
             <div className="w-3/4 h-1/2 bg-amber-400" />
           </div>
         )}
-        {/* 1회성 벽 아이템: 내 맵(제작/미니맵)에서만 청록색으로 구분, 종료 공개 시엔 일반 벽처럼 위장 */}
+        {/* 1회성 벽 아이템: 어디서든 일반 벽과 완전히 동일하게 위장 (제작 중엔 노란 벽, 공개 시엔 공개 벽) */}
         {isItemWall(position, direction) && showItemsFully && (
           gamePhase === GamePhase.SETUP || isMinimapMode ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className={`w-3/4 h-1/2 ${itemConsumed ? 'bg-slate-400/70' : 'bg-cyan-400'}`} />
-            </div>
+            !itemConsumed ? (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-3/4 h-1/2 bg-yellow-500" />
+              </div>
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-3/4 h-1/2 bg-slate-400/70" />
+              </div>
+            )
           ) : !itemConsumed ? (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="w-3/4 h-1/2 bg-amber-400" />
@@ -526,12 +532,18 @@ const GameBoard: React.FC<GameBoardProps> = ({
             <div className="w-1/2 h-3/4 bg-amber-400" />
           </div>
         )}
-        {/* 1회성 벽 아이템: 내 맵(제작/미니맵)에서만 청록색으로 구분, 종료 공개 시엔 일반 벽처럼 위장 */}
+        {/* 1회성 벽 아이템: 어디서든 일반 벽과 완전히 동일하게 위장 (제작 중엔 노란 벽, 공개 시엔 공개 벽) */}
         {isItemWall(position, direction) && showItemsFully && (
           gamePhase === GamePhase.SETUP || isMinimapMode ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className={`w-1/2 h-3/4 ${itemConsumed ? 'bg-slate-400/70' : 'bg-cyan-400'}`} />
-            </div>
+            !itemConsumed ? (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-1/2 h-3/4 bg-yellow-500" />
+              </div>
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-1/2 h-3/4 bg-slate-400/70" />
+              </div>
+            )
           ) : !itemConsumed ? (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="w-1/2 h-3/4 bg-amber-400" />
