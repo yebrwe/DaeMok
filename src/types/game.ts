@@ -48,11 +48,28 @@ export interface Player {
   forfeited?: boolean; // 포기 여부
 }
 
+// 맵 아이템 타입 (게임당 1개, 벽 예산 소모)
+export type ItemType = 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
+
+export interface MapItem {
+  type: ItemType;
+  // oneTimeWall: 한 번 부딪히면 부서지는 벽 (벽 2개 소모)
+  wallPosition?: Position;
+  wallDirection?: Direction;
+  // mine: 밟으면 2턴 전 위치로 되돌아감 (벽 3개 소모)
+  position?: Position;
+  // wormhole: 입구를 밟으면 출구로 순간이동, 1회성 (벽 5개 소모)
+  entrance?: Position;
+  exit?: Position;
+  // radar: 배치 불필요 - 게임 중 1회 사용해 내 주변 3x3의 벽을 탐지 (벽 3개 소모)
+}
+
 // 게임 맵 타입
 export interface GameMap {
   startPosition: Position;
   endPosition: Position;
   obstacles: Obstacle[];
+  item?: MapItem | null; // 설치된 아이템 (최대 1개)
 }
 
 // 충돌된 벽 타입
@@ -64,6 +81,13 @@ export interface CollisionWall {
   mapOwnerId: string;  // 맵 소유자 ID - 어떤 플레이어의 맵인지 구분
 }
 
+// 아이템 사용(소모) 상태 - 맵 소유자 uid를 키로 기록
+export interface ItemStateEntry {
+  consumed: boolean;
+  type: ItemType;
+  consumedAt?: any;
+}
+
 // 게임 상태 타입
 export interface GameState {
   phase: GamePhase;
@@ -73,6 +97,7 @@ export interface GameState {
   winner?: string | null;
   draw?: boolean; // 동일한 턴 수로 완주 -> 무승부
   collisionWalls?: any[];
+  itemState?: Record<string, ItemStateEntry>;
   turnMessage?: string;
   turnMessageTimestamp?: any;
 }

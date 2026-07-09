@@ -1,10 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { CollisionWall, Direction, GameMap, GamePhase, Position } from '@/types/game';
+import { CollisionWall, Direction, GameMap, GamePhase, Obstacle, Position } from '@/types/game';
 import GameBoard from './GameBoard';
 import GameBoard3D from './three/GameBoard3D';
-import { BOARD_SIZE, canMove, getNewPosition, getOppositeDirection, isPositionInBoard, isSamePosition } from '@/lib/gameUtils';
+import { BOARD_SIZE, canMove, getNewPosition, getOppositeDirection, isPositionInBoard, isSamePosition, isBlockedByOneTimeWall, isSameWallSegment } from '@/lib/gameUtils';
 import { getDatabase, ref, update, get, onValue, push, serverTimestamp } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
 
@@ -78,6 +78,22 @@ const GamePlay: React.FC<GamePlayProps> = ({
   // 이동 처리 중 중복 입력 방지 (연타로 한 턴에 두 번 움직이는 버그 방지)
   const movePendingRef = useRef<boolean>(false);
 
+  // 아이템 상태 - 내가 플레이하는 맵(상대 설치)과 내가 만든 맵(내가 설치)의 아이템
+  const item = map?.item ?? null;
+  const myItem = myMap?.item ?? null;
+  const [itemConsumed, setItemConsumed] = useState(false); // 내 보드의 아이템 사용됨
+  const [myItemConsumed, setMyItemConsumed] = useState(false); // 내 맵의 아이템 사용됨 (미니맵)
+
+  // 이동 경로 기록 (지뢰: 2턴 전 위치로 되돌리기용)
+  const positionHistoryRef = useRef<Position[]>([startPosition]);
+
+  // 탐지기(자기용 아이템): 내 셋업에서 확보 - 연습에서는 내가 만든 맵이 곧 내가 달리는 맵
+  const radarItem = isPractice
+    ? (map?.item?.type === 'radar' ? map.item : null)
+    : (myMap?.item?.type === 'radar' ? myMap.item : null);
+  // 탐지기로 밝혀낸 벽들 (일반 벽 + 위장된 1회성 벽)
+  const [revealedWalls, setRevealedWalls] = useState<Obstacle[]>([]);
+
   const iAmDone = gameOver || myFinished; // 내가 골인했음 (게임은 계속될 수 있음)
   const isFinished = iAmDone || gameEnded;
   // 관전 모드: 나는 골인했지만 상대가 아직 완주 중 -> 내 맵에서 상대의 진행을 지켜봄
@@ -101,6 +117,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
         const position = snapshot.val();
         if (!cancelled && position && typeof position.row === 'number' && typeof position.col === 'number') {
           setPlayerPosition(position);
+          positionHistoryRef.current = [position];
         }
       })
       .catch((error) => {
@@ -183,6 +200,87 @@ const GamePlay: React.FC<GamePlayProps> = ({
     return () => unsubscribe();
   }, [roomId, opponentId, userId, isPractice]);
 
+  // 아이템 사용 상태 구독 (멀티플레이어 전용)
+  useEffect(() => {
+    if (isPractice) return;
+
+    const database = getDatabase();
+    const itemStateRef = ref(database, `rooms/${roomId}/gameState/itemState`);
+
+    const unsubscribe = onValue(itemStateRef, (snapshot) => {
+      const state = snapshot.val() || {};
+      // 내가 플레이하는 맵의 아이템은 상대(맵 소유자) 키에 기록됨
+      if (opponentId) {
+        setItemConsumed(!!state[opponentId]?.consumed);
+      }
+      setMyItemConsumed(!!state[userId]?.consumed);
+    });
+
+    return () => unsubscribe();
+  }, [roomId, opponentId, userId, isPractice]);
+
+  // 아이템 소모 처리 (내가 플레이하는 맵 = 상대가 설치한 아이템)
+  const consumeOpponentItem = useCallback(() => {
+    setItemConsumed(true);
+    if (!isPractice && opponentId && item) {
+      const database = getDatabase();
+      update(ref(database, `rooms/${roomId}/gameState/itemState/${opponentId}`), {
+        consumed: true,
+        type: item.type,
+        consumedAt: serverTimestamp(),
+      }).catch((error) => console.error('아이템 상태 기록 오류:', error));
+    }
+  }, [isPractice, opponentId, item, roomId]);
+
+  // 탐지기 사용 - 내 주변 한 칸(대각선 포함, 3x3)의 벽을 탐지
+  // 일반 벽 + 아직 부서지지 않은 1회성 벽(일반 벽으로 위장되어 표시)을 찾아냄. 지뢰/웜홀은 탐지 불가.
+  const handleUseRadar = useCallback(() => {
+    if (!radarItem || myItemConsumed || isFinished) return;
+
+    const found: Obstacle[] = [];
+    const seen = new Set<string>();
+    const segmentDedupeKey = (p: Position, d: Direction): string => {
+      if (d === 'down' || d === 'right') return `${p.row},${p.col},${d}`;
+      const adjacent = getNewPosition(p, d);
+      return `${adjacent.row},${adjacent.col},${getOppositeDirection(d)}`;
+    };
+
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        const cell = { row: playerPosition.row + dr, col: playerPosition.col + dc };
+        if (!isPositionInBoard(cell)) continue;
+
+        (['up', 'down', 'left', 'right'] as Direction[]).forEach((dir) => {
+          const target = getNewPosition(cell, dir);
+          if (!isPositionInBoard(target)) return;
+
+          const hasWall =
+            obstacles.some((o) => isSameWallSegment(cell, dir, o.position, o.direction)) ||
+            isBlockedByOneTimeWall(cell, dir, item, itemConsumed);
+          if (!hasWall) return;
+
+          const key = segmentDedupeKey(cell, dir);
+          if (seen.has(key)) return;
+          seen.add(key);
+          found.push({ position: cell, direction: dir });
+        });
+      }
+    }
+
+    setRevealedWalls(found);
+    setMyItemConsumed(true);
+    setMessage(`🔍 주변을 탐지했습니다! 벽 ${found.length}개 발견`);
+
+    if (!isPractice) {
+      const database = getDatabase();
+      update(ref(database, `rooms/${roomId}/gameState/itemState/${userId}`), {
+        consumed: true,
+        type: 'radar',
+        consumedAt: serverTimestamp(),
+      }).catch((error) => console.error('탐지기 사용 기록 오류:', error));
+    }
+  }, [radarItem, myItemConsumed, isFinished, playerPosition, obstacles, item, itemConsumed, isPractice, roomId, userId]);
+
   // 사용자 프로필(이미지/이름) 가져오기 (멀티플레이어 전용)
   useEffect(() => {
     if (isPractice) return;
@@ -235,6 +333,20 @@ const GamePlay: React.FC<GamePlayProps> = ({
       }
 
       const canMoveResult = canMove(playerPosition, direction, obstacles);
+
+      // 1회성 벽 아이템: 한 번은 벽처럼 막고(턴 소모), 부딪히면 부서짐
+      if (canMoveResult && isBlockedByOneTimeWall(playerPosition, direction, item, itemConsumed)) {
+        setLastMoveValid(false);
+        setMoveCount(moveCount + 1);
+        setMessage('💥 벽에 부딪혔습니다! ...그런데 벽이 부서졌습니다. 이제 지나갈 수 있습니다.');
+        consumeOpponentItem();
+        if (!isPractice) {
+          const database = getDatabase();
+          update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
+        }
+        return;
+      }
+
       setLastMoveValid(canMoveResult);
       movePendingRef.current = true;
 
@@ -242,11 +354,33 @@ const GamePlay: React.FC<GamePlayProps> = ({
         const newCount = moveCount + 1;
 
         if (canMoveResult) {
-          setPlayerPosition(newPosition);
-          setMoveCount(newCount);
-          setMessage('이동했습니다.');
+          // 지뢰/웜홀 아이템 발동 확인
+          let finalPosition = newPosition;
+          let moveMessage = '이동했습니다.';
+          let moveValidState: boolean | null = true;
 
-          const reachedGoal = isSamePosition(newPosition, endPosition);
+          if (item && !itemConsumed) {
+            if (item.type === 'mine' && item.position && isSamePosition(newPosition, item.position)) {
+              const history = positionHistoryRef.current;
+              finalPosition = history.length >= 2 ? history[history.length - 2] : history[0] ?? startPosition;
+              moveMessage = '💥 지뢰를 밟아 2턴 전 위치로 되돌아갔습니다!';
+              moveValidState = false;
+              consumeOpponentItem();
+            } else if (item.type === 'wormhole' && item.entrance && isSamePosition(newPosition, item.entrance)) {
+              finalPosition = item.exit ?? newPosition;
+              moveMessage = '🌀 웜홀에 빨려들어가 다른 곳으로 이동했습니다!';
+              moveValidState = null;
+              consumeOpponentItem();
+            }
+          }
+
+          setLastMoveValid(moveValidState);
+          setPlayerPosition(finalPosition);
+          positionHistoryRef.current = [...positionHistoryRef.current, finalPosition];
+          setMoveCount(newCount);
+          setMessage(moveMessage);
+
+          const reachedGoal = isSamePosition(finalPosition, endPosition);
 
           if (!isPractice) {
             // 쓰기는 순서가 보장되므로 기다리지 않는다
@@ -254,7 +388,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
             const database = getDatabase();
             update(
               ref(database, `rooms/${roomId}/gameState/players/${userId}/position`),
-              newPosition
+              finalPosition
             ).catch((error) => console.error('위치 업데이트 오류:', error));
             // 방 활동 시각 갱신 (유령 방 자동 정리 대상에서 제외)
             update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
@@ -303,11 +437,15 @@ const GamePlay: React.FC<GamePlayProps> = ({
       obstacles,
       moveCount,
       endPosition,
+      startPosition,
       isPractice,
       roomId,
       userId,
       opponentId,
       onGameComplete,
+      item,
+      itemConsumed,
+      consumeOpponentItem,
     ]
   );
 
@@ -428,6 +566,17 @@ const GamePlay: React.FC<GamePlayProps> = ({
           ) : (
             !isPractice && <span className="text-[10px] text-slate-500">상대 대기</span>
           )}
+          {/* 탐지기 아이템 (1회 사용) */}
+          {radarItem && !myItemConsumed && !isFinished && (
+            <button
+              className="btn-game px-2.5 py-1 text-[11px] !rounded-lg"
+              onClick={handleUseRadar}
+              title="내 주변 한 칸(대각선 포함)의 벽을 탐지합니다 (1회)"
+            >
+              🔍 탐지
+            </button>
+          )}
+
           {/* 시점 전환 (관전/종료 시 1인칭 비활성) */}
           <div className="flex rounded-lg overflow-hidden border border-slate-600/70">
             {((spectating || isFinished ? ['third', '2d'] : ['first', 'third', '2d']) as ViewMode[]).map((m) => (
@@ -514,6 +663,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
                   revealObstacles: true,
                   pawnColor: '#ef4444',
                   photoURL: opponentPhotoURL || undefined,
+                  item: myItem,
+                  itemConsumed: myItemConsumed,
                 }
               : {
                   startPosition,
@@ -524,6 +675,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
                   revealObstacles: isFinished,
                   pawnColor: undefined,
                   photoURL: playerPhotoURL || undefined,
+                  item,
+                  itemConsumed,
                 };
 
           return (
@@ -541,6 +694,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
                   pawnColor={board.pawnColor}
                   viewMode={spectating ? 'third' : effectiveViewMode === 'first' ? 'first' : 'third'}
                   facing={facing}
+                  item={board.item}
+                  itemConsumed={board.itemConsumed}
+                  revealedWalls={spectating ? [] : revealedWalls}
                 />
               ) : (
                 <div className="max-w-full overflow-auto">
@@ -554,6 +710,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
                     readOnly={true}
                     playerPhotoURL={board.photoURL}
                     revealObstacles={board.revealObstacles}
+                    item={board.item}
+                    itemConsumed={board.itemConsumed}
+                    revealedWalls={spectating ? [] : revealedWalls}
                   />
                 </div>
               )}
@@ -629,6 +788,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
                 readOnly={true}
                 isMinimapMode={true}
                 playerPhotoURL={opponentPhotoURL || undefined}
+                item={myItem}
+                itemConsumed={myItemConsumed}
               />
             </div>
           </div>

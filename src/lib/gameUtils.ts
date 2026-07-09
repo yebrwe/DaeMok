@@ -1,7 +1,55 @@
-import { Direction, GameMap, Obstacle, Position } from '@/types/game';
+import { Direction, GameMap, ItemType, MapItem, Obstacle, Position } from '@/types/game';
 
 // 보드 크기 상수
 export const BOARD_SIZE = 6;
+
+// 벽 예산 (아이템 비용 포함)
+export const MAX_OBSTACLES = 20;
+
+// 아이템 비용 (벽 개수 기준)
+export const ITEM_COSTS: Record<ItemType, number> = {
+  oneTimeWall: 2,
+  mine: 3,
+  wormhole: 5,
+  radar: 3,
+};
+
+export const ITEM_LABELS: Record<ItemType, string> = {
+  oneTimeWall: '1회성 벽',
+  mine: '지뢰',
+  wormhole: '웜홀',
+  radar: '탐지기',
+};
+
+// 두 (위치, 방향) 쌍이 같은 벽 세그먼트를 가리키는지 확인
+// 예: (2,3)의 'right'와 (2,4)의 'left'는 같은 벽
+export function isSameWallSegment(
+  posA: Position,
+  dirA: Direction,
+  posB: Position,
+  dirB: Direction
+): boolean {
+  if (posA.row === posB.row && posA.col === posB.col && dirA === dirB) return true;
+
+  const adjacent = getNewPosition(posA, dirA);
+  return (
+    adjacent.row === posB.row &&
+    adjacent.col === posB.col &&
+    getOppositeDirection(dirA) === dirB
+  );
+}
+
+// 아이템이 특정 이동을 막는 1회성 벽인지 확인
+export function isBlockedByOneTimeWall(
+  position: Position,
+  direction: Direction,
+  item: MapItem | null | undefined,
+  consumed: boolean
+): boolean {
+  if (consumed || !item || item.type !== 'oneTimeWall') return false;
+  if (!item.wallPosition || !item.wallDirection) return false;
+  return isSameWallSegment(position, direction, item.wallPosition, item.wallDirection);
+}
 
 // 위치가 보드 내에 있는지 확인
 export function isPositionInBoard(position: Position): boolean {

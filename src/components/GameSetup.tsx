@@ -1,16 +1,24 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Direction, GameMap, GamePhase, Obstacle, Position } from '@/types/game';
+import { Direction, GameMap, GamePhase, ItemType, MapItem, Obstacle, Position } from '@/types/game';
 import GameBoard from './GameBoard';
 import GameBoard3D from './three/GameBoard3D';
-import { isValidMap, BOARD_SIZE } from '@/lib/gameUtils';
+import {
+  isValidMap,
+  BOARD_SIZE,
+  MAX_OBSTACLES,
+  ITEM_COSTS,
+  ITEM_LABELS,
+  isSameWallSegment,
+  isSamePosition,
+} from '@/lib/gameUtils';
 
 interface GameSetupProps {
   onMapComplete: (map: GameMap) => void;
 }
 
-const MAX_OBSTACLES = 15;
+type PlaceMode = 'wall' | ItemType;
 
 const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   const [startPosition, setStartPosition] = useState<Position | undefined>();
@@ -20,6 +28,12 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   const [isMapValid, setIsMapValid] = useState<boolean>(false);
   // 맵 제작은 정밀한 배치가 필요하므로 2D가 기본, 3D는 미리보기용
   const [view3D, setView3D] = useState<boolean>(false);
+  // 아이템 배치 (게임당 1개, 벽 예산 소모)
+  const [placeMode, setPlaceMode] = useState<PlaceMode>('wall');
+  const [item, setItem] = useState<MapItem | null>(null);
+  const [wormholeEntrance, setWormholeEntrance] = useState<Position | null>(null);
+
+  const itemCost = item ? ITEM_COSTS[item.type] : placeMode !== 'wall' ? ITEM_COSTS[placeMode] : 0;
   
   // 고유한 벽의 수 계산 함수
   const countUniqueObstacles = (obstacleList: Obstacle[]): number => {
@@ -126,6 +140,13 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
     return { adjacentPosition, oppositeDirection };
   };
   
+  // 셀에 아이템을 놓을 수 있는지 (시작/도착점 제외)
+  const canPlaceItemOnCell = (position: Position): boolean => {
+    if (startPosition && isSamePosition(position, startPosition)) return false;
+    if (endPosition && isSamePosition(position, endPosition)) return false;
+    return true;
+  };
+
   // 셀 클릭 핸들러
   const handleCellClick = (position: Position) => {
     if (setupPhase === 'start') {
@@ -138,6 +159,28 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       }
       setEndPosition(position);
       setSetupPhase('obstacles');
+    } else if (setupPhase === 'obstacles') {
+      // 아이템 배치 모드에서의 셀 클릭
+      if (item) return;
+
+      if (placeMode === 'mine') {
+        if (!canPlaceItemOnCell(position)) return;
+        setItem({ type: 'mine', position });
+        setPlaceMode('wall');
+      } else if (placeMode === 'wormhole') {
+        if (!canPlaceItemOnCell(position)) return;
+
+        if (!wormholeEntrance) {
+          // 첫 클릭: 입구 지정
+          setWormholeEntrance(position);
+        } else {
+          // 두 번째 클릭: 출구 지정 (입구와 달라야 함)
+          if (isSamePosition(position, wormholeEntrance)) return;
+          setItem({ type: 'wormhole', entrance: wormholeEntrance, exit: position });
+          setWormholeEntrance(null);
+          setPlaceMode('wall');
+        }
+      }
     }
   };
   
@@ -146,7 +189,31 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
     if (setupPhase !== 'obstacles') {
       return;
     }
-    
+
+    // 1회성 벽 배치 모드
+    if (placeMode === 'oneTimeWall') {
+      if (item) return;
+      // 일반 벽과 겹치면 배치 불가
+      const overlapsWall = obstacles.some((o) =>
+        isSameWallSegment(position, direction, o.position, o.direction)
+      );
+      if (overlapsWall) return;
+
+      setItem({ type: 'oneTimeWall', wallPosition: position, wallDirection: direction });
+      setPlaceMode('wall');
+      return;
+    }
+
+    // 일반 벽이 1회성 벽 아이템과 겹치면 배치 불가
+    if (
+      item?.type === 'oneTimeWall' &&
+      item.wallPosition &&
+      item.wallDirection &&
+      isSameWallSegment(position, direction, item.wallPosition, item.wallDirection)
+    ) {
+      return;
+    }
+
     // 이미 존재하는 장애물인지 확인
     const obstacleExists = obstacles.some(
       (o) => o.position.row === position.row && 
@@ -213,17 +280,43 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
         tempObstacles.push(adjacentObstacle);
       }
       
-      // 고유한 벽의 수 계산
+      // 고유한 벽의 수 계산 (배치된 아이템 비용 포함)
+      const placedItemCost = item ? ITEM_COSTS[item.type] : 0;
       const uniqueObstacleCount = countUniqueObstacles(tempObstacles);
-      
-      // 장애물 개수 확인 (최대 개수를 초과하지 않는지)
-      if (uniqueObstacleCount <= MAX_OBSTACLES) {
+
+      // 벽 예산 확인 (아이템 비용 포함 최대 개수를 초과하지 않는지)
+      if (uniqueObstacleCount + placedItemCost <= MAX_OBSTACLES) {
         setObstacles(tempObstacles);
       } else {
-        // 최대 장애물 개수를 초과하면 경고
-        alert(`장애물은 최대 ${MAX_OBSTACLES}개까지만 배치할 수 있습니다.`);
+        alert(`벽 예산(${MAX_OBSTACLES}개)을 초과했습니다. 아이템 비용 ${placedItemCost}개가 포함되어 있습니다.`);
       }
     }
+  };
+
+  // 아이템 선택/제거
+  const handleSelectItemMode = (type: ItemType) => {
+    if (item) return;
+    const wallCount = countUniqueObstacles(obstacles);
+    if (wallCount + ITEM_COSTS[type] > MAX_OBSTACLES) {
+      alert(`벽 예산이 부족합니다. ${ITEM_LABELS[type]}은(는) 벽 ${ITEM_COSTS[type]}개를 소모합니다.`);
+      return;
+    }
+    setWormholeEntrance(null);
+
+    // 탐지기는 배치가 필요 없는 자기용 아이템 - 선택 즉시 확보
+    if (type === 'radar') {
+      setItem({ type: 'radar' });
+      setPlaceMode('wall');
+      return;
+    }
+
+    setPlaceMode((prev) => (prev === type ? 'wall' : type));
+  };
+
+  const handleRemoveItem = () => {
+    setItem(null);
+    setWormholeEntrance(null);
+    setPlaceMode('wall');
   };
   
   // 맵 완성 및 제출
@@ -237,17 +330,18 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       startPosition,
       endPosition,
       obstacles,
+      item: item ?? null,
     };
-    
-    // 맵 유효성 검사
+
+    // 맵 유효성 검사 (1회성 벽은 부술 수 있으므로 경로 판정에서 제외)
     if (!isValidMap(map)) {
       alert('유효하지 않은 맵입니다. 시작점에서 도착점까지 도달할 수 있는 경로가 있어야 합니다.');
       return;
     }
-    
+
     onMapComplete(map);
   };
-  
+
   // 맵 유효성 검사
   useEffect(() => {
     if (startPosition && endPosition) {
@@ -256,13 +350,14 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
         endPosition,
         obstacles,
       };
-      
+
       setIsMapValid(isValidMap(map));
     }
   }, [startPosition, endPosition, obstacles]);
-  
-  // 남은 장애물 개수
-  const remainingObstacles = MAX_OBSTACLES - countUniqueObstacles(obstacles);
+
+  // 사용한 벽 예산 (아이템 비용 포함)
+  const usedBudget = countUniqueObstacles(obstacles) + (item ? ITEM_COSTS[item.type] : 0);
+  const remainingObstacles = MAX_OBSTACLES - usedBudget;
   
   const steps: Array<{ key: 'start' | 'end' | 'obstacles'; label: string }> = [
     { key: 'start', label: '시작점' },
@@ -298,7 +393,8 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
           <div className="flex items-center gap-2">
             {setupPhase === 'obstacles' && (
               <span className={`text-xs font-bold ${remainingObstacles <= 5 ? 'text-red-400' : 'text-amber-300'}`}>
-                🧱 {MAX_OBSTACLES - remainingObstacles}/{MAX_OBSTACLES}
+                🧱 {usedBudget}/{MAX_OBSTACLES}
+                {item && <span className="text-purple-300 ml-1">(아이템 -{ITEM_COSTS[item.type]})</span>}
               </span>
             )}
             <button
@@ -322,6 +418,59 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
           <span className="font-bold text-blue-300 shrink-0 ml-2">{remainingObstacles}개 남음</span>
         </div>
       )}
+
+      {/* 아이템 팔레트 - 게임당 1개, 벽 예산 소모 */}
+      {setupPhase === 'obstacles' && (
+        <div className="w-full mb-2 game-panel !rounded-xl px-3 py-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-[11px] font-bold text-purple-300">🎁 아이템 (게임당 1개)</span>
+            <div className="flex gap-1.5 flex-wrap">
+              {(['oneTimeWall', 'mine', 'wormhole', 'radar'] as ItemType[]).map((type) => (
+                <button
+                  key={type}
+                  className={`px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                    item?.type === type
+                      ? 'bg-purple-400/20 text-purple-200 border-purple-400/60'
+                      : placeMode === type
+                        ? 'bg-amber-400 text-slate-900 border-amber-400'
+                        : 'bg-slate-800/80 text-slate-300 border-slate-600/60 hover:border-purple-400/50'
+                  } disabled:opacity-40 disabled:pointer-events-none`}
+                  onClick={() => handleSelectItemMode(type)}
+                  disabled={!!item}
+                >
+                  {type === 'oneTimeWall' ? '🧱' : type === 'mine' ? '💣' : type === 'wormhole' ? '🌀' : '🔍'} {ITEM_LABELS[type]} -{ITEM_COSTS[type]}
+                </button>
+              ))}
+              {item && (
+                <button
+                  className="px-2 py-1 rounded-lg text-[11px] font-bold bg-red-500/10 text-red-300 border border-red-400/50 hover:bg-red-500/20 transition-colors"
+                  onClick={handleRemoveItem}
+                >
+                  ✕ 아이템 제거
+                </button>
+              )}
+            </div>
+          </div>
+          {placeMode !== 'wall' && !item && (
+            <p className="text-[11px] text-amber-300 mt-1.5">
+              {placeMode === 'oneTimeWall' && '칸 사이 선을 클릭해 1회성 벽을 배치하세요. 한 번 부딪히면 부서집니다.'}
+              {placeMode === 'mine' && '칸을 클릭해 지뢰를 배치하세요. 밟으면 2턴 전 위치로 되돌아갑니다.'}
+              {placeMode === 'wormhole' &&
+                (wormholeEntrance
+                  ? '🌀 출구가 될 칸을 클릭하세요. (입구를 밟으면 이곳으로 이동)'
+                  : '🌀 입구가 될 칸을 클릭하세요.')}
+            </p>
+          )}
+          {item && (
+            <p className="text-[11px] text-purple-200 mt-1.5">
+              {item.type === 'oneTimeWall' && '🧱 1회성 벽 배치됨 - 상대가 부딪히면 턴을 소모시키고 부서집니다.'}
+              {item.type === 'mine' && '💣 지뢰 배치됨 - 상대가 밟으면 2턴 전 위치로 되돌아갑니다.'}
+              {item.type === 'wormhole' && '🌀 웜홀 배치됨 - 입구를 밟으면 출구로 순간이동합니다. (1회성)'}
+              {item.type === 'radar' && '🔍 탐지기 확보됨 - 게임 중 1회, 내 주변 한 칸(대각선 포함)의 벽을 탐지합니다.'}
+            </p>
+          )}
+        </div>
+      )}
       
       <div className="flex justify-center w-full">
         {view3D ? (
@@ -330,7 +479,12 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
             startPosition={startPosition}
             endPosition={endPosition}
             obstacles={obstacles}
-            onCellClick={setupPhase !== 'obstacles' ? handleCellClick : undefined}
+            item={item}
+            onCellClick={
+              setupPhase !== 'obstacles' || placeMode === 'mine' || placeMode === 'wormhole'
+                ? handleCellClick
+                : undefined
+            }
             onDirectionClick={setupPhase === 'obstacles' ? handleDirectionClick : undefined}
             selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}
           />
@@ -340,6 +494,8 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
             startPosition={startPosition}
             endPosition={endPosition}
             obstacles={obstacles}
+            item={item}
+            pendingCell={wormholeEntrance}
             onCellClick={handleCellClick}
             onDirectionClick={handleDirectionClick}
             selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}

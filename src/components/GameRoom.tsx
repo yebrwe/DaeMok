@@ -408,6 +408,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         currentTurn: null,
         maps: null,
         collisionWalls: null,
+        itemState: null,
         turnMessage: null,
         turnMessageTimestamp: null,
         restartedBy: userId,

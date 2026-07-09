@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useRef, useCallback } from 'react';
-import { CellType, CollisionWall, Direction, GamePhase, Obstacle, Position } from '@/types/game';
-import { BOARD_SIZE, isSamePosition } from '@/lib/gameUtils';
+import { CellType, CollisionWall, Direction, GamePhase, MapItem, Obstacle, Position } from '@/types/game';
+import { BOARD_SIZE, isSamePosition, isSameWallSegment } from '@/lib/gameUtils';
 
 interface GameBoardProps {
   gamePhase: GamePhase;
@@ -18,6 +18,10 @@ interface GameBoardProps {
   collisionWalls?: CollisionWall[];
   playerPhotoURL?: string;
   revealObstacles?: boolean; // 게임 종료 후 벽 공개
+  item?: MapItem | null; // 맵 아이템 (1회성 벽/지뢰/웜홀)
+  itemConsumed?: boolean; // 아이템 사용됨 여부
+  pendingCell?: Position | null; // 배치 중 임시 표시 (웜홀 입구)
+  revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들 (일반 벽처럼 노란색으로 표시)
 }
 
 const GameBoard: React.FC<GameBoardProps> = ({
@@ -34,7 +38,71 @@ const GameBoard: React.FC<GameBoardProps> = ({
   collisionWalls = [],
   playerPhotoURL,
   revealObstacles = false,
+  item = null,
+  itemConsumed = false,
+  pendingCell = null,
+  revealedWalls = [],
 }) => {
+  // 탐지기로 밝혀진 벽인지 (1회성 벽도 일반 벽으로 위장되어 포함됨)
+  const isRadarRevealed = (position: Position, direction: Direction): boolean =>
+    revealedWalls.some((w) => isSameWallSegment(position, direction, w.position, w.direction));
+
+  // 아이템 전체 공개 조건: 맵 제작 중 / 내 맵 미니맵 / 게임 종료 공개
+  const showItemsFully = gamePhase === GamePhase.SETUP || isMinimapMode || revealObstacles;
+
+  // 해당 벽 자리가 1회성 벽 아이템인지
+  const isItemWall = (position: Position, direction: Direction): boolean =>
+    !!item &&
+    item.type === 'oneTimeWall' &&
+    !!item.wallPosition &&
+    !!item.wallDirection &&
+    isSameWallSegment(position, direction, item.wallPosition, item.wallDirection);
+
+  // 셀 위 아이템 마커 (지뢰/웜홀)
+  const renderItemCellMarker = (position: Position) => {
+    // 웜홀 입구 배치 중 임시 표시
+    if (pendingCell && isSamePosition(position, pendingCell)) {
+      return (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+          <div className={`${isMinimapMode ? 'w-3 h-3' : 'w-6 h-6'} rounded-full border-2 border-purple-500 animate-pulse`} />
+        </div>
+      );
+    }
+
+    if (!item) return null;
+    const visible = showItemsFully || itemConsumed;
+    if (!visible) return null;
+
+    if (item.type === 'mine' && item.position && isSamePosition(position, item.position)) {
+      return (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+          <span className={isMinimapMode ? 'text-[9px]' : 'text-lg'}>{itemConsumed ? '💥' : '💣'}</span>
+        </div>
+      );
+    }
+
+    if (item.type === 'wormhole') {
+      const isEntrance = !!item.entrance && isSamePosition(position, item.entrance);
+      const isExit = !!item.exit && isSamePosition(position, item.exit);
+      if (isEntrance || isExit) {
+        return (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+            <div
+              className={`${isMinimapMode ? 'w-3.5 h-3.5 text-[6px]' : 'w-6 h-6 text-[10px]'} rounded-full flex items-center justify-center font-bold ${
+                isEntrance
+                  ? 'bg-purple-600 text-white'
+                  : 'bg-purple-100 text-purple-700 border-2 border-purple-500'
+              } ${itemConsumed ? 'opacity-50' : ''}`}
+            >
+              {isEntrance ? '입' : '출'}
+            </div>
+          </div>
+        );
+      }
+    }
+
+    return null;
+  };
   const [hoveredCell, setHoveredCell] = useState<Position | null>(null);
   const [hoveredWall, setHoveredWall] = useState<{position: Position, direction: Direction} | null>(null);
   
@@ -122,10 +190,16 @@ const GameBoard: React.FC<GameBoardProps> = ({
     const edge = (direction: Direction, positionClass: string, sizeClass: string) => {
       const hit = hasCollisionWall(position, direction);
       const blocked = hasObstacle(position, direction);
-      if (!hit && !blocked) return null;
+      const itemWall = isItemWall(position, direction);
+      if (!hit && !blocked && !itemWall) return null;
+      const color = hit
+        ? 'bg-red-500'
+        : itemWall
+          ? itemConsumed ? 'bg-slate-400' : 'bg-cyan-400'
+          : 'bg-yellow-500';
       return (
         <div
-          className={`absolute ${sizeClass} ${positionClass} ${hit ? 'bg-red-500' : 'bg-yellow-500'}`}
+          className={`absolute ${sizeClass} ${positionClass} ${color}`}
         ></div>
       );
     };
@@ -232,6 +306,9 @@ const GameBoard: React.FC<GameBoardProps> = ({
           </>
         )}
         
+        {/* 아이템 마커 (지뢰/웜홀) */}
+        {renderItemCellMarker(position)}
+
         {/* 미니맵 모드에서만 장애물 표시 (모바일용) */}
         {isMinimapMode && renderMinimapObstacles(position)}
       </div>
@@ -332,6 +409,19 @@ const GameBoard: React.FC<GameBoardProps> = ({
             <div className="w-3/4 h-1/2 bg-amber-400" />
           </div>
         )}
+        {/* 1회성 벽 아이템: 제작/공개 시 청록색, 부서진 후엔 회색 잔해 */}
+        {isItemWall(position, direction) && (showItemsFully || itemConsumed) && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className={`w-3/4 h-1/2 ${itemConsumed ? 'bg-slate-400/70' : 'bg-cyan-400'}`} />
+          </div>
+        )}
+        {/* 탐지기로 밝혀낸 벽 (1회성 벽도 일반 벽으로 위장) */}
+        {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
+          isRadarRevealed(position, direction) && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-3/4 h-1/2 bg-yellow-500" />
+          </div>
+        )}
       </div>
     );
   };
@@ -428,6 +518,19 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {gamePhase === GamePhase.PLAY && revealObstacles && isBlocked && !isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="w-1/2 h-3/4 bg-amber-400" />
+          </div>
+        )}
+        {/* 1회성 벽 아이템: 제작/공개 시 청록색, 부서진 후엔 회색 잔해 */}
+        {isItemWall(position, direction) && (showItemsFully || itemConsumed) && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className={`w-1/2 h-3/4 ${itemConsumed ? 'bg-slate-400/70' : 'bg-cyan-400'}`} />
+          </div>
+        )}
+        {/* 탐지기로 밝혀낸 벽 (1회성 벽도 일반 벽으로 위장) */}
+        {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
+          isRadarRevealed(position, direction) && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-1/2 h-3/4 bg-yellow-500" />
           </div>
         )}
       </div>

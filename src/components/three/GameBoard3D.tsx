@@ -4,7 +4,7 @@ import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react'
 import { Canvas, useFrame, useThree, ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
-import { CollisionWall, Direction, GamePhase, Obstacle, Position } from '@/types/game';
+import { CollisionWall, Direction, GamePhase, MapItem, Obstacle, Position } from '@/types/game';
 import { BOARD_SIZE, isSamePosition } from '@/lib/gameUtils';
 
 // 1인칭 시점 상수
@@ -402,7 +402,84 @@ interface GameBoard3DProps {
   pawnColor?: string; // 말 색상 (기본 파랑, 관전 시 상대 말은 빨강)
   viewMode?: 'first' | 'third'; // 1인칭(미로 체험) / 3인칭(오버헤드)
   facing?: Direction; // 1인칭에서 바라보는 방향
+  item?: MapItem | null; // 맵 아이템 (1회성 벽/지뢰/웜홀)
+  itemConsumed?: boolean; // 아이템 사용됨 여부
+  revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들 (일반 벽처럼 노란색)
   heightClassName?: string;
+}
+
+// 맵 아이템 3D 렌더링 (1회성 벽 / 지뢰 / 웜홀)
+function ItemVisuals({
+  item,
+  consumed,
+  visible,
+  wallHeight,
+}: {
+  item: MapItem;
+  consumed: boolean;
+  visible: boolean; // 미사용 상태도 표시할지 (제작/공개), consumed면 항상 흔적 표시
+  wallHeight: number;
+}) {
+  if (!visible && !consumed) return null;
+
+  if (item.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
+    const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
+    if (!seg) return null;
+    return consumed ? (
+      // 부서진 잔해 (낮고 반투명한 회색)
+      <WallBox seg={seg} color="#94a3b8" opacity={0.45} height={0.18} />
+    ) : (
+      <WallBox seg={seg} color="#22d3ee" opacity={0.92} height={wallHeight} />
+    );
+  }
+
+  if (item.type === 'mine' && item.position) {
+    const [x, , z] = cellToWorld(item.position);
+    return consumed ? (
+      // 폭발 흔적 (검게 그을린 자국)
+      <mesh position={[x, 0.09, z]}>
+        <cylinderGeometry args={[0.3, 0.3, 0.03, 24]} />
+        <meshStandardMaterial color="#1c1917" roughness={1} />
+      </mesh>
+    ) : (
+      <group position={[x, 0.2, z]}>
+        <mesh castShadow>
+          <sphereGeometry args={[0.15, 20, 20]} />
+          <meshStandardMaterial color="#374151" roughness={0.3} metalness={0.5} />
+        </mesh>
+        <mesh position={[0, 0.13, 0]}>
+          <cylinderGeometry args={[0.02, 0.02, 0.1, 8]} />
+          <meshStandardMaterial color="#ef4444" emissive="#ef4444" emissiveIntensity={0.6} />
+        </mesh>
+      </group>
+    );
+  }
+
+  if (item.type === 'wormhole' && item.entrance && item.exit) {
+    const [ex, , ez] = cellToWorld(item.entrance);
+    const [xx, , xz] = cellToWorld(item.exit);
+    const opacity = consumed ? 0.35 : 0.9;
+    return (
+      <group>
+        {/* 입구 - 진한 보라 소용돌이 */}
+        <mesh position={[ex, 0.1, ez]} rotation={[-Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.3, 0.06, 12, 32]} />
+          <meshStandardMaterial color="#a855f7" emissive="#a855f7" emissiveIntensity={consumed ? 0.1 : 0.7} transparent opacity={opacity} />
+        </mesh>
+        <mesh position={[ex, 0.08, ez]}>
+          <cylinderGeometry args={[0.24, 0.24, 0.03, 24]} />
+          <meshStandardMaterial color="#581c87" transparent opacity={opacity} />
+        </mesh>
+        {/* 출구 - 밝은 보라 고리 */}
+        <mesh position={[xx, 0.1, xz]} rotation={[-Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.3, 0.05, 12, 32]} />
+          <meshStandardMaterial color="#d8b4fe" emissive="#d8b4fe" emissiveIntensity={consumed ? 0.1 : 0.5} transparent opacity={opacity} />
+        </mesh>
+      </group>
+    );
+  }
+
+  return null;
 }
 
 function BoardContents({
@@ -419,6 +496,9 @@ function BoardContents({
   revealObstacles = false,
   pawnColor,
   viewMode = 'third',
+  item = null,
+  itemConsumed = false,
+  revealedWalls = [],
 }: GameBoard3DProps) {
   const isSetup = gamePhase === GamePhase.SETUP;
   const isFirstPerson = viewMode === 'first';
@@ -435,6 +515,12 @@ function BoardContents({
     () => dedupeSegments(collisionWalls || []),
     [collisionWalls]
   );
+
+  // 탐지기로 밝혀낸 벽 세그먼트 (노란색 - 일반 벽과 동일하게 표시)
+  const radarSegments = useMemo(
+    () => dedupeSegments(revealedWalls || []),
+    [revealedWalls]
+  );
   const collisionKeys = useMemo(
     () => new Set(collisionSegments.map(segmentKey)),
     [collisionSegments]
@@ -450,10 +536,15 @@ function BoardContents({
     return slots;
   }, []);
 
-  const occupiedKeys = useMemo(
-    () => new Set(obstacleSegments.map(segmentKey)),
-    [obstacleSegments]
-  );
+  const occupiedKeys = useMemo(() => {
+    const keys = new Set(obstacleSegments.map(segmentKey));
+    // 1회성 벽 아이템 자리도 점유된 것으로 취급 (호버 미리보기 방지)
+    if (item?.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
+      const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
+      if (seg) keys.add(segmentKey(seg));
+    }
+    return keys;
+  }, [obstacleSegments, item]);
 
   const tiles = [];
   for (let row = 0; row < BOARD_SIZE; row++) {
@@ -521,6 +612,24 @@ function BoardContents({
           .map((seg) => (
             <WallBox key={`rev-${segmentKey(seg)}`} seg={seg} color={COLORS.reveal} opacity={0.75} height={wallHeight} />
           ))}
+
+      {/* 탐지기로 밝혀낸 벽 (게임 종료 공개 전까지만 - 이후엔 정식 공개와 겹침 방지) */}
+      {gamePhase === GamePhase.PLAY && !revealObstacles &&
+        radarSegments
+          .filter((seg) => !collisionKeys.has(segmentKey(seg)))
+          .map((seg) => (
+            <WallBox key={`radar-${segmentKey(seg)}`} seg={seg} color={COLORS.wall} height={wallHeight} />
+          ))}
+
+      {/* 맵 아이템 (제작/공개 시 전체 표시, 사용된 뒤엔 흔적 표시) */}
+      {item && (
+        <ItemVisuals
+          item={item}
+          consumed={!!itemConsumed}
+          visible={isSetup || !!revealObstacles}
+          wallHeight={wallHeight}
+        />
+      )}
 
       {/* 1인칭: 보드 외곽 벽 (미로 느낌) */}
       {isFirstPerson && <BorderWalls />}
