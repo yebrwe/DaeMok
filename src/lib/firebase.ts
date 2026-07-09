@@ -320,6 +320,12 @@ export const joinRoom = async (roomId: string, userId: string): Promise<boolean>
       return false;
     }
 
+    // 이미 게임이 시작된 방은 신규 참가 차단
+    if (!alreadyJoined && roomData.gameState?.phase && roomData.gameState.phase !== 'setup') {
+      console.error('이미 게임이 진행 중인 방:', roomId);
+      return false;
+    }
+
     // 플레이어 목록에 사용자 추가
     if (!alreadyJoined) {
       currentPlayers.push(userId);
@@ -381,9 +387,9 @@ export const getGameState = (roomId: string, callback: (gameState: GameState) =>
   });
 };
 
-// 게임 시작 시도 - 트랜잭션으로 안전하게 SETUP -> PLAY 전환
-// 두 클라이언트가 동시에 호출해도 한 번만 시작되며, 서로의 데이터를 덮어쓰지 않음
-export const tryStartGame = async (roomId: string): Promise<boolean> => {
+// 게임 시작 (방장 전용 버튼) - 트랜잭션으로 안전하게 SETUP -> PLAY 전환
+// 순환 릴레이: 정렬된 순서에서 각자 "다음 사람"의 맵을 달린다 (2인이면 서로 교환과 동일)
+export const startGame = async (roomId: string): Promise<boolean> => {
   if (!database) {
     console.error('Firebase Database가 초기화되지 않았습니다.');
     return false;
@@ -401,26 +407,29 @@ export const tryStartGame = async (roomId: string): Promise<boolean> => {
 
       const players = state.players || {};
       const maps = state.maps || {};
-      const playerIds = Object.keys(players);
+      const playerIds = Object.keys(players).sort(); // 결정적 순서
 
       const enoughPlayers = playerIds.length >= 2;
       const allReady = playerIds.every((id) => players[id]?.isReady);
       const allMapsReady = playerIds.every((id) => maps[id]);
 
-      // 시작 조건 미충족 -> 중단 (다른 클라이언트가 나중에 다시 시도)
+      // 시작 조건 미충족 -> 중단
       if (!enoughPlayers || !allReady || !allMapsReady) return;
 
-      // 각 플레이어는 상대방이 만든 맵의 시작 위치에서 출발
-      for (const playerId of playerIds) {
-        const opponentId = playerIds.find((id) => id !== playerId);
-        if (opponentId && maps[opponentId]?.startPosition) {
-          players[playerId].position = maps[opponentId].startPosition;
+      // 순환 릴레이 배정: sorted[i]는 sorted[(i+1)%N]의 맵을 달린다
+      const assignments: Record<string, string> = {};
+      playerIds.forEach((runnerId, i) => {
+        const mapOwnerId = playerIds[(i + 1) % playerIds.length];
+        assignments[runnerId] = mapOwnerId;
+        if (maps[mapOwnerId]?.startPosition) {
+          players[runnerId].position = maps[mapOwnerId].startPosition;
         }
-      }
+      });
 
       return {
         ...state,
         phase: GamePhase.PLAY,
+        assignments,
         players,
       };
     }, { applyLocally: false });
@@ -441,10 +450,6 @@ export const setPlayerReady = async (roomId: string, userId: string, isReady: bo
     const playerRef = ref(database, `rooms/${roomId}/gameState/players/${userId}`);
     await update(playerRef, { isReady });
 
-    // 모든 플레이어가 준비되면 게임 시작
-    if (isReady) {
-      await tryStartGame(roomId);
-    }
   } catch (error) {
     console.error('플레이어 준비 상태 설정 중 오류 발생:', error);
     throw error;
@@ -474,9 +479,6 @@ export const placeObstacles = async (roomId: string, userId: string, map: GameMa
 
     // 방 활동 시각 갱신
     await touchRoomActivity(roomId);
-
-    // 모든 플레이어가 준비되면 게임 시작 (트랜잭션이라 중복 호출돼도 안전)
-    await tryStartGame(roomId);
   } catch (error) {
     console.error('맵 설정 중 오류 발생:', error);
     throw error;

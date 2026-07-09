@@ -93,9 +93,11 @@ export interface GameState {
   phase: GamePhase;
   players: Record<string, Player>;
   maps?: Record<string, GameMap>;
+  // 순환 릴레이 맵 배정: { 달리는 사람 uid: 그가 달리는 맵의 주인 uid }
+  assignments?: Record<string, string>;
   currentTurn?: string | null;
   winner?: string | null;
-  draw?: boolean; // 동일한 턴 수로 완주 -> 무승부
+  draw?: boolean; // 최소 턴 동률 -> 무승부(공동 우승)
   collisionWalls?: any[];
   itemState?: Record<string, ItemStateEntry>;
   turnMessage?: string;

@@ -18,9 +18,19 @@ interface GamePlayProps {
   isPractice?: boolean; // 연습 모드 (Firebase 사용 안 함)
   myFinished?: boolean; // 내가 이미 완주함 -> 관전 모드
   myFinishMoves?: number | null; // 내 완주 턴 수
-  opponentFinished?: boolean; // 상대가 이미 완주함 -> 포기 가능
-  opponentFinishMoves?: number | null; // 상대 완주 턴 수 (이걸 이겨야 승리)
+  opponentFinished?: boolean; // 누군가 먼저 완주함 -> 포기 가능
+  opponentFinishMoves?: number | null; // 완주자 중 최소 턴 수 (이걸 이겨야 승리)
   onForfeit?: () => void; // 포기 처리
+  mapOwnerId?: string | null; // 내가 달리는 맵의 주인 (순환 릴레이 배정)
+  myMapRunnerId?: string | null; // 내 맵을 달리는 사람 (미니맵 표시 대상)
+  othersInfo?: Array<{
+    id: string;
+    name: string;
+    photoURL: string | null;
+    finished: boolean;
+    finishMoves: number | null;
+    forfeited: boolean;
+  }>; // 나를 제외한 참가자들 (HUD 표시)
 }
 
 // 1인칭 회전 매핑 (좌회전/우회전)
@@ -42,6 +52,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
   opponentFinished = false,
   opponentFinishMoves = null,
   onForfeit,
+  mapOwnerId = null,
+  myMapRunnerId = null,
+  othersInfo = [],
 }) => {
   // 연습 모드에서는 Firebase에 어떤 데이터도 쓰지 않는다
   const isPractice = isPracticeProp || roomId === 'practice-room';
@@ -58,14 +71,11 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const [gameOver, setGameOver] = useState<boolean>(false);
   const [lastMoveValid, setLastMoveValid] = useState<boolean | null>(null);
   const [message, setMessage] = useState<string>('');
-  const [opponentPosition, setOpponentPosition] = useState<Position | null>(null);
-  const [opponentId, setOpponentId] = useState<string | null>(null);
+  const [runnerPosition, setRunnerPosition] = useState<Position | null>(null);
   const [collisionWalls, setCollisionWalls] = useState<CollisionWall[]>([]);
   const [opponentCollisionWalls, setOpponentCollisionWalls] = useState<CollisionWall[]>([]);
   const [playerPhotoURL, setPlayerPhotoURL] = useState<string | null>(null);
-  const [opponentPhotoURL, setOpponentPhotoURL] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState<string>('나');
-  const [opponentName, setOpponentName] = useState<string>('상대방');
   // 시점: 1인칭(미로 체험, 기본) / 3인칭(오버헤드) / 2D
   const [viewMode, setViewMode] = useState<ViewMode>('first');
   // 1인칭에서 바라보는 방향 - 시작 시 도착점 쪽을 향함
@@ -97,7 +107,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const iAmDone = gameOver || myFinished; // 내가 골인했음 (게임은 계속될 수 있음)
   const isFinished = iAmDone || gameEnded;
   // 관전 모드: 나는 골인했지만 상대가 아직 완주 중 -> 내 맵에서 상대의 진행을 지켜봄
-  const spectating = !isPractice && iAmDone && !gameEnded && !!myMap && !!opponentPosition;
+  const spectating = !isPractice && iAmDone && !gameEnded && !!myMap && !!runnerPosition;
   // 포기 가능: 상대가 먼저 골인했고 나는 아직 완주하지 못함
   const canForfeit = !isPractice && !iAmDone && opponentFinished && !gameEnded && !!onForfeit;
   // 관전/종료 시에는 전체가 보이는 시점으로 강제 (1인칭 불가)
@@ -129,50 +139,24 @@ const GamePlay: React.FC<GamePlayProps> = ({
     };
   }, [roomId, userId, isPractice]);
 
-  // 상대방 ID 및 위치 정보 구독 (멀티플레이어 전용)
+  // 내 맵을 달리는 사람의 위치 구독 (미니맵/관전용, 멀티플레이어 전용)
   useEffect(() => {
-    if (isPractice) return;
+    if (isPractice || !myMapRunnerId) return;
 
     const database = getDatabase();
-    let positionUnsubscribe: (() => void) | null = null;
-    let cancelled = false;
-
-    const fetchOpponent = async () => {
-      try {
-        const playersRef = ref(database, `rooms/${roomId}/gameState/players`);
-        const playersSnapshot = await get(playersRef);
-        const players = playersSnapshot.val() || {};
-
-        // 나를 제외한 플레이어가 상대방
-        const foundOpponentId = Object.keys(players).find((id) => id !== userId);
-
-        if (foundOpponentId && !cancelled) {
-          setOpponentId(foundOpponentId);
-
-          // 상대방 위치 정보 구독
-          const opponentPositionRef = ref(
-            database,
-            `rooms/${roomId}/gameState/players/${foundOpponentId}/position`
-          );
-          positionUnsubscribe = onValue(opponentPositionRef, (snapshot) => {
-            const position = snapshot.val();
-            if (position) {
-              setOpponentPosition(position);
-            }
-          });
-        }
-      } catch (error) {
-        console.error('상대방 정보 조회 중 오류:', error);
+    const runnerPositionRef = ref(
+      database,
+      `rooms/${roomId}/gameState/players/${myMapRunnerId}/position`
+    );
+    const unsubscribe = onValue(runnerPositionRef, (snapshot) => {
+      const position = snapshot.val();
+      if (position) {
+        setRunnerPosition(position);
       }
-    };
+    });
 
-    fetchOpponent();
-
-    return () => {
-      cancelled = true;
-      if (positionUnsubscribe) positionUnsubscribe();
-    };
-  }, [roomId, userId, isPractice]);
+    return () => unsubscribe();
+  }, [roomId, myMapRunnerId, isPractice]);
 
   // 충돌 벽 정보 구독 (멀티플레이어 전용)
   useEffect(() => {
@@ -186,10 +170,10 @@ const GamePlay: React.FC<GamePlayProps> = ({
       if (walls) {
         const wallList = Object.values(walls) as CollisionWall[];
 
-        // 내가 플레이하는 맵(상대방이 만든 맵)의 충돌 벽
-        setCollisionWalls(wallList.filter((wall) => wall.mapOwnerId === opponentId));
+        // 내가 플레이하는 맵의 충돌 벽 (맵 주인 기준)
+        setCollisionWalls(wallList.filter((wall) => wall.mapOwnerId === mapOwnerId));
 
-        // 상대방이 플레이하는 맵(내가 만든 맵)의 충돌 벽
+        // 내 맵을 달리는 사람이 만든 충돌 벽 (미니맵용)
         setOpponentCollisionWalls(wallList.filter((wall) => wall.mapOwnerId === userId));
       } else {
         setCollisionWalls([]);
@@ -198,7 +182,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
     });
 
     return () => unsubscribe();
-  }, [roomId, opponentId, userId, isPractice]);
+  }, [roomId, mapOwnerId, userId, isPractice]);
 
   // 아이템 사용 상태 구독 (멀티플레이어 전용)
   useEffect(() => {
@@ -209,28 +193,28 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
     const unsubscribe = onValue(itemStateRef, (snapshot) => {
       const state = snapshot.val() || {};
-      // 내가 플레이하는 맵의 아이템은 상대(맵 소유자) 키에 기록됨
-      if (opponentId) {
-        setItemConsumed(!!state[opponentId]?.consumed);
+      // 내가 플레이하는 맵의 아이템은 맵 주인 키에 기록됨
+      if (mapOwnerId) {
+        setItemConsumed(!!state[mapOwnerId]?.consumed);
       }
       setMyItemConsumed(!!state[userId]?.consumed);
     });
 
     return () => unsubscribe();
-  }, [roomId, opponentId, userId, isPractice]);
+  }, [roomId, mapOwnerId, userId, isPractice]);
 
-  // 아이템 소모 처리 (내가 플레이하는 맵 = 상대가 설치한 아이템)
+  // 아이템 소모 처리 (내가 플레이하는 맵의 주인이 설치한 아이템)
   const consumeOpponentItem = useCallback(() => {
     setItemConsumed(true);
-    if (!isPractice && opponentId && item) {
+    if (!isPractice && mapOwnerId && item) {
       const database = getDatabase();
-      update(ref(database, `rooms/${roomId}/gameState/itemState/${opponentId}`), {
+      update(ref(database, `rooms/${roomId}/gameState/itemState/${mapOwnerId}`), {
         consumed: true,
         type: item.type,
         consumedAt: serverTimestamp(),
       }).catch((error) => console.error('아이템 상태 기록 오류:', error));
     }
-  }, [isPractice, opponentId, item, roomId]);
+  }, [isPractice, mapOwnerId, item, roomId]);
 
   // 탐지기 사용 - 내 주변 한 칸(대각선 포함, 3x3)의 벽을 탐지
   // 일반 벽 + 아직 부서지지 않은 1회성 벽(일반 벽으로 위장되어 표시)을 찾아냄. 지뢰/웜홀은 탐지 불가.
@@ -298,24 +282,16 @@ const GamePlay: React.FC<GamePlayProps> = ({
         const mySnapshot = await get(myPlayerRef);
         const myData = mySnapshot.exists() ? mySnapshot.val() : null;
         setPlayerName(myData?.displayName || auth.currentUser?.displayName || '나');
-
-        // 상대방 프로필
-        if (opponentId) {
-          const opponentPlayerRef = ref(database, `rooms/${roomId}/gameState/players/${opponentId}`);
-          const snapshot = await get(opponentPlayerRef);
-          if (snapshot.exists()) {
-            const userData = snapshot.val();
-            if (userData.displayName) setOpponentName(userData.displayName);
-            if (userData.photoURL) setOpponentPhotoURL(userData.photoURL);
-          }
-        }
       } catch (error) {
         console.error('프로필 정보 가져오기 오류:', error);
       }
     };
 
     fetchProfiles();
-  }, [userId, opponentId, roomId, isPractice]);
+  }, [userId, roomId, isPractice]);
+
+  // 내 맵을 달리는 사람 정보 (미니맵/관전 표시용)
+  const runnerInfo = othersInfo.find((o) => o.id === myMapRunnerId) ?? null;
 
   // 플레이어 이동 처리 함수 (자유 이동 - 턴 대기 없이 각자 진행, 최종 턴 수로 승부)
   const handleMove = useCallback(
@@ -347,7 +323,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
           position: playerPosition,
           direction,
           timestamp: Date.now(),
-          mapOwnerId: isPractice ? 'practice' : opponentId || '',
+          mapOwnerId: isPractice ? 'practice' : mapOwnerId || '',
         };
 
         if (isPractice) {
@@ -422,7 +398,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
             position: playerPosition,
             direction,
             timestamp: Date.now(),
-            mapOwnerId: isPractice ? 'practice' : opponentId || '',
+            mapOwnerId: isPractice ? 'practice' : mapOwnerId || '',
           };
 
           if (isPractice) {
@@ -454,7 +430,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
       isPractice,
       roomId,
       userId,
-      opponentId,
+      mapOwnerId,
       onGameComplete,
       item,
       itemConsumed,
@@ -526,16 +502,16 @@ const GamePlay: React.FC<GamePlayProps> = ({
   // 어떤 상태에서든 보드 엘리먼트는 하나로 유지하고 props만 전환한다
   // (조건 분기로 엘리먼트가 바뀌면 WebGL 캔버스가 매번 파괴/재생성됨)
   const board =
-    spectating && myMap && opponentPosition
+    spectating && myMap && runnerPosition
       ? {
           startPosition: myMap.startPosition,
           endPosition: myMap.endPosition,
-          playerPosition: opponentPosition,
+          playerPosition: runnerPosition,
           obstacles: myMap.obstacles,
           collisionWalls: opponentCollisionWalls,
           revealObstacles: true,
           pawnColor: '#ef4444',
-          photoURL: opponentPhotoURL || undefined,
+          photoURL: runnerInfo?.photoURL || undefined,
           item: myItem,
           itemConsumed: myItemConsumed,
         }
@@ -628,23 +604,31 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
           {/* 상대방 정보 + 아이템/시점 */}
           <div className="flex items-center gap-2">
-            {opponentId ? (
-              <div className={`flex items-center gap-2 px-2 py-1 rounded-lg ${!opponentFinished && !gameEnded ? 'bg-red-500/15 ring-1 ring-red-400/50' : ''}`}>
-                <div className="leading-tight text-right">
-                  <div className="text-xs font-bold text-red-300">{opponentName.substring(0, 6)}</div>
-                  <div className="text-[10px] text-slate-400">상대</div>
-                </div>
-                {opponentPhotoURL ? (
-                  <img
-                    src={opponentPhotoURL}
-                    alt="Opponent"
-                    className="w-7 h-7 rounded-full object-cover ring-2 ring-red-400"
-                  />
-                ) : (
-                  <div className="w-7 h-7 rounded-full bg-red-500 ring-2 ring-red-400 flex items-center justify-center">
-                    <span className="text-white text-[10px] font-bold">적</span>
+            {othersInfo.length > 0 ? (
+              <div className="flex items-center gap-1">
+                {othersInfo.slice(0, 3).map((o) => (
+                  <div
+                    key={o.id}
+                    className={`flex items-center gap-1 px-1.5 py-1 rounded-lg ${
+                      !o.finished && !o.forfeited && !gameEnded ? 'bg-red-500/15 ring-1 ring-red-400/50' : 'opacity-70'
+                    }`}
+                    title={`${o.name} - ${o.forfeited ? '포기' : o.finished ? `${o.finishMoves}턴 완주` : '진행 중'}`}
+                  >
+                    {o.photoURL ? (
+                      <img src={o.photoURL} alt={o.name} className="w-6 h-6 rounded-full object-cover ring-2 ring-red-400" />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-red-500 ring-2 ring-red-400 flex items-center justify-center">
+                        <span className="text-white text-[9px] font-bold">{o.name[0] || '적'}</span>
+                      </div>
+                    )}
+                    <div className="leading-tight hidden sm:block">
+                      <div className="text-[10px] font-bold text-red-300">{o.name.substring(0, 5)}</div>
+                      <div className="text-[9px] text-slate-400">
+                        {o.forfeited ? '포기' : o.finished ? `${o.finishMoves}턴 ✓` : '진행'}
+                      </div>
+                    </div>
                   </div>
-                )}
+                ))}
               </div>
             ) : (
               !isPractice && <span className="text-[10px] text-slate-500">상대 대기</span>
@@ -733,20 +717,22 @@ const GamePlay: React.FC<GamePlayProps> = ({
       </div>
 
       {/* 미니맵 - 내가 만든 맵에서 상대방 플레이 (연습/관전 중에는 표시 안 함) */}
-      {!isPractice && !spectating && myMap && opponentPosition && (
+      {!isPractice && !spectating && myMap && runnerPosition && (
         <div className="absolute top-[74px] right-2 z-20">
           <div className="game-panel !rounded-xl p-2">
-            <div className="text-[10px] text-slate-400 text-center mb-1 font-medium">내 맵 (상대방 진행)</div>
+            <div className="text-[10px] text-slate-400 text-center mb-1 font-medium">
+              내 맵 ({runnerInfo ? `${runnerInfo.name.substring(0, 5)} 진행` : '상대 진행'})
+            </div>
             <GameBoard
               gamePhase={GamePhase.PLAY}
               startPosition={myMap.startPosition}
               endPosition={myMap.endPosition}
-              playerPosition={opponentPosition}
+              playerPosition={runnerPosition}
               obstacles={myMap.obstacles}
               collisionWalls={opponentCollisionWalls}
               readOnly={true}
               isMinimapMode={true}
-              playerPhotoURL={opponentPhotoURL || undefined}
+              playerPhotoURL={runnerInfo?.photoURL || undefined}
               item={myItem}
               itemConsumed={myItemConsumed}
             />

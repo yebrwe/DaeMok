@@ -131,9 +131,10 @@ async function setupMap(page) {
     await pageA.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
     ok(`방 생성됨: ${pageA.url().split('/rooms/')[1]}`);
 
-    step('3: A 맵 제작 완료 -> 상대 대기');
+    step('3: A 맵 제작 완료 -> 방장 대기 화면 (시작 버튼 비활성)');
     await setupMap(pageA);
-    await expectText(pageA, '상대방 준비 대기');
+    await expectText(pageA, '참가자 (1/2)');
+    await pageA.getByRole('button', { name: '게임 시작' }).waitFor({ timeout: 15000 });
 
     step('4: B가 방 목록에서 참가');
     const card = pageB.locator('[data-room-card]', { hasText: ROOM_NAME }).first();
@@ -141,8 +142,11 @@ async function setupMap(page) {
     await card.getByRole('button', { name: '참가하기' }).click();
     await pageB.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
 
-    step('5: B 맵 제작 완료 -> 게임 자동 시작 (보안 규칙 하 트랜잭션)');
+    step('5: B 맵 제작 완료 -> B는 방장 대기, A(방장)가 게임 시작');
     await setupMap(pageB);
+    await expectText(pageB, '방장이 시작하면 게임이 시작됩니다');
+    await expectText(pageA, '모두 준비되었습니다');
+    await pageA.getByRole('button', { name: '게임 시작' }).click();
     await expectText(pageA, '이동: 0');
     await expectText(pageB, '이동: 0');
 
@@ -179,7 +183,7 @@ async function setupMap(page) {
 
     step('10: B 포기 -> A 승리 / B 패배');
     await pageB.getByRole('button', { name: '포기하기' }).click();
-    await expectText(pageA, '승리했습니다! (상대방 포기)');
+    await expectText(pageA, '승리했습니다! (상대 포기)');
     await expectText(pageB, '포기하여 패배했습니다');
     await pageA.screenshot({ path: `${OUT}/mp-04-A-win.png` });
     await pageB.screenshot({ path: `${OUT}/mp-05-B-forfeit-lose.png` });
@@ -189,9 +193,11 @@ async function setupMap(page) {
     await expectText(pageA, '시작점을 선택하세요');
     await expectText(pageB, '시작점을 선택하세요');
 
-    step('12: [2게임] 맵 제작 x2 -> 시작 -> 3인칭 전환');
+    step('12: [2게임] 맵 제작 x2 -> 방장 시작 -> 3인칭 전환');
     await setupMap(pageA);
     await setupMap(pageB);
+    await expectText(pageA, '모두 준비되었습니다');
+    await pageA.getByRole('button', { name: '게임 시작' }).click();
     await expectText(pageA, '이동: 0');
     await expectText(pageB, '이동: 0');
     await pageA.getByRole('button', { name: '3인칭' }).click();
@@ -218,6 +224,75 @@ async function setupMap(page) {
     await pageA.getByRole('button', { name: '나가기' }).first().click();
     await pageA.waitForURL(/\/rooms$/, { timeout: 20000 });
     await pageB.waitForURL(/\/rooms$/, { timeout: 25000 });
+
+    // ============ 3인전 (순환 릴레이) ============
+    step('16: [3인전] C 로그인 + A가 3인 방 생성');
+    const ctxC = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const pageC = await ctxC.newPage();
+    pageC.on('dialog', (d) => d.accept());
+    pageC.on('console', (m) => {
+      if (m.type() === 'error' && /permission|denied/i.test(m.text())) {
+        console.log('[C PERMISSION]', m.text().slice(0, 250));
+      }
+    });
+    await signInWithFakeGoogle(pageC, { email: `daemok.e2e.c.${STAMP}@example.com`, name: 'TestC' });
+
+    await pageA.getByRole('button', { name: '새 게임 방 만들기' }).click();
+    await pageA.fill('#roomName', `${ROOM_NAME}-3p`);
+    await pageA.getByRole('button', { name: '3명', exact: true }).click();
+    await pageA.getByRole('button', { name: '방 만들기' }).click();
+    await pageA.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
+    ok('3인 방 생성');
+
+    step('17: B, C 참가 + 전원 맵 제작 -> 방장 시작');
+    for (const pg of [pageB, pageC]) {
+      const card3 = pg.locator('[data-room-card]', { hasText: `${ROOM_NAME}-3p` }).first();
+      await card3.waitFor({ timeout: 20000 });
+      await card3.getByRole('button', { name: '참가하기' }).click();
+      await pg.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
+    }
+    await setupMap(pageA);
+    await setupMap(pageB);
+    await setupMap(pageC);
+    await expectText(pageA, '참가자 (3/3)');
+    await expectText(pageA, '모두 준비되었습니다');
+    await pageA.getByRole('button', { name: '게임 시작' }).click();
+    await expectText(pageA, '이동: 0');
+    await expectText(pageB, '이동: 0');
+    await expectText(pageC, '이동: 0');
+    ok('3인 게임 시작 (순환 릴레이 배정)');
+
+    step('18: A 2턴 완주 / B 헛걸음 후 4턴 완주 / C에게 목표 안내');
+    await pageA.getByRole('button', { name: '3인칭' }).click();
+    await pageB.getByRole('button', { name: '3인칭' }).click();
+    await pageA.keyboard.press('ArrowRight');
+    await expectText(pageA, '이동: 1');
+    await pageA.keyboard.press('ArrowRight');
+    await expectText(pageA, '턴으로 완주했습니다');
+    await pageB.keyboard.press('ArrowDown');
+    await expectText(pageB, '이동: 1');
+    await pageB.keyboard.press('ArrowUp');
+    await expectText(pageB, '이동: 2');
+    await pageB.keyboard.press('ArrowRight');
+    await expectText(pageB, '이동: 3');
+    await pageB.keyboard.press('ArrowRight'); // 4턴 완주
+    await expectText(pageB, '턴으로 완주했습니다');
+    await expectText(pageC, '상대방이 2턴으로 완주했습니다');
+    ok('완주 순서와 무관하게 최소 턴 목표(2턴)가 안내됨');
+
+    step('19: C 포기 -> 정산: A 승리(2턴) / B 패배(4턴) / C 포기 패배');
+    await pageC.getByRole('button', { name: '포기하기' }).click();
+    await expectText(pageA, '승리했습니다');
+    await expectText(pageB, '패배했습니다');
+    await expectText(pageC, '포기하여 패배했습니다');
+    await pageA.screenshot({ path: `${OUT}/mp-3p-result-A.png` });
+    ok('3인 정산 정상 (최소 턴 우승)');
+
+    step('20: A(방장) 나가기 -> 방 삭제 -> B, C 자동 리디렉션');
+    await pageA.getByRole('button', { name: '나가기' }).first().click();
+    await pageA.waitForURL(/\/rooms$/, { timeout: 20000 });
+    await pageB.waitForURL(/\/rooms$/, { timeout: 25000 });
+    await pageC.waitForURL(/\/rooms$/, { timeout: 25000 });
 
     console.log('ALL MP STEPS PASSED');
   } catch (e) {

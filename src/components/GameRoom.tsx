@@ -7,6 +7,7 @@ import GamePlay from './GamePlay';
 import { useGameState } from '@/hooks/useFirebase';
 import {
   placeObstacles,
+  startGame,
   leaveRoom,
   tryRestoreAuth,
   updateRoomUserStatus,
@@ -161,16 +162,21 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 플레이어 목록 계산 - null-safe 방식으로 항상 값을 가지도록 함
   const players = gameState ? Object.values(gameState.players || {}) : [];
   
-  // 승자 메시지 함수를 useCallback으로 메모이제이션
+  // 승자 메시지 함수를 useCallback으로 메모이제이션 (다인전 인식)
   const getWinnerMessage = useCallback(() => {
     if (!gameState) return '';
 
     const players = gameState.players || {};
-    const myMoves = players[userId]?.finishMoves;
+    const me = players[userId];
 
-    // 같은 턴 수로 완주 -> 무승부
+    // 최소 턴 동률 -> 공동 우승(무승부). 동률에 못 낀 사람은 패배
     if (gameState.draw) {
-      return `무승부입니다! (둘 다 ${myMoves ?? '같은'}턴 소모)`;
+      const finishers = Object.values(players).filter((p) => p.finished && !p.forfeited);
+      if (finishers.length === 0) return '무승부입니다! (전원 포기)';
+      const minMoves = Math.min(...finishers.map((p) => p.finishMoves ?? Number.MAX_SAFE_INTEGER));
+      const iAmTied = !!me?.finished && !me?.forfeited && me?.finishMoves === minMoves;
+      if (iAmTied) return `무승부입니다! (공동 우승 · ${minMoves}턴)`;
+      return me?.forfeited ? '포기하여 패배했습니다.' : '패배했습니다.';
     }
 
     if (!gameState.winner) return '';
@@ -178,13 +184,13 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     const isWinner = gameState.winner === userId;
 
     if (isWinner) {
-      const opponentForfeited = Object.entries(players).some(
+      const someoneForfeited = Object.entries(players).some(
         ([id, p]) => id !== userId && p.forfeited
       );
-      return opponentForfeited ? '승리했습니다! (상대방 포기)' : '승리했습니다! (더 적은 턴으로 완주)';
+      return someoneForfeited ? '승리했습니다! (상대 포기)' : '승리했습니다! (최소 턴 완주)';
     }
 
-    return players[userId]?.forfeited ? '포기하여 패배했습니다.' : '패배했습니다.';
+    return me?.forfeited ? '포기하여 패배했습니다.' : '패배했습니다.';
   }, [gameState, userId]);
   
   // 게임 상태 변경 감지
@@ -199,15 +205,16 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       }
     }
 
-    // 게임 맵 동기화
+    // 게임 맵 동기화 - 내가 달리는 맵은 순환 배정(assignments)이 정한 주인의 맵
     if (gameState.maps) {
-      const mapEntries = Object.entries(gameState.maps);
-      for (const [playerId, map] of mapEntries) {
-        if (playerId === userId) {
-          setMyMap(map);
-        } else {
-          setOpponentMap(map);
-        }
+      setMyMap(gameState.maps[userId] ?? null);
+
+      const assignedOwner = gameState.assignments?.[userId];
+      if (assignedOwner && gameState.maps[assignedOwner]) {
+        setOpponentMap(gameState.maps[assignedOwner]);
+      } else if (!gameState.assignments) {
+        // 아직 시작 전 (배정 없음)
+        setOpponentMap(null);
       }
     } else if (gameState.phase === GamePhase.SETUP) {
       // 재시작 등으로 맵이 제거되면 로컬 상태도 초기화 (상대 클라이언트에서도 반영)
@@ -236,8 +243,28 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
-  // 완주 처리 - 승자는 게임이 끝날 때 "소모한 턴 수가 적은 쪽"으로 결정
-  // 자유 이동 모드라 두 명이 거의 동시에 완주할 수 있으므로 트랜잭션으로 원자 처리
+  // 정산: 전원이 완주 또는 포기했으면 "완주자 중 최소 턴"이 우승 (동률 -> 공동 우승 = 무승부)
+  // 트랜잭션 내부에서 호출되므로 순수 함수로 유지
+  const settleResult = (players: Record<string, any>): { winner: string | null; draw: boolean | null } | null => {
+    const ids = Object.keys(players);
+    const allDone = ids.every((id) => players[id]?.finished || players[id]?.forfeited);
+    if (!allDone) return null;
+
+    const finishers: Array<[string, number]> = ids
+      .filter((id) => players[id]?.finished && !players[id]?.forfeited)
+      .map((id) => [
+        id,
+        typeof players[id]?.finishMoves === 'number' ? players[id].finishMoves : Number.MAX_SAFE_INTEGER,
+      ]);
+
+    if (finishers.length === 0) return { winner: null, draw: true }; // 전원 포기
+
+    const minMoves = Math.min(...finishers.map(([, count]) => count));
+    const best = finishers.filter(([, count]) => count === minMoves).map(([id]) => id);
+    return best.length === 1 ? { winner: best[0], draw: null } : { winner: null, draw: true };
+  };
+
+  // 완주 처리 - 자유 이동이라 여러 명이 거의 동시에 완주할 수 있으므로 트랜잭션으로 원자 처리
   const handleGameComplete = async (moves: number) => {
     console.log(`완주! 총 ${moves}턴 소모.`);
 
@@ -257,26 +284,11 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         };
         state.players = players;
 
-        // 모두 완주했으면 턴 수 비교로 승부 결정 (혼자 남은 경우 즉시 종료)
-        const playerIds = Object.keys(players);
-        const allFinished = playerIds.every((id) => players[id]?.finished);
-
-        if (allFinished) {
-          const finalMoves: Array<[string, number]> = playerIds.map((id) => [
-            id,
-            typeof players[id]?.finishMoves === 'number' ? players[id].finishMoves : Number.MAX_SAFE_INTEGER,
-          ]);
-          const minMoves = Math.min(...finalMoves.map(([, count]) => count));
-          const bestPlayers = finalMoves.filter(([, count]) => count === minMoves).map(([id]) => id);
-
+        const settled = settleResult(players);
+        if (settled) {
           state.phase = GamePhase.END;
-          if (bestPlayers.length === 1) {
-            state.winner = bestPlayers[0];
-            state.draw = null;
-          } else {
-            state.winner = null;
-            state.draw = true;
-          }
+          state.winner = settled.winner;
+          state.draw = settled.draw;
         }
 
         return state;
@@ -285,7 +297,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       // 게임을 END로 전환시킨 클라이언트만 전적 기록 (정확히 한 번)
       const committedState = result.committed ? result.snapshot.val() : null;
       if (committedState?.phase === GamePhase.END) {
-        await updateGameStats(committedState.draw ? null : committedState.winner ?? null);
+        await updateGameStats(committedState);
       }
     } catch (error) {
       console.error('완주 처리 중 오류:', error);
@@ -293,26 +305,36 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
 
-  // 포기 처리 - 상대가 먼저 완주한 뒤 남은 플레이어가 포기하면 완주한 상대의 승리로 종료
+  // 포기 처리 - 다인전에서는 즉시 종료가 아니라 "탈락"이며, 전원이 끝나야 정산된다
   const handleForfeit = async () => {
     const database = getDatabase();
     const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
 
     try {
-      const snapshot = await get(gameStateRef);
-      if (!snapshot.exists()) return;
-      const players = snapshot.val().players || {};
-      const finishedOpponent =
-        Object.keys(players).find((id) => id !== userId && players[id]?.finished) || null;
+      const result = await runTransaction(gameStateRef, (state: any) => {
+        if (!state) return state;
+        if (state.phase !== GamePhase.PLAY) return; // 이미 종료됨
 
-      await update(gameStateRef, {
-        phase: GamePhase.END,
-        winner: finishedOpponent,
-        [`players/${userId}/forfeited`]: true,
-      });
+        const players = state.players || {};
+        players[userId] = {
+          ...players[userId],
+          forfeited: true,
+        };
+        state.players = players;
 
-      if (finishedOpponent) {
-        await updateGameStats(finishedOpponent);
+        const settled = settleResult(players);
+        if (settled) {
+          state.phase = GamePhase.END;
+          state.winner = settled.winner;
+          state.draw = settled.draw;
+        }
+
+        return state;
+      }, { applyLocally: false });
+
+      const committedState = result.committed ? result.snapshot.val() : null;
+      if (committedState?.phase === GamePhase.END) {
+        await updateGameStats(committedState);
       }
       console.log('포기 처리 완료');
     } catch (error) {
@@ -320,25 +342,44 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       setMessage('포기 처리 중 오류가 발생했습니다.');
     }
   };
-  
-  // 전적 업데이트 함수 (winnerId가 null이면 무승부)
-  const updateGameStats = async (winnerId: string | null) => {
-    if (!roomId || !gameState || !gameState.players) return;
+
+  // 전적 업데이트 (정산된 최종 상태 기준)
+  // 승자 1명: 승자 wins+, 나머지 losses+ / 공동 우승: 동률자 draws+, 나머지 losses+
+  const updateGameStats = async (finalState: any) => {
+    if (!roomId || !finalState?.players) return;
 
     const database = getDatabase();
     const statsRef = ref(database, `rooms/${roomId}/stats`);
 
     try {
-      // 현재 전적 정보 가져오기
+      const players = finalState.players as Record<string, any>;
       const statsSnapshot = await get(statsRef);
       const currentStats = statsSnapshot.exists() ? statsSnapshot.val() : {};
-
-      // 업데이트할 전적 정보 준비
       const updatedStats: any = { ...currentStats };
 
-      // 모든 플레이어에 대해 전적 업데이트
-      Object.keys(gameState.players).forEach(playerId => {
-        const player = gameState.players[playerId];
+      // 공동 우승자 집합 계산 (draw인 경우)
+      let tiedWinners = new Set<string>();
+      if (finalState.draw) {
+        const finishers = Object.entries(players).filter(
+          ([, p]: [string, any]) => p.finished && !p.forfeited
+        );
+        if (finishers.length > 0) {
+          const minMoves = Math.min(
+            ...finishers.map(([, p]: [string, any]) =>
+              typeof p.finishMoves === 'number' ? p.finishMoves : Number.MAX_SAFE_INTEGER
+            )
+          );
+          finishers.forEach(([id, p]: [string, any]) => {
+            if (p.finishMoves === minMoves) tiedWinners.add(id);
+          });
+        } else {
+          // 전원 포기 - 모두 무승부 처리
+          tiedWinners = new Set(Object.keys(players));
+        }
+      }
+
+      Object.keys(players).forEach((playerId) => {
+        const player = players[playerId];
 
         if (!updatedStats[playerId]) {
           updatedStats[playerId] = {
@@ -349,23 +390,23 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           };
         }
 
-        // 승패/무승부 업데이트
-        if (winnerId === null) {
-          updatedStats[playerId].draws = (updatedStats[playerId].draws || 0) + 1;
-        } else if (playerId === winnerId) {
+        if (finalState.draw) {
+          if (tiedWinners.has(playerId)) {
+            updatedStats[playerId].draws = (updatedStats[playerId].draws || 0) + 1;
+          } else {
+            updatedStats[playerId].losses = (updatedStats[playerId].losses || 0) + 1;
+          }
+        } else if (playerId === finalState.winner) {
           updatedStats[playerId].wins = (updatedStats[playerId].wins || 0) + 1;
         } else {
           updatedStats[playerId].losses = (updatedStats[playerId].losses || 0) + 1;
         }
 
-        // 표시 이름 업데이트 (변경되었을 수 있음)
         updatedStats[playerId].displayName = player.displayName || updatedStats[playerId].displayName;
       });
 
-      // Firebase에 업데이트된 전적 저장
       await update(statsRef, updatedStats);
       console.log('전적 업데이트 완료:', updatedStats);
-
     } catch (error) {
       console.error('전적 업데이트 중 오류:', error);
     }
@@ -407,6 +448,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         draw: null,
         currentTurn: null,
         maps: null,
+        assignments: null,
         collisionWalls: null,
         itemState: null,
         turnMessage: null,
@@ -460,35 +502,24 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
-  // 항상 사용 가능한 나가기 - 게임 진행 중이면 기권 패배 확인 후 처리
+  // 항상 사용 가능한 나가기 - 게임 진행 중이면 기권(탈락) 확인 후 처리
   const handleLeaveWithConfirm = async () => {
     if (gameState?.phase === GamePhase.PLAY) {
       const me = gameState.players?.[userId];
-      const opponentEntry = Object.entries(gameState.players || {}).find(([id]) => id !== userId);
 
       if (
         !window.confirm(
           me?.finished
             ? '관전을 종료하고 방을 나가시겠습니까?'
-            : '게임이 진행 중입니다. 지금 나가면 기권 패배로 처리됩니다. 나가시겠습니까?'
+            : '게임이 진행 중입니다. 지금 나가면 기권(탈락) 처리됩니다. 나가시겠습니까?'
         )
       ) {
         return;
       }
 
-      // 아직 완주하지 못한 상태로 나가면 상대의 기권승 처리
-      if (opponentEntry && !me?.finished) {
-        try {
-          const database = getDatabase();
-          await update(ref(database, `rooms/${roomId}/gameState`), {
-            phase: GamePhase.END,
-            winner: opponentEntry[0],
-            [`players/${userId}/forfeited`]: true,
-          });
-          await updateGameStats(opponentEntry[0]);
-        } catch (error) {
-          console.error('기권 처리 중 오류:', error);
-        }
+      // 아직 완주하지 못한 상태로 나가면 기권 처리 (남은 사람들은 계속 진행, 전원 종료 시 정산)
+      if (!me?.finished && !me?.forfeited) {
+        await handleForfeit();
       }
     }
 
@@ -796,25 +827,31 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             )
           )}
 
-          {/* 상대방 정보 */}
-          {opponent ? (
-            <div className="flex items-center gap-1.5">
-              <span className={playersStatus[opponent.id] ? 'text-green-400' : 'text-slate-600'}>
-                {playersStatus[opponent.id] ? '●' : '○'}
-              </span>
-              {opponent?.isReady && <span className="text-green-400">✓</span>}
-              <span className="text-red-300 font-medium">{opponent?.displayName?.substring(0, 6) || '상대'}</span>
-              {opponent?.photoURL ? (
-                <img src={opponent.photoURL} alt="상대 프로필" className="w-5 h-5 rounded-full ring-1 ring-red-400" />
-              ) : (
-                <div className="w-5 h-5 rounded-full bg-red-500 ring-1 ring-red-400 flex items-center justify-center">
-                  <span className="text-white text-[7px] font-bold">적</span>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="text-slate-500 text-[11px] animate-pulse">상대방 대기 중...</div>
-          )}
+          {/* 상대방 정보 (다인전: 최대 3명 압축 표시) */}
+          {(() => {
+            const opponents = Object.entries(gameState.players || {}).filter(([id]) => id !== userId);
+            if (opponents.length === 0) {
+              return <div className="text-slate-500 text-[11px] animate-pulse">상대방 대기 중...</div>;
+            }
+            return (
+              <div className="flex items-center gap-2">
+                {opponents.slice(0, 3).map(([oid, o]) => (
+                  <div key={oid} className="flex items-center gap-1" title={o.displayName || '상대'}>
+                    <span className={playersStatus[oid] ? 'text-green-400 text-[9px]' : 'text-slate-600 text-[9px]'}>
+                      {playersStatus[oid] ? '●' : '○'}
+                    </span>
+                    {o.isReady && <span className="text-green-400 text-[10px]">✓</span>}
+                    <span className="text-red-300 font-medium text-[11px]">{o.displayName?.substring(0, 5) || '상대'}</span>
+                    {o.photoURL ? (
+                      <img src={o.photoURL} alt="상대" className="w-5 h-5 rounded-full ring-1 ring-red-400" />
+                    ) : (
+                      <div className="w-5 h-5 rounded-full bg-red-500 ring-1 ring-red-400" />
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
@@ -874,10 +911,70 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             <GameSetup key="setup" onMapComplete={handleMapComplete} />
           ) : gameState.phase === GamePhase.SETUP && isReady ? (
             <div key="waiting" className="absolute inset-0 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950 flex items-center justify-center">
-              <div className="game-panel px-10 py-6 text-center">
-                <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
-                <p className="text-sm mt-3 text-slate-300 font-medium">상대방 준비 대기</p>
-                <p className="text-[10px] text-slate-500 mt-1">상대가 맵을 완성하면 자동으로 시작됩니다</p>
+              <div className="game-panel px-8 py-6 text-center min-w-[300px]">
+                <p className="text-sm font-bold text-slate-200 mb-3">
+                  참가자 ({Object.keys(gameState.players || {}).length}/{roomData?.maxPlayers ?? 2})
+                </p>
+                <div className="flex flex-col gap-1.5 mb-4">
+                  {Object.entries(gameState.players || {}).map(([pid, p]) => (
+                    <div key={pid} className="flex items-center justify-between gap-3 px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50">
+                      <div className="flex items-center gap-2">
+                        {p.photoURL ? (
+                          <img src={p.photoURL} alt="" className="w-5 h-5 rounded-full" />
+                        ) : (
+                          <div className={`w-5 h-5 rounded-full ${pid === userId ? 'bg-blue-500' : 'bg-red-500'}`} />
+                        )}
+                        <span className="text-xs text-slate-200">
+                          {p.displayName?.substring(0, 8) || '플레이어'}
+                          {pid === roomData?.createdBy && <span className="text-amber-400 ml-1">👑</span>}
+                          {pid === userId && <span className="text-blue-300 ml-1">(나)</span>}
+                        </span>
+                      </div>
+                      {p.isReady ? (
+                        <span className="text-[10px] font-bold text-green-400">✓ 준비 완료</span>
+                      ) : (
+                        <span className="text-[10px] text-slate-500">맵 제작 중...</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {(() => {
+                  const playerEntries = Object.entries(gameState.players || {});
+                  const mapsReady = gameState.maps || {};
+                  const allReady =
+                    playerEntries.length >= 2 &&
+                    playerEntries.every(([pid, p]) => p.isReady && mapsReady[pid]);
+                  const isOwner = roomData?.createdBy === userId;
+
+                  if (isOwner) {
+                    return (
+                      <>
+                        <button
+                          className="btn-game px-10 py-2.5 text-sm w-full"
+                          onClick={async () => {
+                            const ok = await startGame(roomId);
+                            if (!ok) setMessage('아직 시작할 수 없습니다. 모든 참가자가 준비되어야 합니다.');
+                          }}
+                          disabled={!allReady}
+                        >
+                          🚀 게임 시작
+                        </button>
+                        <p className="text-[10px] text-slate-500 mt-2">
+                          {allReady
+                            ? '모두 준비되었습니다! 시작 버튼을 누르세요.'
+                            : '모든 참가자가 맵을 완성하면 시작할 수 있습니다.'}
+                        </p>
+                      </>
+                    );
+                  }
+                  return (
+                    <div>
+                      <div className="w-6 h-6 border-2 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                      <p className="text-[11px] text-slate-400 mt-2">방장이 시작하면 게임이 시작됩니다</p>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           ) : (gameState.phase === GamePhase.PLAY || gameState.phase === GamePhase.END) && opponentMap ? (
@@ -894,14 +991,32 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               myFinished={!!gameState.players?.[userId]?.finished}
               myFinishMoves={gameState.players?.[userId]?.finishMoves ?? null}
               opponentFinished={Object.entries(gameState.players || {}).some(
-                ([id, p]) => id !== userId && p.finished
+                ([id, p]) => id !== userId && p.finished && !p.forfeited
               )}
-              opponentFinishMoves={
-                Object.entries(gameState.players || {}).find(
-                  ([id, p]) => id !== userId && p.finished
-                )?.[1]?.finishMoves ?? null
-              }
+              opponentFinishMoves={(() => {
+                const counts = Object.entries(gameState.players || {})
+                  .filter(([id, p]) => id !== userId && p.finished && !p.forfeited)
+                  .map(([, p]) => p.finishMoves)
+                  .filter((n): n is number => typeof n === 'number');
+                return counts.length > 0 ? Math.min(...counts) : null;
+              })()}
               onForfeit={handleForfeit}
+              mapOwnerId={gameState.assignments?.[userId] ?? null}
+              myMapRunnerId={
+                Object.entries(gameState.assignments ?? {}).find(
+                  ([, ownerId]) => ownerId === userId
+                )?.[0] ?? null
+              }
+              othersInfo={Object.entries(gameState.players || {})
+                .filter(([id]) => id !== userId)
+                .map(([id, p]) => ({
+                  id,
+                  name: p.displayName || '플레이어',
+                  photoURL: p.photoURL || null,
+                  finished: !!p.finished && !p.forfeited,
+                  finishMoves: p.finishMoves ?? null,
+                  forfeited: !!p.forfeited,
+                }))}
             />
           ) : gameState.phase === GamePhase.END ? (
             <div key="gameover" className="absolute inset-0 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950" />

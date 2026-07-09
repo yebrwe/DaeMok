@@ -10,6 +10,7 @@ interface CreateRoomFormProps {
 
 const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
   const [roomName, setRoomName] = useState('');
+  const [maxPlayers, setMaxPlayers] = useState(2);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -32,9 +33,9 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
       setIsCreating(true);
       setError(null);
 
-      console.log('방 생성 시도:', { roomName, maxPlayers: 2 });
+      console.log('방 생성 시도:', { roomName, maxPlayers });
 
-      const roomId = await createRoom(roomName, userId, 2);
+      const roomId = await createRoom(roomName, userId, maxPlayers);
 
       if (roomId) {
         console.log('방 생성 성공:', roomId);
@@ -91,6 +92,27 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
                 disabled={isCreating}
                 maxLength={30}
               />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">인원 (순환 릴레이 - 각자 다음 사람의 맵을 달립니다)</label>
+              <div className="flex gap-1.5">
+                {[2, 3, 4].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    className={`flex-1 py-1.5 rounded-xl text-sm font-bold border transition-colors ${
+                      maxPlayers === n
+                        ? 'bg-amber-400 text-slate-900 border-amber-400'
+                        : 'bg-slate-800/80 text-slate-300 border-slate-600/60 hover:border-amber-400/50'
+                    }`}
+                    onClick={() => setMaxPlayers(n)}
+                    disabled={isCreating}
+                  >
+                    {n}명
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="flex space-x-2 pt-1">
