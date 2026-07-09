@@ -12,11 +12,12 @@
  *   3. NEXT_PUBLIC_FIREBASE_EMULATOR=1 npm run build && npm run start
  *   4. EMULATOR=1 node scripts/e2e-multiplayer.cjs
  *
- * 검증 시나리오:
- *   구글 로그인(에뮬레이터 가짜 계정) x2 -> 방 생성/참가 -> 맵 제작 x2 -> 자동 시작(방장 선턴)
- *   [1게임] 턴 교대 -> A 선완주(관전 전환) -> B 혼자 연속 턴 -> 승리 불가 안내 -> B 포기 -> A 승리
- *   [2게임] 재시작(패배자 선턴) -> B 선완주 -> A 동턴 완주 -> 무승부
- *   마지막: 방장 나가기 -> 방 삭제 -> 상대 자동 리디렉션
+ * 검증 시나리오 (자유 이동 - 턴 대기 없음, 최종 턴 수 비교로 승부):
+ *   구글 로그인(에뮬레이터 가짜 계정) x2 -> 방 생성/참가 -> 맵 제작 x2 -> 자동 시작
+ *   [1게임] 1인칭 기본 확인 -> A 연속 이동 선완주(관전 전환) -> B 헛걸음 -> 승리 불가 안내
+ *           -> B 포기 -> A 승리
+ *   [2게임] 재시작 -> B 선완주 -> A 동턴 완주 -> 무승부
+ *   마지막: 방장 나가기 -> 방 즉시 삭제 -> 상대 자동 리디렉션
  */
 const { chromium } = require('playwright');
 const fs = require('fs');
@@ -145,35 +146,35 @@ async function setupMap(page) {
     await expectText(pageA, '이동: 0');
     await expectText(pageB, '이동: 0');
 
-    step('6: 선턴 = 방장(A) 확인');
-    await expectText(pageA, '내 턴');
+    step('6: 1인칭이 기본 시점인지 확인 후 3인칭으로 전환');
+    await pageA.getByRole('button', { name: '1인칭' }).waitFor({ timeout: 10000 });
+    await pageA.getByRole('button', { name: '3인칭' }).click();
+    await pageB.getByRole('button', { name: '3인칭' }).click();
+    ok('양쪽 3인칭 전환');
 
-    step('7: [1게임] 턴 교대 (A -> B -> A 2턴 완주)');
+    step('7: [1게임] 자유 이동 - A가 연속 2번 이동해 즉시 완주 (턴 대기 없음)');
     await pageA.keyboard.press('ArrowRight');
     await expectText(pageA, '이동: 1');
-    await expectText(pageB, '내 턴');
-    await pageB.keyboard.press('ArrowRight');
-    await expectText(pageB, '이동: 1');
-    await expectText(pageA, '내 턴');
     await pageA.keyboard.press('ArrowRight');
     await expectText(pageA, '턴으로 완주했습니다');
+    ok('A 연속 이동으로 2턴 완주 (자유 이동 확인)');
 
     step('8: A = 관전 모드(승부 미확정), B = 목표 턴 수 + 포기 버튼');
     await expectText(pageA, '관전 중');
     await pageA.waitForTimeout(1000);
     await pageA.screenshot({ path: `${OUT}/mp-01-A-spectate.png` });
     await expectText(pageB, '상대방이 2턴으로 완주했습니다');
-    await expectText(pageB, '다음 이동에 바로 골인하면 무승부입니다');
+    await expectText(pageB, '1턴 이내로 완주하면 승리합니다');
     await pageB.getByRole('button', { name: '포기하기' }).waitFor({ timeout: 15000 });
     await pageB.screenshot({ path: `${OUT}/mp-02-B-forfeit-option.png` });
 
-    step('9: [probe] B 혼자 연속 턴 + 승리 불가 상태 전환');
+    step('9: [probe] B 헛걸음 2번 -> 승리 불가 안내로 전환');
     await pageB.keyboard.press('ArrowDown');
+    await expectText(pageB, '이동: 1');
+    await pageB.keyboard.press('ArrowUp');
     await expectText(pageB, '이동: 2');
-    await pageB.waitForTimeout(1500);
-    await expectText(pageB, '내 턴');
     await expectText(pageB, '승리할 수 없습니다');
-    await pageA.waitForTimeout(500);
+    await pageA.waitForTimeout(800);
     await pageA.screenshot({ path: `${OUT}/mp-03-A-watching-B-move.png` });
 
     step('10: B 포기 -> A 승리 / B 패배');
@@ -183,29 +184,28 @@ async function setupMap(page) {
     await pageA.screenshot({ path: `${OUT}/mp-04-A-win.png` });
     await pageB.screenshot({ path: `${OUT}/mp-05-B-forfeit-lose.png` });
 
-    step('11: 재시작 -> 패배자(B) 선턴');
+    step('11: 재시작 -> 양쪽 모두 맵 제작으로 복귀');
     await pageA.getByRole('button', { name: '재시작' }).click();
     await expectText(pageA, '시작점을 선택하세요');
     await expectText(pageB, '시작점을 선택하세요');
-    await expectText(pageB, '선턴입니다. 맵을 설정해주세요.');
 
-    step('12: [2게임] 맵 제작 x2 -> 시작 (B 선턴)');
+    step('12: [2게임] 맵 제작 x2 -> 시작 -> 3인칭 전환');
     await setupMap(pageA);
     await setupMap(pageB);
     await expectText(pageA, '이동: 0');
     await expectText(pageB, '이동: 0');
-    await expectText(pageB, '내 턴');
+    await pageA.getByRole('button', { name: '3인칭' }).click();
+    await pageB.getByRole('button', { name: '3인칭' }).click();
 
-    step('13: B 2턴 선완주 -> A는 무승부 도전 상태');
+    step('13: B 2턴 선완주 -> A는 목표/무승부 안내');
     await pageB.keyboard.press('ArrowRight');
     await expectText(pageB, '이동: 1');
-    await expectText(pageA, '내 턴');
-    await pageA.keyboard.press('ArrowRight');
-    await expectText(pageA, '이동: 1');
-    await expectText(pageB, '내 턴');
     await pageB.keyboard.press('ArrowRight');
     await expectText(pageB, '턴으로 완주했습니다');
     await expectText(pageA, '상대방이 2턴으로 완주했습니다');
+    await expectText(pageA, '1턴 이내로 완주하면 승리합니다');
+    await pageA.keyboard.press('ArrowRight');
+    await expectText(pageA, '이동: 1');
     await expectText(pageA, '다음 이동에 바로 골인하면 무승부입니다');
 
     step('14: A도 2턴으로 완주 -> 무승부');

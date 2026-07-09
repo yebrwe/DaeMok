@@ -90,48 +90,52 @@ const GameBoard: React.FC<GameBoardProps> = ({
     );
   };
 
-  // 특정 위치에 충돌 벽이 있는지 확인하는 함수
+  // 특정 위치에 충돌 벽이 있는지 확인 (같은 벽을 인접 셀의 반대 방향으로 기록한 경우도 포함)
   const hasCollisionWall = (position: Position, direction: Direction): boolean => {
     // 위치와 방향이 정확히 일치하는 경우
     const directMatch = collisionWalls.some(
       wall => isSamePosition(wall.position, position) && wall.direction === direction
     );
-    
-    // 위쪽 벽 검사 - 해당 셀의 위쪽 벽은 위쪽 셀의 아래쪽 벽과 동일
-    if (direction === 'up' && !directMatch) {
-      const upPosition = { row: position.row - 1, col: position.col };
-      if (upPosition.row >= 0) {
-        return collisionWalls.some(
-          wall => isSamePosition(wall.position, upPosition) && wall.direction === 'down'
-        );
-      }
+    if (directMatch) return true;
+
+    // 인접 셀에서 반대 방향으로 기록된 같은 벽 확인
+    const adjacent: Position =
+      direction === 'up' ? { row: position.row - 1, col: position.col } :
+      direction === 'down' ? { row: position.row + 1, col: position.col } :
+      direction === 'left' ? { row: position.row, col: position.col - 1 } :
+      { row: position.row, col: position.col + 1 };
+
+    if (adjacent.row < 0 || adjacent.row >= BOARD_SIZE || adjacent.col < 0 || adjacent.col >= BOARD_SIZE) {
+      return false;
     }
-    
-    // 왼쪽 벽 검사 - 해당 셀의 왼쪽 벽은 왼쪽 셀의 오른쪽 벽과 동일
-    if (direction === 'left' && !directMatch) {
-      const leftPosition = { row: position.row, col: position.col - 1 };
-      if (leftPosition.col >= 0) {
-        return collisionWalls.some(
-          wall => isSamePosition(wall.position, leftPosition) && wall.direction === 'right'
-        );
-      }
-    }
-    
-    return directMatch;
+
+    const opposite: Direction =
+      direction === 'up' ? 'down' : direction === 'down' ? 'up' : direction === 'left' ? 'right' : 'left';
+
+    return collisionWalls.some(
+      wall => isSamePosition(wall.position, adjacent) && wall.direction === opposite
+    );
   };
 
-  // 미니맵용 간단한 장애물 렌더링
+  // 미니맵용 간단한 벽 렌더링 - 상대가 부딪힌 벽은 빨간색 흔적으로 표시
   const renderMinimapObstacles = (position: Position) => {
+    const edge = (direction: Direction, positionClass: string, sizeClass: string) => {
+      const hit = hasCollisionWall(position, direction);
+      const blocked = hasObstacle(position, direction);
+      if (!hit && !blocked) return null;
+      return (
+        <div
+          className={`absolute ${sizeClass} ${positionClass} ${hit ? 'bg-red-500' : 'bg-yellow-500'}`}
+        ></div>
+      );
+    };
+
     return (
       <>
-        {hasObstacle(position, 'up') && 
-          <div className="absolute w-full h-1 bg-yellow-500 top-0 left-0"></div>}
-        {hasObstacle(position, 'down') && 
-          <div className="absolute w-full h-1 bg-yellow-500 bottom-0 left-0"></div>}
-        {hasObstacle(position, 'left') && 
-          <div className="absolute w-1 h-full bg-yellow-500 top-0 left-0"></div>}
-        {hasObstacle(position, 'right') && 
-          <div className="absolute w-1 h-full bg-yellow-500 top-0 right-0"></div>}
+        {edge('up', 'top-0 left-0', 'w-full h-1')}
+        {edge('down', 'bottom-0 left-0', 'w-full h-1')}
+        {edge('left', 'top-0 left-0', 'w-1 h-full')}
+        {edge('right', 'top-0 right-0', 'w-1 h-full')}
       </>
     );
   };

@@ -118,7 +118,6 @@ export default function PracticePage() {
             onGameComplete={handleGameComplete}
             userId="practice-user"
             roomId="practice-room"
-            currentTurn="practice-user"
             isPractice
           />
 

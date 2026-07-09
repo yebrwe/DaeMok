@@ -10,10 +10,11 @@ import {
   leaveRoom,
   tryRestoreAuth,
   updateRoomUserStatus,
-  getRoomOnlineUsers
+  getRoomOnlineUsers,
+  clearRoomPresence
 } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
-import { getDatabase, ref, update, get, remove, onValue, serverTimestamp } from 'firebase/database';
+import { getDatabase, ref, update, get, remove, onValue, serverTimestamp, runTransaction } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
 
 // 컴포넌트 마운트 시 사용자 상태 확인
@@ -107,9 +108,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string>('');
   const playersStatus = usePlayersActivity(roomId);
-  const [isRoomSetupComplete, setIsRoomSetupComplete] = useState(false);
   const [roomData, setRoomData] = useState<any>(null);
-  const [restartMessage, setRestartMessage] = useState<string>('');
   const [roomStats, setRoomStats] = useState<{
     [userId: string]: {
       wins: number;
@@ -217,27 +216,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   }, [gameState, userId]);
   
-  // 선턴 메시지를 위한 별도의 useEffect 추가 (무한 루프 방지)
-  useEffect(() => {
-    if (!gameState) return;
-    
-    // 선턴 메시지 확인 및 설정 (별도의 useEffect로 분리)
-    if (gameState.turnMessage && gameState.phase === GamePhase.SETUP) {
-      // 이전 메시지와 다른 경우에만 업데이트
-      if (restartMessage !== gameState.turnMessage) {
-        console.log('선턴 메시지 설정:', gameState.turnMessage);
-        setRestartMessage(gameState.turnMessage);
-        
-        // 5초 후 선턴 메시지 초기화
-        const timer = setTimeout(() => {
-          setRestartMessage('');
-        }, 5000);
-        
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [gameState?.turnMessage, gameState?.phase, restartMessage]);
-  
   // 맵 설정 완료 처리
   const handleMapComplete = async (map: GameMap) => {
     try {
@@ -258,8 +236,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
-  // 골인 처리 - 승자는 게임이 끝날 때 "소모한 턴 수가 적은 쪽"으로 결정
-  // 먼저 골인해도 상대가 더 적은 턴으로 완주하면 역전됨. 같은 턴 수면 무승부.
+  // 완주 처리 - 승자는 게임이 끝날 때 "소모한 턴 수가 적은 쪽"으로 결정
+  // 자유 이동 모드라 두 명이 거의 동시에 완주할 수 있으므로 트랜잭션으로 원자 처리
   const handleGameComplete = async (moves: number) => {
     console.log(`완주! 총 ${moves}턴 소모.`);
 
@@ -267,50 +245,48 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
 
     try {
-      // 최신 상태 기준으로 판단 (props의 gameState는 오래됐을 수 있음)
-      const snapshot = await get(gameStateRef);
-      if (!snapshot.exists()) return;
-      const currentState = snapshot.val();
+      const result = await runTransaction(gameStateRef, (state: any) => {
+        if (!state) return state;
+        if (state.phase !== GamePhase.PLAY) return; // 이미 종료됨 - 중단
 
-      const players = currentState.players || {};
-      const playerIds = Object.keys(players);
-      const others = playerIds.filter((id) => id !== userId);
-      const unfinishedOthers = others.filter((id) => !players[id]?.finished);
+        const players = state.players || {};
+        players[userId] = {
+          ...players[userId],
+          finished: true,
+          finishMoves: moves,
+        };
+        state.players = players;
 
-      // 완주 기록 + 턴/종료 처리를 하나의 원자적 업데이트로
-      const updates: Record<string, unknown> = {
-        [`players/${userId}/finished`]: true,
-        [`players/${userId}/finishMoves`]: moves,
-      };
+        // 모두 완주했으면 턴 수 비교로 승부 결정 (혼자 남은 경우 즉시 종료)
+        const playerIds = Object.keys(players);
+        const allFinished = playerIds.every((id) => players[id]?.finished);
 
-      if (unfinishedOthers.length > 0) {
-        // 아직 완주하지 않은 상대가 있으면 게임 계속 -> 남은 플레이어가 연속으로 턴 진행
-        updates.currentTurn = unfinishedOthers[0];
-        await update(gameStateRef, updates);
-        return;
+        if (allFinished) {
+          const finalMoves: Array<[string, number]> = playerIds.map((id) => [
+            id,
+            typeof players[id]?.finishMoves === 'number' ? players[id].finishMoves : Number.MAX_SAFE_INTEGER,
+          ]);
+          const minMoves = Math.min(...finalMoves.map(([, count]) => count));
+          const bestPlayers = finalMoves.filter(([, count]) => count === minMoves).map(([id]) => id);
+
+          state.phase = GamePhase.END;
+          if (bestPlayers.length === 1) {
+            state.winner = bestPlayers[0];
+            state.draw = null;
+          } else {
+            state.winner = null;
+            state.draw = true;
+          }
+        }
+
+        return state;
+      }, { applyLocally: false });
+
+      // 게임을 END로 전환시킨 클라이언트만 전적 기록 (정확히 한 번)
+      const committedState = result.committed ? result.snapshot.val() : null;
+      if (committedState?.phase === GamePhase.END) {
+        await updateGameStats(committedState.draw ? null : committedState.winner ?? null);
       }
-
-      // 마지막 완주자 -> 턴 수 비교로 승자 결정
-      const finalMoves: Array<[string, number]> = playerIds.map((id) => [
-        id,
-        id === userId ? moves : players[id]?.finishMoves ?? Number.MAX_SAFE_INTEGER,
-      ]);
-      const minMoves = Math.min(...finalMoves.map(([, count]) => count));
-      const bestPlayers = finalMoves.filter(([, count]) => count === minMoves).map(([id]) => id);
-
-      updates.phase = GamePhase.END;
-      if (bestPlayers.length === 1) {
-        updates.winner = bestPlayers[0];
-        updates.draw = null;
-      } else {
-        updates.winner = null;
-        updates.draw = true;
-      }
-
-      await update(gameStateRef, updates);
-
-      // 전적 기록 (무승부면 null)
-      await updateGameStats(bestPlayers.length === 1 ? bestPlayers[0] : null);
     } catch (error) {
       console.error('완주 처리 중 오류:', error);
       setMessage('완주 처리 중 오류가 발생했습니다.');
@@ -424,95 +400,20 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         return;
       }
       
-      // ======= 선턴 결정 로직 개선 =======
-      console.log('선턴 결정 시작, 게임 상태:', {
-        phase: currentGameState?.phase,
-        winner: currentGameState?.winner
-      });
-      
-      let firstTurnPlayerId = '';
-      let turnMessage = '';
-      
-      // 승자 정보가 있으면 패배자 선턴 규칙 적용
-      if (currentGameState && currentGameState.winner) {
-        const winner = currentGameState.winner;
-        console.log('직전 게임 승자:', winner);
-        
-        // 승자가 아닌 플레이어들(패배자들) 찾기
-        const players = Object.keys(currentGameState.players || {});
-        const losers = players.filter(id => id !== winner);
-        console.log('패배자 후보:', losers);
-        
-        if (losers.length > 0) {
-          // 패배자를 선턴으로 설정
-          firstTurnPlayerId = losers[0];
-          
-          // 패배자 이름 가져오기
-          let loserName = '패배자';
-          if (currentGameState.players[firstTurnPlayerId]) {
-            loserName = currentGameState.players[firstTurnPlayerId].displayName || 
-                        (firstTurnPlayerId === userId ? '당신' : '상대방');
-          }
-          
-          turnMessage = `${loserName}님이 선턴을 가져갑니다. (패배자 선턴 규칙)`;
-          console.log('패배자가 선턴을 가져갑니다:', loserName, firstTurnPlayerId);
-        } else {
-          // 패배자를 찾을 수 없는 경우 (드문 경우)
-          console.warn('패배자를 찾을 수 없음, 현재 승자:', winner);
-          
-          // 승자가 아닌 다른 플레이어를 찾기 위한 추가 확인
-          const otherPlayers = Object.keys(gameState.players || {}).filter(id => id !== winner);
-          console.log('다른 플레이어 후보(현재 상태):', otherPlayers);
-          
-          if (otherPlayers.length > 0) {
-            firstTurnPlayerId = otherPlayers[0];
-            const otherName = gameState.players[firstTurnPlayerId]?.displayName || '상대방';
-            turnMessage = `${otherName}님이 선턴을 가져갑니다.`;
-          } else {
-            // 승자 외에 다른 플레이어가 없으면 기본값 설정
-            firstTurnPlayerId = userId !== winner ? userId : winner; // 가능하면 승자가 아닌 플레이어
-            turnMessage = `${gameState.players[firstTurnPlayerId]?.displayName || '플레이어'}가 선턴을 가져갑니다.`;
-          }
-        }
-      } else {
-        // 승자가 없는 경우(첫 게임 등) 랜덤으로 선택
-        const players = Object.keys(gameState.players || {});
-        if (players.length === 0) {
-          console.error('플레이어 정보를 찾을 수 없습니다.');
-          setMessage('게임을 재시작할 수 없습니다. 방을 나갔다가 다시 입장해주세요.');
-          return;
-        }
-        
-        const randomIndex = Math.floor(Math.random() * players.length);
-        firstTurnPlayerId = players[randomIndex];
-        turnMessage = `${gameState.players[firstTurnPlayerId]?.displayName || '플레이어'}가 선턴을 가져갑니다. (랜덤 선택)`;
-        console.log('랜덤으로 선턴 결정:', firstTurnPlayerId);
-      }
-      
-      console.log('최종 선턴 결정 결과:', {
-        firstTurnPlayerId,
-        turnMessage,
-        decidedBy: userId,
-        isCurrentUser: firstTurnPlayerId === userId
-      });
-      
-      // 선턴 메시지 설정 - 로컬 상태
-      setRestartMessage(turnMessage);
-      
-      // 재시작 정보 기록 (누가 재시작 버튼을 눌렀는지)
+      // 재시작 정보 기록 (자유 이동 모드 - 선턴 개념 없음, 관련 레거시 필드는 null로 정리)
       const restartData = {
         phase: GamePhase.SETUP,
         winner: null,
         draw: null,
-        currentTurn: firstTurnPlayerId,
+        currentTurn: null,
         maps: null,
         collisionWalls: null,
-        turnMessage: turnMessage,
-        turnMessageTimestamp: serverTimestamp(),
+        turnMessage: null,
+        turnMessageTimestamp: null,
         restartedBy: userId,
         restartedAt: serverTimestamp()
       };
-      
+
       // Firebase에 업데이트
       await update(gameStateRef, restartData);
       
@@ -549,15 +450,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       setIsReady(false);
       setMyMap(null);
       setOpponentMap(null);
-      
-      // 메시지 설정 (선턴 정보 포함)
-      setMessage(`게임 재시작 - ${turnMessage}`);
-      
-      // 5초 후 선턴 메시지 초기화 (로컬만)
-      setTimeout(() => {
-        setRestartMessage('');
-      }, 5000);
-      
+
       console.log('게임 재시작 완료');
       
     } catch (error) {
@@ -566,91 +459,104 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
+  // 항상 사용 가능한 나가기 - 게임 진행 중이면 기권 패배 확인 후 처리
+  const handleLeaveWithConfirm = async () => {
+    if (gameState?.phase === GamePhase.PLAY) {
+      const me = gameState.players?.[userId];
+      const opponentEntry = Object.entries(gameState.players || {}).find(([id]) => id !== userId);
+
+      if (
+        !window.confirm(
+          me?.finished
+            ? '관전을 종료하고 방을 나가시겠습니까?'
+            : '게임이 진행 중입니다. 지금 나가면 기권 패배로 처리됩니다. 나가시겠습니까?'
+        )
+      ) {
+        return;
+      }
+
+      // 아직 완주하지 못한 상태로 나가면 상대의 기권승 처리
+      if (opponentEntry && !me?.finished) {
+        try {
+          const database = getDatabase();
+          await update(ref(database, `rooms/${roomId}/gameState`), {
+            phase: GamePhase.END,
+            winner: opponentEntry[0],
+            [`players/${userId}/forfeited`]: true,
+          });
+          await updateGameStats(opponentEntry[0]);
+        } catch (error) {
+          console.error('기권 처리 중 오류:', error);
+        }
+      }
+    }
+
+    await handleLeaveRoom();
+  };
+
   // 방 나가기 핸들러 (명시적으로 로비로 돌아갈 때 호출)
+  // 잔여물 방지를 위해 모든 정리를 리디렉션 "전에" 완료한다
   const handleLeaveRoom = async () => {
     try {
       console.log('방 나가기 시도:', roomId);
       setError(null);
-      
+
       // 세션 복원 건너뛰기 플래그 설정
       sessionStorage.setItem('skip_room_restore', 'true');
-      
-      // 방장 여부 확인
+
       const database = getDatabase();
       const roomRef = ref(database, `rooms/${roomId}`);
+
+      // 서버에 등록된 onDisconnect 작업 취소 (삭제된 방 경로에 잔여물이 재생성되는 것 방지)
+      await clearRoomPresence(roomId, userId);
+
       const roomSnapshot = await get(roomRef);
-      
+
       if (!roomSnapshot.exists()) {
-        console.error('존재하지 않는 방입니다.');
         router.push('/rooms');
         return;
       }
-      
+
       const roomData = roomSnapshot.val();
       const isRoomOwner = roomData.createdBy === userId;
-      
-      console.log('방장 여부 확인:', isRoomOwner ? '방장입니다' : '일반 참여자입니다');
-      
-      // 먼저 로비로 리디렉션
-      router.push('/rooms');
-      
-      // 리디렉션 후 방 나가기 처리를 위한 지연 설정
-      setTimeout(async () => {
+
+      if (isRoomOwner) {
+        // 방장: 다른 플레이어가 남아 있어도 방을 즉시 삭제
+        // 삭제 중 상태를 먼저 브로드캐스트해 다른 클라이언트의 리디렉션을 유도
+        console.log('방장이 나가서 방을 삭제합니다:', roomId);
         try {
-          if (isRoomOwner) {
-            // 방장인 경우: 방 삭제 및 모든 플레이어 퇴장 처리
-            console.log('방장이 나가서 방을 삭제합니다:', roomId);
-            
-            // 1. 방 상태를 '삭제 중'으로 변경 (다른 플레이어들이 감지할 수 있도록)
-            await update(roomRef, { 
-              status: 'deleting',
-              deletedBy: userId,
-              deletedAt: serverTimestamp()
-            });
-            
-            // 2. 잠시 대기하여 다른 플레이어들이 상태 변경을 감지할 시간을 줌
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            // 3. 방 자체를 삭제
-            // (다른 플레이어의 userStatus는 보안 규칙상 본인만 쓸 수 있으므로 건드리지 않음.
-            //  각 클라이언트가 방 삭제를 감지해 스스로 정리함 - restoreRoomSession 참고)
-            await remove(roomRef);
-            console.log('방이 삭제되었습니다:', roomId);
-
-            // 4. 내 상태 정리
-            await update(ref(database, `userStatus/${userId}`), {
-              currentRoom: null,
-              lastActivity: serverTimestamp()
-            });
-          } else {
-            // 일반 참여자인 경우: 자신만 방에서 나가기
-            const success = await leaveRoom(roomId, userId);
-            
-            if (success) {
-              console.log('방 나가기 성공');
-              
-              // 방 관련 정보 삭제 - 간소화됨
-              await remove(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`));
-              await remove(ref(database, `rooms/${roomId}/members/${userId}`));
-              
-              // 사용자 상태 업데이트
-              await update(ref(database, `userStatus/${userId}`), {
-                currentRoom: null,
-                lastActivity: serverTimestamp()
-              });
-              
-              console.log('방 연결 정보 제거됨');
-            } else {
-              console.error('방 나가기 실패');
-            }
-          }
-        } catch (error) {
-          console.error('방 나가기 중 오류:', error);
+          await update(roomRef, {
+            status: 'deleting',
+            deletedBy: userId,
+            deletedAt: serverTimestamp()
+          });
+        } catch (e) {
+          console.error('삭제 상태 브로드캐스트 실패:', e);
         }
-      }, 500);
+
+        await remove(roomRef);
+        console.log('방이 삭제되었습니다:', roomId);
+      } else {
+        // 일반 참여자: 자신의 흔적만 제거
+        const success = await leaveRoom(roomId, userId);
+        if (success) {
+          await remove(ref(database, `rooms/${roomId}/members/${userId}`)).catch(() => {});
+          await remove(ref(database, `rooms/${roomId}/playerStatus/${userId}`)).catch(() => {});
+          console.log('방 연결 정보 제거됨');
+        }
+      }
+
+      // 내 상태 정리
+      await update(ref(database, `userStatus/${userId}`), {
+        currentRoom: null,
+        lastActivity: serverTimestamp()
+      });
+
+      router.push('/rooms');
     } catch (error) {
       console.error('방 나가기 중 오류:', error);
       setError('방 나가기 중 오류가 발생했습니다.');
+      router.push('/rooms');
     }
   };
   
@@ -808,11 +714,11 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   useEffect(() => {
     // 이 Hook은 항상 존재하여 Hook 순서 일관성을 보장
     return () => {
-      // 컴포넌트 언마운트 시 필요한 정리 작업
+      // 컴포넌트 언마운트 시 정리: onDisconnect 취소 + (방이 살아있으면) 오프라인 표시
+      // 삭제된 방 경로에 잔여 데이터가 재생성되는 것을 방지한다
       if (roomId && userId) {
-        // 게임방에서 나갈 때 온라인 상태 오프라인으로 변경
-        updateRoomUserStatus(roomId, userId, false)
-          .then(() => console.log('게임방 나가기: 온라인 상태 오프라인으로 변경됨'));
+        clearRoomPresence(roomId, userId)
+          .then(() => console.log('게임방 접속 상태 정리 완료'));
       }
     };
   }, [roomId, userId]);
@@ -844,15 +750,24 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             </span>
           </div>
 
-          {/* 전적 */}
-          <div className="text-[11px] text-slate-400 shrink-0">
-            <span className="text-green-400 font-bold">{stats?.wins ?? 0}</span>승{' '}
-            <span className="text-red-400 font-bold">{stats?.losses ?? 0}</span>패
-            {(stats?.draws || 0) > 0 && (
-              <>
-                {' '}<span className="text-slate-300 font-bold">{stats?.draws}</span>무
-              </>
-            )}
+          {/* 전적 + 나가기 (어느 단계에서든 나갈 수 있음) */}
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="text-[11px] text-slate-400">
+              <span className="text-green-400 font-bold">{stats?.wins ?? 0}</span>승{' '}
+              <span className="text-red-400 font-bold">{stats?.losses ?? 0}</span>패
+              {(stats?.draws || 0) > 0 && (
+                <>
+                  {' '}<span className="text-slate-300 font-bold">{stats?.draws}</span>무
+                </>
+              )}
+            </div>
+            <button
+              className="btn-sub px-2.5 py-1 text-[11px] !rounded-lg"
+              onClick={handleLeaveWithConfirm}
+              title="방 나가기 (게임 중이면 기권 패배)"
+            >
+              🚪 나가기
+            </button>
           </div>
         </div>
 
@@ -871,14 +786,12 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             {me?.isReady && <span className="text-green-400">✓</span>}
           </div>
 
-          {/* 턴 표시 */}
+          {/* 진행 상태 표시 (자유 이동 - 각자 자기 속도로 완주) */}
           {gameState.phase === GamePhase.PLAY && (
             me?.finished ? (
               <div className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-400/15 text-purple-300 border border-purple-400/40">관전 중</div>
-            ) : gameState.currentTurn === userId ? (
-              <div className="badge-turn !text-[10px]">내 턴</div>
             ) : (
-              <div className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700/50 text-slate-400 border border-slate-600/50">상대 턴</div>
+              <div className="badge-turn !text-[10px]">진행 중</div>
             )
           )}
 
@@ -966,21 +879,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           </div>
         )}
 
-        {/* 선턴 메시지 표시 */}
-        {gameState.phase === GamePhase.SETUP && (
-          <div className="text-center mb-2">
-            {restartMessage && (
-              <p className="text-xs font-medium bg-blue-500/10 border border-blue-400/40 text-blue-200 py-1 px-3 rounded-full inline-block">
-                {restartMessage}
-              </p>
-            )}
-            {gameState.currentTurn === userId && gameState.phase === GamePhase.SETUP && (
-              <p className="text-xs font-bold bg-green-500/10 border border-green-400/40 text-green-300 py-1 px-3 rounded-full inline-block mt-1">
-                ⚡ 선턴입니다. 맵을 설정해주세요.
-              </p>
-            )}
-          </div>
-        )}
 
         {/* 게임 종료 결과 */}
         {gameState.phase === GamePhase.END && (
@@ -1014,7 +912,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
 
                 <button
                   className="btn-sub px-4 py-1.5 text-sm"
-                  onClick={handleLeaveRoom}
+                  onClick={handleLeaveWithConfirm}
                 >
                   나가기
                 </button>
@@ -1030,7 +928,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             <div className="flex justify-center mt-2">
               <button
                 className="btn-sub px-4 py-1.5 text-xs"
-                onClick={handleLeaveRoom}
+                onClick={handleLeaveWithConfirm}
               >
                 나가기
               </button>
@@ -1045,7 +943,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               <div className="flex justify-center mt-4">
                 <button
                   className="btn-sub px-4 py-1.5 text-xs"
-                  onClick={handleLeaveRoom}
+                  onClick={handleLeaveWithConfirm}
                 >
                   나가기
                 </button>
@@ -1061,7 +959,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               onGameComplete={handleGameComplete}
               userId={userId}
               roomId={roomId}
-              currentTurn={gameState.currentTurn || null}
               myMap={myMap || undefined}
               gameEnded={gameState.phase === GamePhase.END}
               myFinished={!!gameState.players?.[userId]?.finished}

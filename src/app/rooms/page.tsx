@@ -7,7 +7,7 @@ import RoomList from '@/components/RoomList';
 import CreateRoomForm from '@/components/CreateRoomForm';
 import LobbyChat from '@/components/LobbyChat';
 import { useAuth } from '@/hooks/useAuth';
-import { restoreRoomSession, signOutUser } from '@/lib/firebase';
+import { restoreRoomSession, signOutUser, cleanupGhostRooms } from '@/lib/firebase';
 
 export default function RoomsPage() {
   const { user, loading } = useAuth();
@@ -43,6 +43,8 @@ export default function RoomsPage() {
             console.log('사용자가 명시적으로 방을 나갔습니다. 세션 복원을 건너뜁니다.');
             sessionStorage.removeItem('skip_room_restore'); // 플래그 제거
             setRestoringSession(false);
+            // 유령/폐기된 방 자동 정리
+            cleanupGhostRooms(user.uid).catch(() => {});
             return;
           }
 
@@ -52,6 +54,8 @@ export default function RoomsPage() {
             router.push(`/rooms/${restoredRoomId}`);
           } else {
             setRestoringSession(false);
+            // 유령/폐기된 방 자동 정리 (내 빈 방 + 2시간 이상 방치된 방)
+            cleanupGhostRooms(user.uid).catch(() => {});
           }
         } catch (error) {
           console.error('세션 복원 오류:', error);

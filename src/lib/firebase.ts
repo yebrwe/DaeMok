@@ -355,7 +355,10 @@ export const joinRoom = async (roomId: string, userId: string): Promise<boolean>
       currentRoom: roomId,
       lastActivity: serverTimestamp()
     });
-    
+
+    // 방 활동 시각 갱신 (유령 방 판정 방지)
+    await update(roomRef, { lastActivity: serverTimestamp() });
+
     return true;
   } catch (error) {
     console.error('방 참여 중 오류:', error);
@@ -418,7 +421,6 @@ export const tryStartGame = async (roomId: string): Promise<boolean> => {
       return {
         ...state,
         phase: GamePhase.PLAY,
-        currentTurn: state.currentTurn || playerIds[0],
         players,
       };
     }, { applyLocally: false });
@@ -469,6 +471,9 @@ export const placeObstacles = async (roomId: string, userId: string, map: GameMa
     // 맵 설정 후 자동으로 준비 상태로 설정
     const playerRef = ref(database, `rooms/${roomId}/gameState/players/${userId}`);
     await update(playerRef, { isReady: true });
+
+    // 방 활동 시각 갱신
+    await touchRoomActivity(roomId);
 
     // 모든 플레이어가 준비되면 게임 시작 (트랜잭션이라 중복 호출돼도 안전)
     await tryStartGame(roomId);
@@ -974,14 +979,111 @@ export const getOnlineUsers = (callback: (users: UserProfile[]) => void) => {
   });
 };
 
+// 방 관련 onDisconnect 등록 취소 + 내 접속 상태 정리
+// 방이 삭제된 뒤 서버측 onDisconnect나 언마운트 정리 코드가
+// 삭제된 방 경로에 데이터를 다시 써서 유령 방이 생기는 것을 방지한다
+export const clearRoomPresence = async (roomId: string, userId: string) => {
+  if (!roomId || !userId) return;
+
+  try {
+    const db = getDatabase();
+    const paths = [
+      `rooms/${roomId}/playerStatus/${userId}`,
+      `rooms/${roomId}/members/${userId}`,
+      `rooms/${roomId}/joinedPlayers/${userId}`,
+      `rooms/${roomId}/gameState/players/${userId}`,
+    ];
+
+    // 서버에 등록된 onDisconnect 작업 취소
+    await Promise.all(
+      paths.map((p) => onDisconnect(ref(db, p)).cancel().catch(() => {}))
+    );
+
+    // 노드가 아직 존재하는 경우에만 오프라인 표시 (삭제된 방에 스텁 생성 금지)
+    const psRef = ref(db, `rooms/${roomId}/playerStatus/${userId}`);
+    const psSnap = await get(psRef);
+    if (psSnap.exists()) {
+      await update(psRef, { isOnline: false, lastSeen: serverTimestamp() });
+    }
+
+    const gpRef = ref(db, `rooms/${roomId}/gameState/players/${userId}`);
+    const gpSnap = await get(gpRef);
+    if (gpSnap.exists()) {
+      await update(gpRef, { isOnline: false, lastSeen: serverTimestamp() });
+    }
+  } catch (error) {
+    console.error('방 접속 상태 정리 오류:', error);
+  }
+};
+
+// 방 활동 시각 갱신 (유령 방 판정 기준)
+export const touchRoomActivity = async (roomId: string) => {
+  if (!database || !roomId) return;
+  try {
+    await update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() });
+  } catch {
+    // 방이 이미 삭제된 경우 등 - 무시
+  }
+};
+
+// 유령/폐기된 방 정리 - 로비 진입 시마다 실행되는 자동 청소
+// 1) 내가 만든 방 중 아무도 접속해 있지 않은 방 (방장 권한으로 삭제)
+// 2) 누구의 방이든 2시간 이상 활동이 없고 아무도 없는 방 (보안 규칙이 허용)
+const STALE_ROOM_MS = 2 * 60 * 60 * 1000; // 2시간
+
+export const cleanupGhostRooms = async (userId: string): Promise<number> => {
+  if (!database || !userId) return 0;
+
+  try {
+    const snapshot = await get(ref(database, 'rooms'));
+    const rooms = snapshot.val() || {};
+    let removed = 0;
+
+    for (const [roomId, room] of Object.entries<any>(rooms)) {
+      if (!room) continue;
+
+      // 누군가(나 포함, 다른 탭일 수도 있음) 온라인이면 유지
+      const statuses = room.playerStatus || {};
+      const anyoneOnline = Object.values<any>(statuses).some((s) => s?.isOnline === true);
+      if (anyoneOnline) continue;
+
+      const isMine = room.createdBy === userId;
+      const lastActivity = typeof room.lastActivity === 'number' ? room.lastActivity : 0;
+      const isStale = Date.now() - lastActivity > STALE_ROOM_MS;
+
+      // 내 방이면 즉시, 남의 방이면 오래된 경우에만 (규칙이 서버 시간으로 재검증)
+      if (!isMine && !isStale) continue;
+
+      try {
+        await remove(ref(database, `rooms/${roomId}`));
+        removed++;
+      } catch {
+        // 경계 시간 근처에서 규칙이 거부하거나 이미 삭제된 경우 - 무시하고 계속
+      }
+    }
+
+    if (removed > 0) {
+      console.log(`유령 방 ${removed}개 정리 완료`);
+    }
+    return removed;
+  } catch (error) {
+    console.error('유령 방 정리 오류:', error);
+    return 0;
+  }
+};
+
 // 게임방 내 사용자 온라인 상태 업데이트 (로비와 별개)
 export const updateRoomUserStatus = async (roomId: string, userId: string, isOnline: boolean = true) => {
   if (!roomId || !userId) return false;
-  
+
   try {
     const db = getDatabase();
     const auth = getAuth();
-    
+
+    // 방이 없으면 아무것도 쓰지 않음 (삭제된 방에 잔여 데이터 생성 방지)
+    const roomExists = await get(ref(db, `rooms/${roomId}/createdBy`));
+    if (!roomExists.exists()) return false;
+
     const userStatusRef = ref(db, `rooms/${roomId}/playerStatus/${userId}`);
     
     const userData = {

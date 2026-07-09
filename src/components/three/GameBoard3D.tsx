@@ -1,11 +1,21 @@
 'use client';
 
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
-import { Canvas, useFrame, ThreeEvent } from '@react-three/fiber';
+import { Canvas, useFrame, useThree, ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { CollisionWall, Direction, GamePhase, Obstacle, Position } from '@/types/game';
 import { BOARD_SIZE, isSamePosition } from '@/lib/gameUtils';
+
+// 1인칭 시점 상수
+const EYE_HEIGHT = 0.55; // 말 눈높이
+const FP_WALL_HEIGHT = 1.35; // 1인칭에서 벽 높이 (눈높이보다 높아 시야 차단)
+const FACING_VECTOR: Record<Direction, [number, number]> = {
+  up: [0, -1], // -Z
+  down: [0, 1], // +Z
+  left: [-1, 0], // -X
+  right: [1, 0], // +X
+};
 
 // ===== 보드 배치 상수 =====
 const TILE = 1; // 타일 한 변 크기
@@ -99,10 +109,12 @@ function segmentToObstacle(seg: WallSegment): { position: Position; direction: D
 // ===== 개별 3D 요소 =====
 
 // 벽 박스 (설치됨/충돌/공개)
-function WallBox({ seg, color, opacity = 1 }: { seg: WallSegment; color: string; opacity?: number }) {
+function WallBox({ seg, color, opacity = 1, height = WALL_HEIGHT }: { seg: WallSegment; color: string; opacity?: number; height?: number }) {
+  const [x, , z] = segmentToWorld(seg);
+  const size = segmentSize(seg);
   return (
-    <mesh position={segmentToWorld(seg)} castShadow>
-      <boxGeometry args={segmentSize(seg)} />
+    <mesh position={[x, height / 2, z]} castShadow>
+      <boxGeometry args={[size[0], height, size[2]]} />
       <meshStandardMaterial
         color={color}
         transparent={opacity < 1}
@@ -111,6 +123,82 @@ function WallBox({ seg, color, opacity = 1 }: { seg: WallSegment; color: string;
       />
     </mesh>
   );
+}
+
+// 1인칭용 보드 외곽 벽 (미로에 갇힌 느낌 + 보드 밖 방향 시각화)
+function BorderWalls() {
+  const span = BOARD_SIZE * SPACING - GAP;
+  const half = span / 2;
+  const t = 0.18;
+  const walls: Array<{ pos: [number, number, number]; size: [number, number, number] }> = [
+    { pos: [CENTER, FP_WALL_HEIGHT / 2, CENTER - half - GAP / 2 - t / 2], size: [span + t * 2, FP_WALL_HEIGHT, t] },
+    { pos: [CENTER, FP_WALL_HEIGHT / 2, CENTER + half + GAP / 2 + t / 2], size: [span + t * 2, FP_WALL_HEIGHT, t] },
+    { pos: [CENTER - half - GAP / 2 - t / 2, FP_WALL_HEIGHT / 2, CENTER], size: [t, FP_WALL_HEIGHT, span + t * 2] },
+    { pos: [CENTER + half + GAP / 2 + t / 2, FP_WALL_HEIGHT / 2, CENTER], size: [t, FP_WALL_HEIGHT, span + t * 2] },
+  ];
+  return (
+    <group>
+      {walls.map((w, i) => (
+        <mesh key={`border-${i}`} position={w.pos} castShadow receiveShadow>
+          <boxGeometry args={w.size} />
+          <meshStandardMaterial color={COLORS.base} roughness={0.85} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+// 1인칭 카메라 리그 - 플레이어 위치/방향으로 부드럽게 이동·회전
+function FirstPersonRig({ position, facing }: { position: Position; facing: Direction }) {
+  const { camera } = useThree();
+  // lookAt은 일반 Object3D에선 +Z, 카메라에선 -Z를 대상으로 향하게 하므로
+  // 반드시 카메라 타입 더미로 쿼터니언을 계산해야 시선 방향이 뒤집히지 않는다
+  const dummyRef = useRef(new THREE.PerspectiveCamera());
+
+  const targetPos = useMemo(() => {
+    const [x, , z] = cellToWorld(position);
+    return new THREE.Vector3(x, EYE_HEIGHT, z);
+  }, [position]);
+
+  // 마운트 시 시야각을 1인칭에 맞게 확장
+  useEffect(() => {
+    const cam = camera as THREE.PerspectiveCamera;
+    const prevFov = cam.fov;
+    cam.fov = 72;
+    cam.updateProjectionMatrix();
+    return () => {
+      cam.fov = prevFov;
+      cam.updateProjectionMatrix();
+    };
+  }, [camera]);
+
+  useFrame((_, delta) => {
+    const t = 1 - Math.pow(0.0002, delta);
+    camera.position.lerp(targetPos, t);
+
+    // 바라볼 방향 쿼터니언 계산 후 슬러프 (부드러운 회전)
+    const [dx, dz] = FACING_VECTOR[facing];
+    const dummy = dummyRef.current;
+    dummy.position.copy(camera.position);
+    dummy.lookAt(camera.position.x + dx, EYE_HEIGHT, camera.position.z + dz);
+    camera.quaternion.slerp(dummy.quaternion, t);
+  });
+
+  return null;
+}
+
+// 3인칭 복귀 시 카메라를 오버헤드 기본 위치로 되돌림
+function ThirdPersonReset() {
+  const { camera } = useThree();
+  useEffect(() => {
+    const span = BOARD_SIZE * SPACING;
+    camera.position.set(CENTER, span * 1.25, CENTER + span * 1.32);
+    camera.lookAt(CENTER, 0, CENTER);
+    const cam = camera as THREE.PerspectiveCamera;
+    cam.fov = 42;
+    cam.updateProjectionMatrix();
+  }, [camera]);
+  return null;
 }
 
 // 설치 단계에서 클릭할 수 있는 벽 슬롯 (호버 시 미리보기 표시)
@@ -172,6 +260,7 @@ function Tile({
   isStart,
   isEnd,
   onCellClick,
+  beaconFlag = false,
 }: {
   position: Position;
   selectable: boolean;
@@ -179,6 +268,7 @@ function Tile({
   isStart: boolean;
   isEnd: boolean;
   onCellClick?: (p: Position) => void;
+  beaconFlag?: boolean; // 1인칭: 벽 너머로 보이는 높은 깃발
 }) {
   const [hovered, setHovered] = useState(false);
   const checker = (position.row + position.col) % 2 === 0;
@@ -223,20 +313,25 @@ function Tile({
         </mesh>
       )}
 
-      {/* 도착점 패드 + 깃발 */}
+      {/* 도착점 패드 + 깃발 (1인칭에서는 벽 너머로 보이도록 높게 - 길잡이 역할) */}
       {isEnd && (
         <group position={[0, 0.09, 0]}>
           <mesh receiveShadow>
             <cylinderGeometry args={[0.36, 0.36, 0.05, 32]} />
             <meshStandardMaterial color={COLORS.end} emissive={COLORS.end} emissiveIntensity={0.2} />
           </mesh>
-          <mesh position={[0, 0.4, 0]} castShadow>
-            <cylinderGeometry args={[0.03, 0.03, 0.8, 8]} />
+          <mesh position={[0, beaconFlag ? 1.1 : 0.4, 0]} castShadow>
+            <cylinderGeometry args={[0.03, 0.03, beaconFlag ? 2.2 : 0.8, 8]} />
             <meshStandardMaterial color="#78716c" />
           </mesh>
-          <mesh position={[0.16, 0.66, 0]} castShadow>
+          <mesh position={[0.16, beaconFlag ? 2.06 : 0.66, 0]} castShadow>
             <boxGeometry args={[0.32, 0.2, 0.02]} />
-            <meshStandardMaterial color={COLORS.end} side={THREE.DoubleSide} />
+            <meshStandardMaterial
+              color={COLORS.end}
+              emissive={COLORS.end}
+              emissiveIntensity={beaconFlag ? 0.5 : 0}
+              side={THREE.DoubleSide}
+            />
           </mesh>
         </group>
       )}
@@ -305,6 +400,8 @@ interface GameBoard3DProps {
   selectionMode?: 'start' | 'end' | 'none';
   revealObstacles?: boolean; // 게임 종료 후 상대 벽 공개
   pawnColor?: string; // 말 색상 (기본 파랑, 관전 시 상대 말은 빨강)
+  viewMode?: 'first' | 'third'; // 1인칭(미로 체험) / 3인칭(오버헤드)
+  facing?: Direction; // 1인칭에서 바라보는 방향
   heightClassName?: string;
 }
 
@@ -321,8 +418,11 @@ function BoardContents({
   selectionMode = 'none',
   revealObstacles = false,
   pawnColor,
+  viewMode = 'third',
 }: GameBoard3DProps) {
   const isSetup = gamePhase === GamePhase.SETUP;
+  const isFirstPerson = viewMode === 'first';
+  const wallHeight = isFirstPerson ? FP_WALL_HEIGHT : WALL_HEIGHT;
 
   // 설치된 장애물 세그먼트 (설정 단계 또는 게임 종료 후 공개)
   const obstacleSegments = useMemo(
@@ -368,6 +468,7 @@ function BoardContents({
           isStart={!!startPosition && isSamePosition(position, startPosition)}
           isEnd={!!endPosition && isSamePosition(position, endPosition)}
           onCellClick={onCellClick}
+          beaconFlag={isFirstPerson}
         />
       );
     }
@@ -407,10 +508,10 @@ function BoardContents({
           />
         ))}
 
-      {/* 플레이 단계: 충돌한 벽 (빨간색) */}
+      {/* 플레이 단계: 충돌한 벽 (빨간색) - 1인칭에서는 시야를 가리는 높은 벽 */}
       {gamePhase === GamePhase.PLAY &&
         collisionSegments.map((seg) => (
-          <WallBox key={`col-${segmentKey(seg)}`} seg={seg} color={COLORS.collision} />
+          <WallBox key={`col-${segmentKey(seg)}`} seg={seg} color={COLORS.collision} height={wallHeight} />
         ))}
 
       {/* 게임 종료: 공개된 벽 (반투명 주황) - 충돌한 벽은 빨간색 유지 */}
@@ -418,11 +519,16 @@ function BoardContents({
         obstacleSegments
           .filter((seg) => !collisionKeys.has(segmentKey(seg)))
           .map((seg) => (
-            <WallBox key={`rev-${segmentKey(seg)}`} seg={seg} color={COLORS.reveal} opacity={0.75} />
+            <WallBox key={`rev-${segmentKey(seg)}`} seg={seg} color={COLORS.reveal} opacity={0.75} height={wallHeight} />
           ))}
 
-      {/* 플레이어 말 */}
-      {playerPosition && <Pawn position={playerPosition} color={pawnColor || COLORS.player} />}
+      {/* 1인칭: 보드 외곽 벽 (미로 느낌) */}
+      {isFirstPerson && <BorderWalls />}
+
+      {/* 플레이어 말 (1인칭에서는 내가 말 그 자체이므로 숨김) */}
+      {playerPosition && !isFirstPerson && (
+        <Pawn position={playerPosition} color={pawnColor || COLORS.player} />
+      )}
     </group>
   );
 }
@@ -464,14 +570,21 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
 
         <BoardContents {...props} />
 
-        <OrbitControls
-          makeDefault
-          target={[CENTER, 0, CENTER]}
-          enablePan={false}
-          minDistance={4.5}
-          maxDistance={18}
-          maxPolarAngle={Math.PI * 0.44}
-        />
+        {props.viewMode === 'first' && props.playerPosition ? (
+          <FirstPersonRig position={props.playerPosition} facing={props.facing || 'up'} />
+        ) : (
+          <>
+            <ThirdPersonReset />
+            <OrbitControls
+              makeDefault
+              target={[CENTER, 0, CENTER]}
+              enablePan={false}
+              minDistance={4.5}
+              maxDistance={18}
+              maxPolarAngle={Math.PI * 0.44}
+            />
+          </>
+        )}
       </Canvas>
     </div>
   );

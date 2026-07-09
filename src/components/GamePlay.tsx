@@ -4,8 +4,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { CollisionWall, Direction, GameMap, GamePhase, Position } from '@/types/game';
 import GameBoard from './GameBoard';
 import GameBoard3D from './three/GameBoard3D';
-import { BOARD_SIZE, canMove, getNewPosition, isPositionInBoard, isSamePosition } from '@/lib/gameUtils';
-import { getDatabase, ref, update, get, onValue, push } from 'firebase/database';
+import { BOARD_SIZE, canMove, getNewPosition, getOppositeDirection, isPositionInBoard, isSamePosition } from '@/lib/gameUtils';
+import { getDatabase, ref, update, get, onValue, push, serverTimestamp } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
 
 interface GamePlayProps {
@@ -13,7 +13,6 @@ interface GamePlayProps {
   onGameComplete?: (moves: number) => void;
   userId: string;
   roomId: string;
-  currentTurn: string | null;
   myMap?: GameMap; // 내가 만든 맵 정보 (미니맵 표시용)
   gameEnded?: boolean; // 게임 종료 여부
   isPractice?: boolean; // 연습 모드 (Firebase 사용 안 함)
@@ -24,12 +23,17 @@ interface GamePlayProps {
   onForfeit?: () => void; // 포기 처리
 }
 
+// 1인칭 회전 매핑 (좌회전/우회전)
+const ROTATE_LEFT: Record<Direction, Direction> = { up: 'left', left: 'down', down: 'right', right: 'up' };
+const ROTATE_RIGHT: Record<Direction, Direction> = { up: 'right', right: 'down', down: 'left', left: 'up' };
+
+type ViewMode = 'first' | 'third' | '2d';
+
 const GamePlay: React.FC<GamePlayProps> = ({
   map,
   onGameComplete,
   userId,
   roomId,
-  currentTurn,
   myMap,
   gameEnded = false,
   isPractice: isPracticeProp = false,
@@ -62,18 +66,27 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const [opponentPhotoURL, setOpponentPhotoURL] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState<string>('나');
   const [opponentName, setOpponentName] = useState<string>('상대방');
-  const [view3D, setView3D] = useState<boolean>(true);
+  // 시점: 1인칭(미로 체험, 기본) / 3인칭(오버헤드) / 2D
+  const [viewMode, setViewMode] = useState<ViewMode>('first');
+  // 1인칭에서 바라보는 방향 - 시작 시 도착점 쪽을 향함
+  const [facing, setFacing] = useState<Direction>(() => {
+    const dr = endPosition.row - startPosition.row;
+    const dc = endPosition.col - startPosition.col;
+    return Math.abs(dc) >= Math.abs(dr) ? (dc >= 0 ? 'right' : 'left') : (dr >= 0 ? 'down' : 'up');
+  });
 
   // 이동 처리 중 중복 입력 방지 (연타로 한 턴에 두 번 움직이는 버그 방지)
   const movePendingRef = useRef<boolean>(false);
 
-  const isMyTurn = isPractice || currentTurn === userId;
   const iAmDone = gameOver || myFinished; // 내가 골인했음 (게임은 계속될 수 있음)
   const isFinished = iAmDone || gameEnded;
   // 관전 모드: 나는 골인했지만 상대가 아직 완주 중 -> 내 맵에서 상대의 진행을 지켜봄
   const spectating = !isPractice && iAmDone && !gameEnded && !!myMap && !!opponentPosition;
   // 포기 가능: 상대가 먼저 골인했고 나는 아직 완주하지 못함
   const canForfeit = !isPractice && !iAmDone && opponentFinished && !gameEnded && !!onForfeit;
+  // 관전/종료 시에는 전체가 보이는 시점으로 강제 (1인칭 불가)
+  const effectiveViewMode: ViewMode =
+    (spectating || isFinished) && viewMode === 'first' ? 'third' : viewMode;
 
   // 새로고침 후에도 진행 중이던 위치 복원 (멀티플레이어 전용)
   useEffect(() => {
@@ -206,42 +219,10 @@ const GamePlay: React.FC<GamePlayProps> = ({
     fetchProfiles();
   }, [userId, opponentId, roomId, isPractice]);
 
-  // 턴 변경 함수
-  const changeTurn = useCallback(async () => {
-    if (isPractice) return;
-    // 상대가 이미 골인한 경우 턴을 넘기지 않고 나 혼자 계속 진행
-    if (opponentFinished) return;
-
-    try {
-      const database = getDatabase();
-
-      // 이미 알고 있는 상대방 ID 사용, 없으면 조회
-      let targetId = opponentId;
-      if (!targetId) {
-        const playersSnapshot = await get(ref(database, `rooms/${roomId}/gameState/players`));
-        const players = playersSnapshot.val() || {};
-        targetId = Object.keys(players).find((id) => id !== userId) || null;
-      }
-
-      if (!targetId) {
-        console.error('상대방 플레이어를 찾을 수 없습니다.');
-        return;
-      }
-
-      await update(ref(database, `rooms/${roomId}/gameState`), { currentTurn: targetId });
-    } catch (error) {
-      console.error('턴 변경 중 오류 발생:', error);
-    }
-  }, [isPractice, opponentFinished, opponentId, roomId, userId]);
-
-  // 플레이어 이동 처리 함수
+  // 플레이어 이동 처리 함수 (자유 이동 - 턴 대기 없이 각자 진행, 최종 턴 수로 승부)
   const handleMove = useCallback(
     async (direction: Direction) => {
       if (isFinished) return;
-      if (!isMyTurn) {
-        setMessage('지금은 당신의 턴이 아닙니다.');
-        return;
-      }
       if (movePendingRef.current) return;
 
       const newPosition = getNewPosition(playerPosition, direction);
@@ -268,19 +249,21 @@ const GamePlay: React.FC<GamePlayProps> = ({
           const reachedGoal = isSamePosition(newPosition, endPosition);
 
           if (!isPractice) {
+            // 쓰기는 순서가 보장되므로 기다리지 않는다
+            // (기다리면 네트워크 지연 동안 다음 입력이 씹힘 - 자유 이동 모드의 입력 반응성)
             const database = getDatabase();
-            await update(
+            update(
               ref(database, `rooms/${roomId}/gameState/players/${userId}/position`),
               newPosition
-            );
+            ).catch((error) => console.error('위치 업데이트 오류:', error));
+            // 방 활동 시각 갱신 (유령 방 자동 정리 대상에서 제외)
+            update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
           }
 
           if (reachedGoal) {
             setGameOver(true);
             setMessage(`축하합니다! ${newCount}턴 만에 도착지에 도달했습니다.`);
             onGameComplete?.(newCount);
-          } else if (!isPractice) {
-            await changeTurn();
           }
         } else {
           // 벽 충돌: 턴을 소모하고 충돌한 벽을 기록
@@ -301,11 +284,11 @@ const GamePlay: React.FC<GamePlayProps> = ({
           } else {
             const database = getDatabase();
             // push로 추가하여 동시 기록 시 서로 덮어쓰지 않도록 함
-            await push(
+            push(
               ref(database, `rooms/${roomId}/gameState/collisionWalls`),
               newCollisionWall
-            );
-            await changeTurn();
+            ).catch((error) => console.error('충돌 벽 기록 오류:', error));
+            update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
           }
         }
       } catch (error) {
@@ -316,7 +299,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
     },
     [
       isFinished,
-      isMyTurn,
       playerPosition,
       obstacles,
       moveCount,
@@ -326,13 +308,38 @@ const GamePlay: React.FC<GamePlayProps> = ({
       userId,
       opponentId,
       onGameComplete,
-      changeTurn,
     ]
   );
 
-  // 키보드 이벤트 처리 - ref로 항상 최신 handleMove를 사용 (stale closure 방지)
-  const handleMoveRef = useRef(handleMove);
-  handleMoveRef.current = handleMove;
+  // 입력 -> 이동/회전 변환
+  // 1인칭: ↑ 전진 / ↓ 후진 / ←→ 회전(턴 소모 없음, 언제든 가능)
+  // 3인칭/2D: 방향키 = 절대 방향 이동
+  const handleControl = useCallback(
+    (input: Direction) => {
+      if (effectiveViewMode === 'first') {
+        if (input === 'left') {
+          setFacing((f) => ROTATE_LEFT[f]);
+          return;
+        }
+        if (input === 'right') {
+          setFacing((f) => ROTATE_RIGHT[f]);
+          return;
+        }
+        if (input === 'up') {
+          handleMove(facing);
+          return;
+        }
+        handleMove(getOppositeDirection(facing)); // ↓ = 후진
+        return;
+      }
+      handleMove(input);
+    },
+    [effectiveViewMode, facing, handleMove]
+  );
+
+  // 키보드 이벤트 처리 - ref로 항상 최신 핸들러를 사용 (stale closure 방지)
+  const handleControlRef = useRef(handleControl);
+  handleControlRef.current = handleControl;
 
   useEffect(() => {
     const keyToDirection: Record<string, Direction> = {
@@ -346,7 +353,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
       const direction = keyToDirection[event.key];
       if (direction) {
         event.preventDefault();
-        handleMoveRef.current(direction);
+        handleControlRef.current(direction);
       }
     };
 
@@ -368,7 +375,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
       {/* 상단 HUD - 플레이어 대결 정보 */}
       <div className="w-full game-panel !rounded-xl px-3 py-2 mb-2 flex justify-between items-center gap-2">
         {/* 내 정보 */}
-        <div className={`flex items-center gap-2 px-2 py-1 rounded-lg ${isMyTurn && !isFinished ? 'bg-blue-500/15 ring-1 ring-blue-400/50' : ''}`}>
+        <div className={`flex items-center gap-2 px-2 py-1 rounded-lg ${!isFinished ? 'bg-blue-500/15 ring-1 ring-blue-400/50' : ''}`}>
           {playerPhotoURL ? (
             <img
               src={playerPhotoURL}
@@ -393,17 +400,15 @@ const GamePlay: React.FC<GamePlayProps> = ({
             <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-green-400/15 text-green-300 border border-green-400/40">종료</span>
           ) : iAmDone ? (
             <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-purple-400/15 text-purple-300 border border-purple-400/40">관전 중</span>
-          ) : isMyTurn ? (
-            <span className="badge-turn">내 턴</span>
           ) : (
-            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-slate-700/50 text-slate-400 border border-slate-600/50">대기</span>
+            <span className="badge-turn">진행 중</span>
           )}
         </div>
 
         {/* 상대방 정보 + 보기 전환 */}
         <div className="flex items-center gap-2">
           {opponentId ? (
-            <div className={`flex items-center gap-2 px-2 py-1 rounded-lg ${!isMyTurn && !isFinished ? 'bg-red-500/15 ring-1 ring-red-400/50' : ''}`}>
+            <div className={`flex items-center gap-2 px-2 py-1 rounded-lg ${!opponentFinished && !gameEnded ? 'bg-red-500/15 ring-1 ring-red-400/50' : ''}`}>
               <div className="leading-tight text-right">
                 <div className="text-xs font-bold text-red-300">{opponentName.substring(0, 6)}</div>
                 <div className="text-[10px] text-slate-400">상대</div>
@@ -423,12 +428,22 @@ const GamePlay: React.FC<GamePlayProps> = ({
           ) : (
             !isPractice && <span className="text-[10px] text-slate-500">상대 대기</span>
           )}
-          <button
-            className="btn-sub text-xs px-2 py-1 !rounded-lg"
-            onClick={() => setView3D((prev) => !prev)}
-          >
-            {view3D ? '2D 보기' : '3D 보기'}
-          </button>
+          {/* 시점 전환 (관전/종료 시 1인칭 비활성) */}
+          <div className="flex rounded-lg overflow-hidden border border-slate-600/70">
+            {((spectating || isFinished ? ['third', '2d'] : ['first', 'third', '2d']) as ViewMode[]).map((m) => (
+              <button
+                key={m}
+                className={`px-2 py-1 text-[11px] font-bold transition-colors ${
+                  effectiveViewMode === m
+                    ? 'bg-amber-400 text-slate-900'
+                    : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                }`}
+                onClick={() => setViewMode(m)}
+              >
+                {m === 'first' ? '1인칭' : m === 'third' ? '3인칭' : '2D'}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -512,8 +527,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
                 };
 
           return (
-            <div className="flex-1 w-full overflow-hidden flex justify-center">
-              {view3D ? (
+            <div className="flex-1 w-full overflow-hidden flex justify-center relative">
+              {effectiveViewMode !== '2d' ? (
                 <GameBoard3D
                   gamePhase={GamePhase.PLAY}
                   startPosition={board.startPosition}
@@ -524,6 +539,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
                   readOnly={true}
                   revealObstacles={board.revealObstacles}
                   pawnColor={board.pawnColor}
+                  viewMode={spectating ? 'third' : effectiveViewMode === 'first' ? 'first' : 'third'}
+                  facing={facing}
                 />
               ) : (
                 <div className="max-w-full overflow-auto">
@@ -538,6 +555,59 @@ const GamePlay: React.FC<GamePlayProps> = ({
                     playerPhotoURL={board.photoURL}
                     revealObstacles={board.revealObstacles}
                   />
+                </div>
+              )}
+
+              {/* 방향 패드 - 보드 위 오버레이 (모바일에서 스크롤 없이 조작) */}
+              {!isFinished && (
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center">
+                  <div className="grid grid-cols-3 gap-1">
+                    <div className="col-start-2">
+                      <button
+                        className="btn-dpad !w-12 !h-12 !bg-slate-900/70 backdrop-blur-sm"
+                        onClick={() => handleControl('up')}
+                        disabled={isFinished}
+                        title={effectiveViewMode === 'first' ? '전진' : '위로 이동'}
+                      >
+                        {effectiveViewMode === 'first' ? '▲' : '↑'}
+                      </button>
+                    </div>
+                    <div className="col-start-1 row-start-2">
+                      <button
+                        className="btn-dpad !w-12 !h-12 !bg-slate-900/70 backdrop-blur-sm"
+                        onClick={() => handleControl('left')}
+                        disabled={effectiveViewMode === 'first' ? false : isFinished}
+                        title={effectiveViewMode === 'first' ? '좌회전 (턴 소모 없음)' : '왼쪽으로 이동'}
+                      >
+                        {effectiveViewMode === 'first' ? '↺' : '←'}
+                      </button>
+                    </div>
+                    <div className="col-start-2 row-start-2">
+                      <div className="w-12 h-12 rounded-2xl bg-slate-900/50 border border-slate-700/40 backdrop-blur-sm flex items-center justify-center">
+                        <div className={`w-2 h-2 rounded-full ${!isFinished ? 'bg-amber-400 animate-pulse' : 'bg-slate-600'}`} />
+                      </div>
+                    </div>
+                    <div className="col-start-3 row-start-2">
+                      <button
+                        className="btn-dpad !w-12 !h-12 !bg-slate-900/70 backdrop-blur-sm"
+                        onClick={() => handleControl('right')}
+                        disabled={effectiveViewMode === 'first' ? false : isFinished}
+                        title={effectiveViewMode === 'first' ? '우회전 (턴 소모 없음)' : '오른쪽으로 이동'}
+                      >
+                        {effectiveViewMode === 'first' ? '↻' : '→'}
+                      </button>
+                    </div>
+                    <div className="col-start-2 row-start-3">
+                      <button
+                        className="btn-dpad !w-12 !h-12 !bg-slate-900/70 backdrop-blur-sm"
+                        onClick={() => handleControl('down')}
+                        disabled={isFinished}
+                        title={effectiveViewMode === 'first' ? '후진' : '아래로 이동'}
+                      >
+                        {effectiveViewMode === 'first' ? '▼' : '↓'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -565,38 +635,13 @@ const GamePlay: React.FC<GamePlayProps> = ({
         )}
       </div>
 
-      {/* 방향 컨트롤 버튼 (게임 종료 시 숨김) */}
+      {/* 조작 안내 */}
       {!isFinished && (
-        <div className="flex flex-col items-center mt-3 gap-1.5">
-          <div className="grid grid-cols-3 gap-1.5">
-            <div className="col-start-2">
-              <button className="btn-dpad" onClick={() => handleMove('up')} disabled={!isMyTurn}>
-                ↑
-              </button>
-            </div>
-            <div className="col-start-1 row-start-2">
-              <button className="btn-dpad" onClick={() => handleMove('left')} disabled={!isMyTurn}>
-                ←
-              </button>
-            </div>
-            <div className="col-start-2 row-start-2">
-              <div className="w-14 h-14 rounded-2xl bg-slate-900/60 border border-slate-700/50 flex items-center justify-center">
-                <div className={`w-2.5 h-2.5 rounded-full ${isMyTurn ? 'bg-amber-400 animate-pulse' : 'bg-slate-600'}`} />
-              </div>
-            </div>
-            <div className="col-start-3 row-start-2">
-              <button className="btn-dpad" onClick={() => handleMove('right')} disabled={!isMyTurn}>
-                →
-              </button>
-            </div>
-            <div className="col-start-2 row-start-3">
-              <button className="btn-dpad" onClick={() => handleMove('down')} disabled={!isMyTurn}>
-                ↓
-              </button>
-            </div>
-          </div>
-          <p className="text-[10px] text-slate-500">키보드 방향키로도 이동할 수 있습니다</p>
-        </div>
+        <p className="text-[10px] text-slate-500 mt-2">
+          {effectiveViewMode === 'first'
+            ? '⌨️ ↑ 전진 · ↓ 후진 · ←→ 회전(턴 소모 없음)'
+            : '⌨️ 키보드 방향키로도 이동할 수 있습니다'}
+        </p>
       )}
     </div>
   );
