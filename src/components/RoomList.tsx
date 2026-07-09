@@ -77,7 +77,8 @@ const RoomList: React.FC<RoomListProps> = ({ userId }) => {
           const playerCount = room.players?.length || 0;
           const maxPlayers = room.maxPlayers || 2;
           const isFull = playerCount >= maxPlayers;
-          const isPlaying = room.status === 'playing';
+          // status 필드는 갱신되지 않는 레거시 - 게임 진행 여부는 gameState.phase로 판정
+          const isPlaying = !!room.gameState?.phase && room.gameState.phase !== 'setup';
 
           return (
             <div
@@ -116,12 +117,18 @@ const RoomList: React.FC<RoomListProps> = ({ userId }) => {
 
                 <button
                   onClick={() => handleJoinRoom(room.id)}
-                  disabled={joining === room.id || isFull}
+                  disabled={joining === room.id || (isFull && !isPlaying)}
                   className={`shrink-0 px-4 py-2 text-xs ${
-                    joining === room.id || isFull ? 'btn-sub' : 'btn-game'
+                    joining === room.id || (isFull && !isPlaying) ? 'btn-sub' : 'btn-game'
                   }`}
                 >
-                  {joining === room.id ? '참가 중...' : isFull ? '가득 참' : '참가하기'}
+                  {joining === room.id
+                    ? '입장 중...'
+                    : isPlaying
+                      ? '👁 관전하기'
+                      : isFull
+                        ? '가득 참'
+                        : '참가하기'}
                 </button>
               </div>
             </div>

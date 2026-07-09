@@ -896,8 +896,8 @@ interface GameBoard3DProps {
   selectionMode?: 'start' | 'end' | 'none';
   revealObstacles?: boolean; // 게임 종료 후 상대 벽 공개
   pawnColor?: string; // 말 색상 (기본 파랑, 관전 시 상대 말은 빨강)
-  item?: MapItem | null;
-  itemConsumed?: boolean;
+  items?: MapItem[] | null;
+  itemsConsumed?: Record<number, boolean> | null; // 인덱스별 사용 여부
   revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들
   placeMode?: 'wall' | 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
   pendingCell?: Position | null;
@@ -921,8 +921,8 @@ function BoardContents({
   selectionMode = 'none',
   revealObstacles = false,
   pawnColor,
-  item = null,
-  itemConsumed = false,
+  items = null,
+  itemsConsumed = null,
   revealedWalls = [],
   placeMode = 'wall',
   pendingCell = null,
@@ -963,12 +963,14 @@ function BoardContents({
 
   const occupiedKeys = useMemo(() => {
     const keys = new Set(obstacleSegments.map(segmentKey));
-    if (item?.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
-      const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
-      if (seg) keys.add(segmentKey(seg));
-    }
+    (items || []).forEach((it) => {
+      if (it.type === 'oneTimeWall' && it.wallPosition && it.wallDirection) {
+        const seg = obstacleToSegment(it.wallPosition, it.wallDirection);
+        if (seg) keys.add(segmentKey(seg));
+      }
+    });
     return keys;
-  }, [obstacleSegments, item]);
+  }, [obstacleSegments, items]);
 
   const tiles = [];
   for (let row = 0; row < BOARD_SIZE; row++) {
@@ -1047,15 +1049,16 @@ function BoardContents({
             <WallBox key={`radar-${segmentKey(seg)}`} seg={seg} color={COLORS.wall} />
           ))}
 
-      {/* 맵 아이템 */}
-      {item && (
+      {/* 맵 아이템들 */}
+      {(items || []).map((it, idx) => (
         <ItemVisuals
-          item={item}
-          consumed={!!itemConsumed}
+          key={`item-${idx}`}
+          item={it}
+          consumed={!!itemsConsumed?.[idx]}
           visible={isSetup || !!revealObstacles}
           setup={isSetup}
         />
-      )}
+      ))}
 
       {/* 액션 이펙트 */}
       <FxLayer fx={fx} />

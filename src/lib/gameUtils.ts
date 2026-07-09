@@ -10,8 +10,8 @@ export const MAX_OBSTACLES = 20;
 export const ITEM_COSTS: Record<ItemType, number> = {
   oneTimeWall: 5,
   mine: 3,
-  wormhole: 5,
-  radar: 3,
+  wormhole: 7, // 밸런스 상향 (5 -> 7): 사실상 무적급이라 최고 비용
+  radar: 5, // 밸런스 상향 (3 -> 5)
 };
 
 export const ITEM_LABELS: Record<ItemType, string> = {
@@ -40,15 +40,28 @@ export function isSameWallSegment(
 }
 
 // 아이템이 특정 이동을 막는 1회성 벽인지 확인
-export function isBlockedByOneTimeWall(
+// 맵의 아이템 목록 (레거시 단일 item 필드 하위호환)
+export function getMapItems(map: { items?: MapItem[] | null; item?: MapItem | null } | null | undefined): MapItem[] {
+  if (!map) return [];
+  if (Array.isArray(map.items)) return map.items;
+  return map.item ? [map.item] : [];
+}
+
+// 해당 벽 세그먼트를 막고 있는 "미사용" 1회성 벽의 인덱스 (-1이면 없음)
+export function findBlockingOneTimeWall(
   position: Position,
   direction: Direction,
-  item: MapItem | null | undefined,
-  consumed: boolean
-): boolean {
-  if (consumed || !item || item.type !== 'oneTimeWall') return false;
-  if (!item.wallPosition || !item.wallDirection) return false;
-  return isSameWallSegment(position, direction, item.wallPosition, item.wallDirection);
+  items: MapItem[],
+  isConsumed: (index: number) => boolean
+): number {
+  return items.findIndex(
+    (it, idx) =>
+      it.type === 'oneTimeWall' &&
+      !!it.wallPosition &&
+      !!it.wallDirection &&
+      !isConsumed(idx) &&
+      isSameWallSegment(position, direction, it.wallPosition, it.wallDirection)
+  );
 }
 
 // 위치가 보드 내에 있는지 확인

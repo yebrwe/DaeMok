@@ -82,25 +82,25 @@ export default function PracticePage() {
         </div>
       </header>
 
-      {/* 완주 축하 모달 */}
+      {/* 완주 축하 카드 - 보드(세리머니)가 계속 보이도록 하단에 컴팩트하게 표시 */}
       {map && gameComplete && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
-          <div className="pointer-events-auto game-panel !rounded-2xl px-12 py-7 text-center shadow-2xl !border-green-400/50">
-            <div className="text-5xl mb-3">🎉</div>
-            <h2 className="text-2xl font-black text-green-400 mb-2">축하합니다!</h2>
-            <p className="text-sm text-slate-300 mb-5">
-              총 <span className="font-black text-amber-300 text-lg">{moves}</span>턴 만에 목적지에 도달했습니다.
-            </p>
-            <div className="flex flex-wrap gap-2 justify-center">
-              <button className="btn-game px-5 py-2 text-sm" onClick={handleRestartSameMap}>
-                같은 맵에서 다시 시작
-              </button>
-              <button className="btn-sub px-5 py-2 text-sm" onClick={handleNewGame}>
-                새 맵 만들기
-              </button>
-              <Link href="/rooms" className="btn-sub px-5 py-2 text-sm inline-flex items-center">
-                대기실로
-              </Link>
+        <div className="absolute inset-x-0 bottom-6 z-40 flex justify-center pointer-events-none px-3">
+          <div className="pointer-events-auto game-panel !rounded-2xl px-4 py-3 text-center shadow-2xl !border-green-400/50 max-w-[94vw]">
+            <div className="flex items-center justify-center gap-3 flex-wrap">
+              <p className="text-sm font-black text-green-400 whitespace-nowrap">
+                🎉 축하합니다! <span className="text-amber-300">{moves}</span>턴 완주
+              </p>
+              <div className="flex gap-1.5 flex-wrap justify-center">
+                <button className="btn-game px-4 py-1.5 text-xs" onClick={handleRestartSameMap}>
+                  같은 맵에서 다시 시작
+                </button>
+                <button className="btn-sub px-3 py-1.5 text-xs" onClick={handleNewGame}>
+                  새 맵 만들기
+                </button>
+                <Link href="/rooms" className="btn-sub px-3 py-1.5 text-xs inline-flex items-center">
+                  대기실로
+                </Link>
+              </div>
             </div>
           </div>
         </div>

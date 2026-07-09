@@ -25,12 +25,32 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   const [obstacles, setObstacles] = useState<Obstacle[]>([]);
   const [setupPhase, setSetupPhase] = useState<'start' | 'end' | 'obstacles'>('start');
   const [isMapValid, setIsMapValid] = useState<boolean>(false);
-  // 아이템 배치 (게임당 1개, 벽 예산 소모)
+  // 아이템 배치 (벽 예산 내 무제한, 각 아이템이 벽 예산 소모)
   const [placeMode, setPlaceMode] = useState<PlaceMode>('wall');
-  const [item, setItem] = useState<MapItem | null>(null);
+  const [items, setItems] = useState<MapItem[]>([]);
   const [wormholeEntrance, setWormholeEntrance] = useState<Position | null>(null);
+  const [lastPlaced, setLastPlaced] = useState<ItemType | null>(null);
 
-  const itemCost = item ? ITEM_COSTS[item.type] : placeMode !== 'wall' ? ITEM_COSTS[placeMode] : 0;
+  const itemsCost = items.reduce((sum, it) => sum + ITEM_COSTS[it.type], 0);
+
+  // 아이템이 이미 점유한 칸 (지뢰 위치, 웜홀 입출구)
+  const isCellOccupiedByItem = (position: Position): boolean =>
+    items.some(
+      (it) =>
+        (it.type === 'mine' && it.position && isSamePosition(position, it.position)) ||
+        (it.type === 'wormhole' &&
+          ((it.entrance && isSamePosition(position, it.entrance)) ||
+            (it.exit && isSamePosition(position, it.exit))))
+    );
+
+  // 예산 안에서 이 아이템을 추가할 수 있는지
+  const canAffordItem = (type: ItemType): boolean =>
+    countUniqueObstacles(obstacles) + itemsCost + ITEM_COSTS[type] <= MAX_OBSTACLES;
+
+  const addItem = (newItem: MapItem) => {
+    setItems((prev) => [...prev, newItem]);
+    setLastPlaced(newItem.type);
+  };
   
   // 고유한 벽의 수 계산 함수
   const countUniqueObstacles = (obstacleList: Obstacle[]): number => {
@@ -158,14 +178,13 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       setSetupPhase('obstacles');
     } else if (setupPhase === 'obstacles') {
       // 아이템 배치 모드에서의 셀 클릭
-      if (item) return;
-
       if (placeMode === 'mine') {
-        if (!canPlaceItemOnCell(position)) return;
-        setItem({ type: 'mine', position });
+        if (!canPlaceItemOnCell(position) || isCellOccupiedByItem(position)) return;
+        if (!canAffordItem('mine')) return;
+        addItem({ type: 'mine', position });
         setPlaceMode('wall');
       } else if (placeMode === 'wormhole') {
-        if (!canPlaceItemOnCell(position)) return;
+        if (!canPlaceItemOnCell(position) || isCellOccupiedByItem(position)) return;
 
         if (!wormholeEntrance) {
           // 첫 클릭: 입구 지정
@@ -173,7 +192,8 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
         } else {
           // 두 번째 클릭: 출구 지정 (입구와 달라야 함)
           if (isSamePosition(position, wormholeEntrance)) return;
-          setItem({ type: 'wormhole', entrance: wormholeEntrance, exit: position });
+          if (!canAffordItem('wormhole')) return;
+          addItem({ type: 'wormhole', entrance: wormholeEntrance, exit: position });
           setWormholeEntrance(null);
           setPlaceMode('wall');
         }
@@ -189,24 +209,33 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
 
     // 1회성 벽 배치 모드
     if (placeMode === 'oneTimeWall') {
-      if (item) return;
-      // 일반 벽과 겹치면 배치 불가
-      const overlapsWall = obstacles.some((o) =>
-        isSameWallSegment(position, direction, o.position, o.direction)
-      );
+      // 일반 벽 또는 다른 1회성 벽과 겹치면 배치 불가
+      const overlapsWall =
+        obstacles.some((o) => isSameWallSegment(position, direction, o.position, o.direction)) ||
+        items.some(
+          (it) =>
+            it.type === 'oneTimeWall' &&
+            it.wallPosition &&
+            it.wallDirection &&
+            isSameWallSegment(position, direction, it.wallPosition, it.wallDirection)
+        );
       if (overlapsWall) return;
+      if (!canAffordItem('oneTimeWall')) return;
 
-      setItem({ type: 'oneTimeWall', wallPosition: position, wallDirection: direction });
+      addItem({ type: 'oneTimeWall', wallPosition: position, wallDirection: direction });
       setPlaceMode('wall');
       return;
     }
 
     // 일반 벽이 1회성 벽 아이템과 겹치면 배치 불가
     if (
-      item?.type === 'oneTimeWall' &&
-      item.wallPosition &&
-      item.wallDirection &&
-      isSameWallSegment(position, direction, item.wallPosition, item.wallDirection)
+      items.some(
+        (it) =>
+          it.type === 'oneTimeWall' &&
+          it.wallPosition &&
+          it.wallDirection &&
+          isSameWallSegment(position, direction, it.wallPosition, it.wallDirection)
+      )
     ) {
       return;
     }
@@ -277,24 +306,21 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
         tempObstacles.push(adjacentObstacle);
       }
       
-      // 고유한 벽의 수 계산 (배치된 아이템 비용 포함)
-      const placedItemCost = item ? ITEM_COSTS[item.type] : 0;
+      // 고유한 벽의 수 계산 (배치된 아이템 총비용 포함)
       const uniqueObstacleCount = countUniqueObstacles(tempObstacles);
 
       // 벽 예산 확인 (아이템 비용 포함 최대 개수를 초과하지 않는지)
-      if (uniqueObstacleCount + placedItemCost <= MAX_OBSTACLES) {
+      if (uniqueObstacleCount + itemsCost <= MAX_OBSTACLES) {
         setObstacles(tempObstacles);
       } else {
-        alert(`벽 예산(${MAX_OBSTACLES}개)을 초과했습니다. 아이템 비용 ${placedItemCost}개가 포함되어 있습니다.`);
+        alert(`벽 예산(${MAX_OBSTACLES}개)을 초과했습니다. 아이템 비용 ${itemsCost}개가 포함되어 있습니다.`);
       }
     }
   };
 
-  // 아이템 선택/제거
+  // 아이템 선택/제거 (예산 안에서 무제한)
   const handleSelectItemMode = (type: ItemType) => {
-    if (item) return;
-    const wallCount = countUniqueObstacles(obstacles);
-    if (wallCount + ITEM_COSTS[type] > MAX_OBSTACLES) {
+    if (!canAffordItem(type)) {
       alert(`벽 예산이 부족합니다. ${ITEM_LABELS[type]}은(는) 벽 ${ITEM_COSTS[type]}개를 소모합니다.`);
       return;
     }
@@ -302,7 +328,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
 
     // 탐지기는 배치가 필요 없는 자기용 아이템 - 선택 즉시 확보
     if (type === 'radar') {
-      setItem({ type: 'radar' });
+      addItem({ type: 'radar' });
       setPlaceMode('wall');
       return;
     }
@@ -310,10 +336,9 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
     setPlaceMode((prev) => (prev === type ? 'wall' : type));
   };
 
-  const handleRemoveItem = () => {
-    setItem(null);
-    setWormholeEntrance(null);
-    setPlaceMode('wall');
+  const handleRemoveItem = (index: number) => {
+    setItems((prev) => prev.filter((_, i) => i !== index));
+    setLastPlaced(null);
   };
   
   // 맵 완성 및 제출
@@ -327,7 +352,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       startPosition,
       endPosition,
       obstacles,
-      item: item ?? null,
+      items,
     };
 
     // 맵 유효성 검사 (1회성 벽은 부술 수 있으므로 경로 판정에서 제외)
@@ -352,8 +377,8 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
     }
   }, [startPosition, endPosition, obstacles]);
 
-  // 사용한 벽 예산 (아이템 비용 포함)
-  const usedBudget = countUniqueObstacles(obstacles) + (item ? ITEM_COSTS[item.type] : 0);
+  // 사용한 벽 예산 (아이템 총비용 포함)
+  const usedBudget = countUniqueObstacles(obstacles) + itemsCost;
   const remainingObstacles = MAX_OBSTACLES - usedBudget;
   
   const steps: Array<{ key: 'start' | 'end' | 'obstacles'; label: string }> = [
@@ -372,7 +397,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
           startPosition={startPosition}
           endPosition={endPosition}
           obstacles={obstacles}
-          item={item}
+          items={items}
           pendingCell={wormholeEntrance}
           onCellClick={handleCellClick}
           onDirectionClick={handleDirectionClick}
@@ -407,7 +432,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
               {setupPhase === 'obstacles' && (
                 <span className={`text-xs font-bold ${remainingObstacles <= 5 ? 'text-red-400' : 'text-amber-300'}`}>
                   🧱 {usedBudget}/{MAX_OBSTACLES}
-                  {item && <span className="text-purple-300 ml-1">(아이템 -{ITEM_COSTS[item.type]})</span>}
+                  {items.length > 0 && <span className="text-purple-300 ml-1">(아이템 -{itemsCost})</span>}
                 </span>
               )}
             </div>
@@ -428,39 +453,52 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
           </p>
         )}
 
-        {/* 아이템 팔레트 - 게임당 1개, 벽 예산 소모 */}
+        {/* 아이템 팔레트 - 벽 예산 안에서 무제한 배치 */}
         {setupPhase === 'obstacles' && (
           <div className="w-full game-panel !rounded-xl px-3 py-2">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-[11px] font-bold text-purple-300">🎁 아이템 (게임당 1개)</span>
+              <span className="text-[11px] font-bold text-purple-300">🎁 아이템 (예산 내 무제한)</span>
               <div className="flex gap-1.5 flex-wrap">
                 {(['oneTimeWall', 'mine', 'wormhole', 'radar'] as ItemType[]).map((type) => (
                   <button
                     key={type}
                     className={`px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
-                      item?.type === type
-                        ? 'bg-purple-400/20 text-purple-200 border-purple-400/60'
-                        : placeMode === type
-                          ? 'bg-amber-400 text-slate-900 border-amber-400'
-                          : 'bg-slate-800/80 text-slate-300 border-slate-600/60 hover:border-purple-400/50'
+                      placeMode === type
+                        ? 'bg-amber-400 text-slate-900 border-amber-400'
+                        : 'bg-slate-800/80 text-slate-300 border-slate-600/60 hover:border-purple-400/50'
                     } disabled:opacity-40 disabled:pointer-events-none`}
                     onClick={() => handleSelectItemMode(type)}
-                    disabled={!!item}
+                    disabled={!canAffordItem(type)}
                   >
                     {type === 'oneTimeWall' ? '🧱' : type === 'mine' ? '💣' : type === 'wormhole' ? '🌀' : '🔍'} {ITEM_LABELS[type]} -{ITEM_COSTS[type]}
                   </button>
                 ))}
-                {item && (
-                  <button
-                    className="px-2 py-1 rounded-lg text-[11px] font-bold bg-red-500/10 text-red-300 border border-red-400/50 hover:bg-red-500/20 transition-colors"
-                    onClick={handleRemoveItem}
-                  >
-                    ✕ 아이템 제거
-                  </button>
-                )}
               </div>
             </div>
-            {placeMode !== 'wall' && !item && (
+
+            {/* 배치된 아이템 목록 (개별 제거 가능) */}
+            {items.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap mt-1.5">
+                {items.map((it, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-400/15 text-purple-200 border border-purple-400/40"
+                  >
+                    {it.type === 'oneTimeWall' ? '🧱' : it.type === 'mine' ? '💣' : it.type === 'wormhole' ? '🌀' : '🔍'}{' '}
+                    {ITEM_LABELS[it.type]}
+                    <button
+                      className="text-red-300 hover:text-red-200 font-black ml-0.5"
+                      onClick={() => handleRemoveItem(idx)}
+                      title="제거"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {placeMode !== 'wall' && (
               <p className="text-[11px] text-amber-300 mt-1.5">
                 {placeMode === 'oneTimeWall' && '칸 사이 선을 클릭해 1회성 벽을 배치하세요. 상대에겐 일반 벽과 똑같이 한 번 막힌 뒤, 다음 시도부터 통과됩니다.'}
                 {placeMode === 'mine' && '칸을 클릭해 지뢰를 배치하세요. 밟으면 2턴 전 위치로 되돌아갑니다.'}
@@ -470,12 +508,12 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
                     : '🌀 입구가 될 칸을 클릭하세요.')}
               </p>
             )}
-            {item && (
+            {placeMode === 'wall' && lastPlaced && (
               <p className="text-[11px] text-purple-200 mt-1.5">
-                {item.type === 'oneTimeWall' && '🧱 1회성 벽 배치됨 - 일반 벽처럼 한 번 막고, 다음 시도부터 조용히 통과됩니다.'}
-                {item.type === 'mine' && '💣 지뢰 배치됨 - 상대가 밟으면 2턴 전 위치로 되돌아갑니다.'}
-                {item.type === 'wormhole' && '🌀 웜홀 배치됨 - 입구를 밟으면 출구로 순간이동합니다. (1회성)'}
-                {item.type === 'radar' && '🔍 탐지기 확보됨 - 게임 중 1회, 내 주변 한 칸(대각선 포함)의 벽을 탐지합니다.'}
+                {lastPlaced === 'oneTimeWall' && '🧱 1회성 벽 배치됨 - 일반 벽처럼 한 번 막고, 다음 시도부터 조용히 통과됩니다.'}
+                {lastPlaced === 'mine' && '💣 지뢰 배치됨 - 상대가 밟으면 2턴 전 위치로 되돌아갑니다.'}
+                {lastPlaced === 'wormhole' && '🌀 웜홀 배치됨 - 입구를 밟으면 출구로 순간이동합니다. (1회성)'}
+                {lastPlaced === 'radar' && '🔍 탐지기 확보됨 - 게임 중 1회, 내 주변 한 칸(대각선 포함)의 벽을 탐지합니다.'}
               </p>
             )}
           </div>

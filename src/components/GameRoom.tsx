@@ -1,19 +1,24 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { GameMap, GamePhase } from '@/types/game';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { CollisionWall, GameMap, GamePhase } from '@/types/game';
 import GameSetup from './GameSetup';
 import GamePlay from './GamePlay';
+import GameBoard from './GameBoard';
+import GameBoard3D from './three/GameBoard3D';
 import { useGameState } from '@/hooks/useFirebase';
 import {
   placeObstacles,
   startGame,
+  joinRoom,
   leaveRoom,
+  registerSpectator,
   tryRestoreAuth,
   updateRoomUserStatus,
   getRoomOnlineUsers,
   clearRoomPresence
 } from '@/lib/firebase';
+import { getMapItems } from '@/lib/gameUtils';
 import { useRouter } from 'next/navigation';
 import { getDatabase, ref, update, get, remove, onValue, serverTimestamp, runTransaction } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
@@ -110,6 +115,14 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   const [message, setMessage] = useState<string>('');
   const playersStatus = usePlayersActivity(roomId);
   const [roomData, setRoomData] = useState<any>(null);
+  // 관전 대상 플레이어 (관전자 전용 - 칩 클릭으로 순환)
+  const [specTarget, setSpecTarget] = useState<string | null>(null);
+  const [specViewMode, setSpecViewMode] = useState<'third' | '2d'>('third');
+  const promotingRef = useRef(false);
+
+  // 관전자 여부: 게임 상태에 플레이어로 등록되어 있지 않으면 관전자
+  const amPlayer = !!gameState?.players?.[userId];
+  const isSpectator = !!gameState && !amPlayer;
   const [roomStats, setRoomStats] = useState<{
     [userId: string]: {
       wins: number;
@@ -168,6 +181,23 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
 
     const players = gameState.players || {};
     const me = players[userId];
+
+    // 관전자: 제3자 시점 결과
+    if (!me) {
+      if (gameState.draw) {
+        const finishers = Object.values(players).filter((p) => p.finished && !p.forfeited);
+        if (finishers.length === 0) return '무승부입니다! (전원 포기)';
+        const minMoves = Math.min(...finishers.map((p) => p.finishMoves ?? Number.MAX_SAFE_INTEGER));
+        const names = finishers
+          .filter((p) => p.finishMoves === minMoves)
+          .map((p) => p.displayName?.substring(0, 6) || '플레이어')
+          .join(', ');
+        return `무승부! (${names} 공동 우승 · ${minMoves}턴)`;
+      }
+      if (!gameState.winner) return '';
+      const w = players[gameState.winner];
+      return `${w?.displayName?.substring(0, 8) || '플레이어'} 승리! (${w?.finishMoves ?? '?'}턴)`;
+    }
 
     // 최소 턴 동률 -> 공동 우승(무승부). 동률에 못 낀 사람은 패배
     if (gameState.draw) {
@@ -482,7 +512,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             isReady: false,
             finished: null,   // 완주/포기 상태 초기화 (null이면 RTDB에서 키 제거)
             finishMoves: null,
-            forfeited: null
+            forfeited: null,
+            moves: null       // 턴 카운터 초기화 (관전자 표시용)
           };
         });
 
@@ -504,6 +535,12 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   
   // 항상 사용 가능한 나가기 - 게임 진행 중이면 기권(탈락) 확인 후 처리
   const handleLeaveWithConfirm = async () => {
+    // 관전자는 게임에 영향이 없으므로 확인 없이 바로 나감
+    if (isSpectator) {
+      await handleLeaveRoom();
+      return;
+    }
+
     if (gameState?.phase === GamePhase.PLAY) {
       const me = gameState.players?.[userId];
 
@@ -629,6 +666,16 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           const playerRef = ref(database, playerPath);
           const playerSnapshot = await get(playerRef);
 
+          // 이미 게임이 시작된 방에 새로 들어온 사람은 관전자 - 플레이어/참가자 노드를
+          // 만들면 정산·시작 로직이 깨지므로 관전자 노드만 등록하고 종료
+          const phase = roomData.gameState?.phase;
+          if (phase && phase !== 'setup' && !playerSnapshot.exists()) {
+            console.log('게임 진행 중 - 관전자로 입장:', roomId);
+            await registerSpectator(roomId, userId);
+            await updateRoomUserStatus(roomId, userId, true);
+            return;
+          }
+
           if (playerSnapshot.exists()) {
             // 기존 플레이어: 진행 중인 게임 정보(position, isReady)는 건드리지 않고
             // 프로필/접속 정보만 갱신 (새로고침 시 위치가 초기화되는 버그 방지)
@@ -679,6 +726,34 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   }, [roomId, userId, gameState, router]);
   
+  // 게임이 SETUP으로 돌아오면(재시작 등) 관전자를 빈자리에 플레이어로 승격
+  useEffect(() => {
+    if (!gameState || !roomData) return;
+    if (gameState.phase !== GamePhase.SETUP) return;
+    if (gameState.players?.[userId]) return; // 이미 플레이어
+    if (promotingRef.current) return;
+
+    const playerCount = Object.keys(gameState.players || {}).length;
+    const maxPlayers = roomData.maxPlayers ?? 2;
+    if (playerCount >= maxPlayers) return; // 정원 가득 - 계속 관전 대기
+
+    promotingRef.current = true;
+    (async () => {
+      try {
+        const ok = await joinRoom(roomId, userId);
+        if (ok) {
+          const database = getDatabase();
+          await remove(ref(database, `rooms/${roomId}/spectators/${userId}`)).catch(() => {});
+          setMessage('빈자리가 생겨 게임에 참가했습니다! 맵을 만들어주세요.');
+        }
+      } catch (e) {
+        console.error('관전자 승격 오류:', e);
+      } finally {
+        promotingRef.current = false;
+      }
+    })();
+  }, [gameState, roomData, roomId, userId]);
+
   // 방 삭제 감지를 위한 useEffect 수정
   useEffect(() => {
     if (!roomId || !router) return;
@@ -757,10 +832,9 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   
   // 방 헤더 - 방 이름 / 단계 / 전적 / 플레이어 정보
   const renderGameHeader = () => {
-    if (!gameState || !gameState.players) return null;
+    if (!gameState) return null;
 
-    const me = gameState.players[userId];
-    const opponent = Object.values(gameState.players).find(p => p.id !== userId);
+    const me = gameState.players?.[userId];
     const stats = roomStats[userId];
 
     return (
@@ -784,6 +858,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
 
           {/* 전적 + 나가기 (어느 단계에서든 나갈 수 있음) */}
           <div className="flex items-center gap-2 shrink-0">
+            {!isSpectator && (
             <div className="text-[11px] text-slate-400">
               <span className="text-green-400 font-bold">{stats?.wins ?? 0}</span>승{' '}
               <span className="text-red-400 font-bold">{stats?.losses ?? 0}</span>패
@@ -793,6 +868,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                 </>
               )}
             </div>
+            )}
             <button
               className="btn-sub px-2.5 py-1 text-[11px] !rounded-lg"
               onClick={handleLeaveWithConfirm}
@@ -805,7 +881,12 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
 
         {/* 플레이어 정보 행 */}
         <div className="flex justify-between items-center mt-1.5 text-xs">
-          {/* 내 정보 */}
+          {/* 내 정보 (관전자는 배지로 표시) */}
+          {isSpectator ? (
+            <div className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-400/15 text-purple-300 border border-purple-400/40">
+              👁 관전 모드
+            </div>
+          ) : (
           <div className="flex items-center gap-1.5">
             {me?.photoURL ? (
               <img src={me.photoURL} alt="내 프로필" className="w-5 h-5 rounded-full ring-1 ring-blue-400" />
@@ -817,9 +898,10 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             <span className="text-blue-300 font-medium">{me?.displayName?.substring(0, 6) || '나'}</span>
             {me?.isReady && <span className="text-green-400">✓</span>}
           </div>
+          )}
 
           {/* 진행 상태 표시 (자유 이동 - 각자 자기 속도로 완주) */}
-          {gameState.phase === GamePhase.PLAY && (
+          {!isSpectator && gameState.phase === GamePhase.PLAY && (
             me?.finished ? (
               <div className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-400/15 text-purple-300 border border-purple-400/40">관전 중</div>
             ) : (
@@ -827,9 +909,23 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             )
           )}
 
-          {/* 상대방 정보 (다인전: 최대 3명 압축 표시) */}
+          {/* 상대방 정보 (다인전: 최대 3명 압축 표시, 관전자는 전원 표시) */}
           {(() => {
             const opponents = Object.entries(gameState.players || {}).filter(([id]) => id !== userId);
+            if (isSpectator) {
+              return (
+                <div className="flex items-center gap-2">
+                  {opponents.slice(0, 4).map(([oid, o]) => (
+                    <div key={oid} className="flex items-center gap-1" title={o.displayName || '플레이어'}>
+                      <span className={playersStatus[oid] ? 'text-green-400 text-[9px]' : 'text-slate-600 text-[9px]'}>
+                        {playersStatus[oid] ? '●' : '○'}
+                      </span>
+                      <span className="text-slate-200 font-medium text-[11px]">{o.displayName?.substring(0, 5) || '플레이어'}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            }
             if (opponents.length === 0) {
               return <div className="text-slate-500 text-[11px] animate-pulse">상대방 대기 중...</div>;
             }
@@ -857,6 +953,149 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     );
   };
   
+
+  // 관전자 스테이지 - 플레이 중인 사람의 화면을 그대로 미러링, 칩 클릭으로 대상 전환
+  const renderSpectatorStage = () => {
+    if (!gameState) return null;
+    const playersMap = gameState.players || {};
+    const ids = Object.keys(playersMap).sort();
+
+    // 재시작 등으로 SETUP이면 다음 게임 대기 (빈자리가 나면 자동 승격됨)
+    if (gameState.phase === GamePhase.SETUP || ids.length === 0) {
+      return (
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950 flex items-center justify-center">
+          <div className="game-panel px-8 py-6 text-center max-w-sm">
+            <div className="text-3xl mb-2">👁</div>
+            <p className="text-sm font-bold text-slate-200 mb-1">관전 대기 중</p>
+            <p className="text-[11px] text-slate-400">
+              참가자들이 다음 게임을 준비하고 있습니다.
+              {ids.length >= (roomData?.maxPlayers ?? 2)
+                ? ' 정원이 가득 차 이번 게임도 관전합니다.'
+                : ' 빈자리가 있어 곧 자동으로 참가합니다.'}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    const targetId =
+      specTarget && playersMap[specTarget]
+        ? specTarget
+        : (ids.find((id) => !playersMap[id]?.finished && !playersMap[id]?.forfeited) ?? ids[0]);
+    const target = playersMap[targetId];
+    const ownerId = gameState.assignments?.[targetId] ?? null;
+    const map = ownerId ? gameState.maps?.[ownerId] ?? null : null;
+
+    if (!map || !target) {
+      return (
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950">
+          <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+        </div>
+      );
+    }
+
+    // 대상이 부딪힌 벽만 - 플레이어 본인이 보는 화면과 동일 (숨은 벽은 종료 공개 전까지 안 보임)
+    const collisions = (Object.values(gameState.collisionWalls || {}) as CollisionWall[]).filter(
+      (w) => w?.playerId === targetId
+    );
+    const mapItems = getMapItems(map);
+    const consumedRaw = ownerId ? gameState.itemState?.[ownerId]?.consumed : null;
+    const consumedMap: Record<number, boolean> =
+      consumedRaw && typeof consumedRaw === 'object' ? consumedRaw : consumedRaw === true ? { 0: true } : {};
+    const reveal = gameState.phase === GamePhase.END;
+    const liveMoves = typeof target.moves === 'number' ? target.moves : 0;
+    const celebrating = !!target.finished && !target.forfeited;
+
+    return (
+      <div className="absolute inset-0 overflow-hidden">
+        {specViewMode === 'third' ? (
+          <GameBoard3D
+            gamePhase={GamePhase.PLAY}
+            startPosition={map.startPosition}
+            endPosition={map.endPosition}
+            playerPosition={target.position}
+            obstacles={map.obstacles}
+            collisionWalls={collisions}
+            readOnly
+            revealObstacles={reveal}
+            items={mapItems}
+            itemsConsumed={consumedMap}
+            celebrating={celebrating}
+            fullscreen
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center overflow-auto py-24 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950">
+            <GameBoard
+              gamePhase={GamePhase.PLAY}
+              startPosition={map.startPosition}
+              endPosition={map.endPosition}
+              playerPosition={target.position}
+              obstacles={map.obstacles}
+              collisionWalls={collisions}
+              readOnly
+              playerPhotoURL={target.photoURL || undefined}
+              revealObstacles={reveal}
+              items={mapItems}
+              itemsConsumed={consumedMap}
+            />
+          </div>
+        )}
+
+        {/* 관전 HUD - 플레이어 칩 (클릭으로 관전 대상 전환) + 시점 토글 */}
+        <div className="absolute top-2 inset-x-0 z-20 px-2">
+          <div className="max-w-2xl mx-auto flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {ids.map((pid) => {
+                const p = playersMap[pid];
+                const selected = pid === targetId;
+                const statusText = p?.forfeited
+                  ? '포기'
+                  : p?.finished
+                    ? `${p?.finishMoves ?? '?'}턴 ✓`
+                    : `${typeof p?.moves === 'number' ? p.moves : 0}턴`;
+                return (
+                  <button
+                    key={pid}
+                    onClick={() => setSpecTarget(pid)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-bold border backdrop-blur-sm transition-colors ${
+                      selected
+                        ? 'bg-amber-400 text-slate-900 border-amber-400'
+                        : 'bg-slate-900/70 text-slate-300 border-slate-600/60 hover:border-amber-400/50'
+                    }`}
+                  >
+                    {p?.displayName?.substring(0, 6) || '플레이어'} · {statusText}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex rounded-xl overflow-hidden border border-slate-600/60 backdrop-blur-sm">
+              {(['third', '2d'] as const).map((m) => (
+                <button
+                  key={m}
+                  className={`px-2.5 py-1 text-[11px] font-bold ${
+                    specViewMode === m ? 'bg-amber-400 text-slate-900' : 'bg-slate-900/70 text-slate-300'
+                  }`}
+                  onClick={() => setSpecViewMode(m)}
+                >
+                  {m === 'third' ? '3인칭' : '2D'}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* 관전 대상 안내 배너 */}
+        <div className="absolute top-[46px] left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+          <div className="text-[11px] px-3 py-1 rounded-full bg-purple-500/20 border border-purple-400/50 text-purple-100 backdrop-blur-sm whitespace-nowrap">
+            👁 {target.displayName?.substring(0, 8) || '플레이어'} 관전 중
+            {target.forfeited ? ' · 포기함' : target.finished ? ` · ${target.finishMoves ?? '?'}턴 완주` : ` · 이동: ${liveMoves}`}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // 컴포넌트의 렌더링 내용을 결정하는 함수
   const renderContent = () => {
     // 인증 상태 확인이 완료될 때까지 로딩 표시
@@ -907,7 +1146,9 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       <div className="fixed inset-0 overflow-hidden bg-slate-950">
         {/* 게임 스테이지 (헤더 아래 영역) */}
         <div className="absolute inset-x-0 bottom-0 top-[86px]">
-          {gameState.phase === GamePhase.SETUP && !isReady ? (
+          {isSpectator ? (
+            renderSpectatorStage()
+          ) : gameState.phase === GamePhase.SETUP && !isReady ? (
             <GameSetup key="setup" onMapComplete={handleMapComplete} />
           ) : gameState.phase === GamePhase.SETUP && isReady ? (
             <div key="waiting" className="absolute inset-0 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950 flex items-center justify-center">
@@ -1016,6 +1257,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                   finished: !!p.finished && !p.forfeited,
                   finishMoves: p.finishMoves ?? null,
                   forfeited: !!p.forfeited,
+                  moves: typeof p.moves === 'number' ? p.moves : 0,
                 }))}
             />
           ) : gameState.phase === GamePhase.END ? (
@@ -1044,36 +1286,50 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           </div>
         )}
 
-        {/* 게임 종료 결과 모달 (보드는 뒤에서 계속 공개 상태로 표시됨) */}
+        {/* 게임 종료 결과 - 보드가 계속 보이도록 하단의 컴팩트 카드로 표시 */}
         {gameState.phase === GamePhase.END && (
-          <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
-            <div className={`pointer-events-auto game-panel !rounded-2xl px-10 py-5 text-center shadow-2xl ${
+          <div className="absolute inset-x-0 bottom-6 z-40 flex justify-center pointer-events-none px-3">
+            <div className={`pointer-events-auto game-panel !rounded-2xl px-5 py-3 text-center shadow-2xl max-w-[94vw] ${
               gameState.draw
                 ? '!border-slate-500/60'
-                : gameState.winner === userId
+                : !isSpectator && gameState.winner === userId
                   ? '!border-green-400/60 shadow-green-500/20'
-                  : '!border-red-400/60 shadow-red-500/20'
+                  : isSpectator
+                    ? '!border-amber-400/50'
+                    : '!border-red-400/60 shadow-red-500/20'
             }`}>
-              <p className="text-[10px] tracking-[0.3em] text-slate-500 font-bold mb-1">GAME RESULT</p>
-              <p className={`text-2xl font-black ${
-                gameState.draw
-                  ? 'text-slate-300'
-                  : gameState.winner === userId
-                    ? 'text-green-400'
-                    : 'text-red-400'
-              }`}>
-                {gameState.draw ? '🤝' : gameState.winner === userId ? '🏆' : '💀'} {getWinnerMessage()}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-1">보드에서 상대의 벽과 아이템을 확인해보세요</p>
-
-              <div className="flex gap-2 mt-4 justify-center">
-                <button className="btn-game px-8 py-2 text-sm" onClick={handleRestartGame}>
-                  재시작
-                </button>
-                <button className="btn-sub px-5 py-2 text-sm" onClick={handleLeaveWithConfirm}>
-                  나가기
-                </button>
+              <div className="flex items-center justify-center gap-3 flex-wrap">
+                <p className={`text-base font-black ${
+                  gameState.draw
+                    ? 'text-slate-300'
+                    : !isSpectator && gameState.winner === userId
+                      ? 'text-green-400'
+                      : isSpectator
+                        ? 'text-amber-300'
+                        : 'text-red-400'
+                }`}>
+                  {gameState.draw ? '🤝' : isSpectator ? '🏁' : gameState.winner === userId ? '🏆' : '💀'} {getWinnerMessage()}
+                </p>
+                {isSpectator ? (
+                  <button className="btn-sub px-4 py-1.5 text-xs" onClick={handleLeaveWithConfirm}>
+                    나가기
+                  </button>
+                ) : (
+                  <div className="flex gap-1.5">
+                    <button className="btn-game px-5 py-1.5 text-xs" onClick={handleRestartGame}>
+                      재시작
+                    </button>
+                    <button className="btn-sub px-4 py-1.5 text-xs" onClick={handleLeaveWithConfirm}>
+                      나가기
+                    </button>
+                  </div>
+                )}
               </div>
+              <p className="text-[10px] text-slate-500 mt-1">
+                {isSpectator
+                  ? '참가자가 재시작하면 다음 게임도 이어서 관전합니다'
+                  : '보드에서 상대의 벽과 아이템을 확인해보세요'}
+              </p>
             </div>
           </div>
         )}

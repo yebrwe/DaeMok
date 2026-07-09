@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CollisionWall, Direction, GameMap, GamePhase, Obstacle, Position } from '@/types/game';
 import GameBoard from './GameBoard';
 import GameBoard3D, { BoardFx } from './three/GameBoard3D';
-import { BOARD_SIZE, canMove, getNewPosition, getOppositeDirection, isPositionInBoard, isSamePosition, isBlockedByOneTimeWall, isSameWallSegment } from '@/lib/gameUtils';
+import { BOARD_SIZE, canMove, getNewPosition, getOppositeDirection, isPositionInBoard, isSamePosition, findBlockingOneTimeWall, getMapItems, isSameWallSegment } from '@/lib/gameUtils';
 import { getDatabase, ref, update, get, onValue, push, serverTimestamp } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
 
@@ -30,6 +30,7 @@ interface GamePlayProps {
     finished: boolean;
     finishMoves: number | null;
     forfeited: boolean;
+    moves?: number | null; // 현재까지 소모한 턴 (실시간 순위용)
   }>; // 나를 제외한 참가자들 (HUD 표시)
 }
 
@@ -87,19 +88,22 @@ const GamePlay: React.FC<GamePlayProps> = ({
   // 이동 처리 중 중복 입력 방지 (연타로 한 턴에 두 번 움직이는 버그 방지)
   const movePendingRef = useRef<boolean>(false);
 
-  // 아이템 상태 - 내가 플레이하는 맵(상대 설치)과 내가 만든 맵(내가 설치)의 아이템
-  const item = map?.item ?? null;
-  const myItem = myMap?.item ?? null;
-  const [itemConsumed, setItemConsumed] = useState(false); // 내 보드의 아이템 사용됨
-  const [myItemConsumed, setMyItemConsumed] = useState(false); // 내 맵의 아이템 사용됨 (미니맵)
+  // 아이템 상태 - 내가 플레이하는 맵(상대 설치)과 내가 만든 맵(내가 설치)의 아이템들
+  const items = useMemo(() => getMapItems(map), [map]);
+  const myItems = useMemo(() => getMapItems(myMap), [myMap]);
+  const [itemsConsumed, setItemsConsumed] = useState<Record<number, boolean>>({}); // 내가 달리는 맵
+  const [myItemsConsumed, setMyItemsConsumed] = useState<Record<number, boolean>>({}); // 내 맵 (미니맵)
 
   // 이동 경로 기록 (지뢰: 2턴 전 위치로 되돌리기용)
   const positionHistoryRef = useRef<Position[]>([startPosition]);
 
-  // 탐지기(자기용 아이템): 내 셋업에서 확보 - 연습에서는 내가 만든 맵이 곧 내가 달리는 맵
-  const radarItem = isPractice
-    ? (map?.item?.type === 'radar' ? map.item : null)
-    : (myMap?.item?.type === 'radar' ? myMap.item : null);
+  // 탐지기(자기용 아이템): 내 셋업에서 확보한 개수만큼 사용 가능
+  // 연습에서는 내가 만든 맵이 곧 내가 달리는 맵이므로 소모 상태를 하나로 공유
+  const radarOwnItems = isPractice ? items : myItems;
+  const radarOwnConsumed = isPractice ? itemsConsumed : myItemsConsumed;
+  const nextRadarIndex = radarOwnItems.findIndex(
+    (it, idx) => it.type === 'radar' && !radarOwnConsumed[idx]
+  );
   // 탐지기로 밝혀낸 벽들 (일반 벽 + 위장된 1회성 벽)
   const [revealedWalls, setRevealedWalls] = useState<Obstacle[]>([]);
 
@@ -201,33 +205,38 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
     const unsubscribe = onValue(itemStateRef, (snapshot) => {
       const state = snapshot.val() || {};
+      // consumed는 인덱스별 맵 { idx: true } (레거시 단일 boolean이면 0번으로 취급)
+      const toMap = (v: any): Record<number, boolean> =>
+        v && typeof v === 'object' ? v : v === true ? { 0: true } : {};
       // 내가 플레이하는 맵의 아이템은 맵 주인 키에 기록됨
       if (mapOwnerId) {
-        setItemConsumed(!!state[mapOwnerId]?.consumed);
+        setItemsConsumed(toMap(state[mapOwnerId]?.consumed));
       }
-      setMyItemConsumed(!!state[userId]?.consumed);
+      setMyItemsConsumed(toMap(state[userId]?.consumed));
     });
 
     return () => unsubscribe();
   }, [roomId, mapOwnerId, userId, isPractice]);
 
-  // 아이템 소모 처리 (내가 플레이하는 맵의 주인이 설치한 아이템)
-  const consumeOpponentItem = useCallback(() => {
-    setItemConsumed(true);
-    if (!isPractice && mapOwnerId && item) {
+  // 아이템 소모 처리 (내가 플레이하는 맵의 주인이 설치한 아이템, 인덱스별)
+  const consumeOpponentItem = useCallback((index: number) => {
+    setItemsConsumed((prev) => ({ ...prev, [index]: true }));
+    if (!isPractice && mapOwnerId) {
       const database = getDatabase();
-      update(ref(database, `rooms/${roomId}/gameState/itemState/${mapOwnerId}`), {
-        consumed: true,
-        type: item.type,
-        consumedAt: serverTimestamp(),
+      update(ref(database, `rooms/${roomId}/gameState/itemState/${mapOwnerId}/consumed`), {
+        [index]: true,
       }).catch((error) => console.error('아이템 상태 기록 오류:', error));
+      update(ref(database, `rooms/${roomId}/gameState/itemState/${mapOwnerId}`), {
+        consumedAt: serverTimestamp(),
+      }).catch(() => {});
     }
-  }, [isPractice, mapOwnerId, item, roomId]);
+  }, [isPractice, mapOwnerId, roomId]);
 
   // 탐지기 사용 - 내 주변 한 칸(대각선 포함, 3x3)의 벽을 탐지
   // 일반 벽 + 아직 부서지지 않은 1회성 벽(일반 벽으로 위장되어 표시)을 찾아냄. 지뢰/웜홀은 탐지 불가.
+  // 탐지기를 여러 개 확보했으면 그 수만큼 사용 가능
   const handleUseRadar = useCallback(() => {
-    if (!radarItem || myItemConsumed || isFinished) return;
+    if (nextRadarIndex < 0 || isFinished) return;
 
     const found: Obstacle[] = [];
     const seen = new Set<string>();
@@ -248,7 +257,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
           const hasWall =
             obstacles.some((o) => isSameWallSegment(cell, dir, o.position, o.direction)) ||
-            isBlockedByOneTimeWall(cell, dir, item, itemConsumed);
+            findBlockingOneTimeWall(cell, dir, items, (i) => !!itemsConsumed[i]) >= 0;
           if (!hasWall) return;
 
           const key = segmentDedupeKey(cell, dir);
@@ -259,20 +268,29 @@ const GamePlay: React.FC<GamePlayProps> = ({
       }
     }
 
-    setRevealedWalls(found);
-    setMyItemConsumed(true);
-    setMessage(`🔍 주변을 탐지했습니다! 벽 ${found.length}개 발견`);
-    fireFx({ type: 'radar', at: playerPosition });
-
-    if (!isPractice) {
+    setRevealedWalls((prev) => {
+      // 이번 탐지 결과를 기존 결과에 누적 (탐지기 여러 개 사용 시)
+      const merged = [...prev];
+      found.forEach((w) => {
+        if (!merged.some((m) => isSameWallSegment(m.position, m.direction, w.position, w.direction))) {
+          merged.push(w);
+        }
+      });
+      return merged;
+    });
+    const usedIndex = nextRadarIndex;
+    if (isPractice) {
+      setItemsConsumed((prev) => ({ ...prev, [usedIndex]: true }));
+    } else {
+      setMyItemsConsumed((prev) => ({ ...prev, [usedIndex]: true }));
       const database = getDatabase();
-      update(ref(database, `rooms/${roomId}/gameState/itemState/${userId}`), {
-        consumed: true,
-        type: 'radar',
-        consumedAt: serverTimestamp(),
+      update(ref(database, `rooms/${roomId}/gameState/itemState/${userId}/consumed`), {
+        [usedIndex]: true,
       }).catch((error) => console.error('탐지기 사용 기록 오류:', error));
     }
-  }, [radarItem, myItemConsumed, isFinished, playerPosition, obstacles, item, itemConsumed, isPractice, roomId, userId, fireFx]);
+    setMessage(`🔍 주변을 탐지했습니다! 벽 ${found.length}개 발견`);
+    fireFx({ type: 'radar', at: playerPosition });
+  }, [nextRadarIndex, isFinished, playerPosition, obstacles, items, itemsConsumed, isPractice, roomId, userId, fireFx]);
 
   // 사용자 프로필(이미지/이름) 가져오기 (멀티플레이어 전용)
   useEffect(() => {
@@ -302,6 +320,19 @@ const GamePlay: React.FC<GamePlayProps> = ({
   // 내 맵을 달리는 사람 정보 (미니맵/관전 표시용)
   const runnerInfo = othersInfo.find((o) => o.id === myMapRunnerId) ?? null;
 
+  // 실시간 순위 (마리오카트식): 완주자는 확정 턴, 진행 중은 현재 턴 기준. 포기자는 제외
+  // 턴 수가 적을수록 상위. 동률은 같은 순위
+  const myRankMetric = myFinished ? (myFinishMoves ?? moveCount) : moveCount;
+  const rankedOthers = othersInfo.filter((o) => !o.forfeited);
+  const myRank =
+    1 +
+    rankedOthers.filter((o) => {
+      const metric = o.finished ? (o.finishMoves ?? Number.MAX_SAFE_INTEGER) : (o.moves ?? 0);
+      return metric < myRankMetric;
+    }).length;
+  const rankTotal = rankedOthers.length + 1;
+  const showRank = !isPractice && !gameEnded && othersInfo.length > 0;
+
   // 플레이어 이동 처리 함수 (자유 이동 - 턴 대기 없이 각자 진행, 최종 턴 수로 승부)
   const handleMove = useCallback(
     async (direction: Direction) => {
@@ -321,12 +352,15 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
       // 1회성 벽 아이템: 일반 벽과 완전히 똑같이 한 번 막는다 (메시지/빨간 흔적 동일 - 위장 유지)
       // 조용히 소모되어, 같은 곳을 다시 시도하면 그때는 통과된다
-      if (canMoveResult && isBlockedByOneTimeWall(playerPosition, direction, item, itemConsumed)) {
+      const blockingWallIdx = canMoveResult
+        ? findBlockingOneTimeWall(playerPosition, direction, items, (i) => !!itemsConsumed[i])
+        : -1;
+      if (blockingWallIdx >= 0) {
         setLastMoveValid(false);
         setMoveCount(moveCount + 1);
         setMessage('이동할 수 없습니다. 벽에 부딪혔습니다!');
         fireFx({ type: 'bump', at: playerPosition, dir: direction });
-        consumeOpponentItem();
+        consumeOpponentItem(blockingWallIdx);
 
         const disguisedCollision: CollisionWall = {
           playerId: userId,
@@ -341,6 +375,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
         } else {
           const database = getDatabase();
           push(ref(database, `rooms/${roomId}/gameState/collisionWalls`), disguisedCollision).catch(() => {});
+          update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), { moves: moveCount + 1 })
+            .catch(() => {});
           update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
         }
         return;
@@ -360,25 +396,34 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
           let viaPath: Position[] | null = null;
 
-          if (item && !itemConsumed) {
-            if (item.type === 'mine' && item.position && isSamePosition(newPosition, item.position)) {
-              const history = positionHistoryRef.current;
-              finalPosition = history.length >= 2 ? history[history.length - 2] : history[0] ?? startPosition;
-              moveMessage = '💥 지뢰를 밟아 2턴 전 위치로 되돌아갔습니다!';
-              moveValidState = false;
-              // 지뢰 칸에 폴짝 올라선 순간 폭발 -> 왔던 길로 뒤로 폴짝 2번
-              viaPath = [newPosition, playerPosition];
-              fireFx({ type: 'mine', at: item.position, delay: 0.35 });
-              consumeOpponentItem();
-            } else if (item.type === 'wormhole' && item.entrance && isSamePosition(newPosition, item.entrance)) {
-              finalPosition = item.exit ?? newPosition;
-              moveMessage = '🌀 웜홀에 빨려들어가 다른 곳으로 이동했습니다!';
-              moveValidState = null;
-              // 입구까지 폴짝 이동한 뒤 스파게티화되어 빨려들어감
-              viaPath = [item.entrance];
-              fireFx({ type: 'wormhole', at: item.entrance, to: item.exit, delay: 0.35 });
-              consumeOpponentItem();
-            }
+          const mineIdx = items.findIndex(
+            (it, idx) =>
+              it.type === 'mine' && !!it.position && !itemsConsumed[idx] && isSamePosition(newPosition, it.position)
+          );
+          const wormholeIdx = items.findIndex(
+            (it, idx) =>
+              it.type === 'wormhole' && !!it.entrance && !itemsConsumed[idx] && isSamePosition(newPosition, it.entrance)
+          );
+
+          if (mineIdx >= 0) {
+            const mine = items[mineIdx];
+            const history = positionHistoryRef.current;
+            finalPosition = history.length >= 2 ? history[history.length - 2] : history[0] ?? startPosition;
+            moveMessage = '💥 지뢰를 밟아 2턴 전 위치로 되돌아갔습니다!';
+            moveValidState = false;
+            // 지뢰 칸에 폴짝 올라선 순간 폭발 -> 왔던 길로 뒤로 폴짝 2번
+            viaPath = [newPosition, playerPosition];
+            fireFx({ type: 'mine', at: mine.position!, delay: 0.35 });
+            consumeOpponentItem(mineIdx);
+          } else if (wormholeIdx >= 0) {
+            const wormhole = items[wormholeIdx];
+            finalPosition = wormhole.exit ?? newPosition;
+            moveMessage = '🌀 웜홀에 빨려들어가 다른 곳으로 이동했습니다!';
+            moveValidState = null;
+            // 입구까지 폴짝 이동한 뒤 스파게티화되어 빨려들어감
+            viaPath = [wormhole.entrance!];
+            fireFx({ type: 'wormhole', at: wormhole.entrance!, to: wormhole.exit, delay: 0.35 });
+            consumeOpponentItem(wormholeIdx);
           }
 
           setLastMoveValid(moveValidState);
@@ -394,10 +439,10 @@ const GamePlay: React.FC<GamePlayProps> = ({
             // 쓰기는 순서가 보장되므로 기다리지 않는다
             // (기다리면 네트워크 지연 동안 다음 입력이 씹힘 - 자유 이동 모드의 입력 반응성)
             const database = getDatabase();
-            update(
-              ref(database, `rooms/${roomId}/gameState/players/${userId}/position`),
-              finalPosition
-            ).catch((error) => console.error('위치 업데이트 오류:', error));
+            update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), {
+              position: finalPosition,
+              moves: newCount, // 관전자 표시용 턴 카운터
+            }).catch((error) => console.error('위치 업데이트 오류:', error));
             // 방 활동 시각 갱신 (유령 방 자동 정리 대상에서 제외)
             update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
           }
@@ -432,6 +477,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
               ref(database, `rooms/${roomId}/gameState/collisionWalls`),
               newCollisionWall
             ).catch((error) => console.error('충돌 벽 기록 오류:', error));
+            update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), { moves: newCount })
+              .catch(() => {});
             update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
           }
         }
@@ -453,8 +500,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
       userId,
       mapOwnerId,
       onGameComplete,
-      item,
-      itemConsumed,
+      items,
+      itemsConsumed,
       consumeOpponentItem,
       fireFx,
     ]
@@ -508,8 +555,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
           revealObstacles: true,
           pawnColor: '#ef4444',
           photoURL: runnerInfo?.photoURL || undefined,
-          item: myItem,
-          itemConsumed: myItemConsumed,
+          items: myItems,
+          itemsConsumed: myItemsConsumed,
           fx: null as BoardFx | null,
           pawnVia: null as Position[] | null,
           celebrating: false,
@@ -523,8 +570,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
           revealObstacles: isFinished,
           pawnColor: undefined,
           photoURL: playerPhotoURL || undefined,
-          item,
-          itemConsumed,
+          items,
+          itemsConsumed,
           fx,
           pawnVia: moveVia,
           celebrating: iAmDone, // 골인 세리머니 (관전 전환 전 + 종료 후 결과 화면)
@@ -544,8 +591,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
           readOnly={true}
           revealObstacles={board.revealObstacles}
           pawnColor={board.pawnColor}
-          item={board.item}
-          itemConsumed={board.itemConsumed}
+          items={board.items}
+          itemsConsumed={board.itemsConsumed}
           revealedWalls={spectating ? [] : revealedWalls}
           fx={board.fx}
           pawnVia={board.pawnVia}
@@ -564,8 +611,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
             readOnly={true}
             playerPhotoURL={board.photoURL}
             revealObstacles={board.revealObstacles}
-            item={board.item}
-            itemConsumed={board.itemConsumed}
+            items={board.items}
+            itemsConsumed={board.itemsConsumed}
             revealedWalls={spectating ? [] : revealedWalls}
           />
         </div>
@@ -637,16 +684,21 @@ const GamePlay: React.FC<GamePlayProps> = ({
               !isPractice && <span className="text-[10px] text-slate-500">상대 대기</span>
             )}
 
-            {/* 탐지기 아이템 (1회 사용) */}
-            {radarItem && !myItemConsumed && !isFinished && (
-              <button
-                className="btn-game px-2.5 py-1 text-[11px] !rounded-lg"
-                onClick={handleUseRadar}
-                title="내 주변 한 칸(대각선 포함)의 벽을 탐지합니다 (1회)"
-              >
-                🔍 탐지
-              </button>
-            )}
+            {/* 탐지기 아이템 (확보 개수만큼 사용 가능) */}
+            {nextRadarIndex >= 0 && !isFinished && (() => {
+              const remaining = radarOwnItems.filter(
+                (it, idx) => it.type === 'radar' && !radarOwnConsumed[idx]
+              ).length;
+              return (
+                <button
+                  className="btn-game px-2.5 py-1 text-[11px] !rounded-lg"
+                  onClick={handleUseRadar}
+                  title="내 주변 한 칸(대각선 포함)의 벽을 탐지합니다"
+                >
+                  🔍 탐지{remaining > 1 ? ` x${remaining}` : ''}
+                </button>
+              );
+            })()}
 
             {/* 시점 전환 (관전/종료 시 1인칭 비활성) */}
             <div className="flex rounded-lg overflow-hidden border border-slate-600/70">
@@ -719,9 +771,33 @@ const GamePlay: React.FC<GamePlayProps> = ({
         )}
       </div>
 
+      {/* 우측 상단 오버레이: 실시간 순위 + 미니맵 */}
+      {(showRank || (!isPractice && !spectating && myMap && runnerPosition)) && (
+      <div className="absolute top-[74px] right-2 z-20 flex flex-col items-end gap-1.5">
+        {/* 실시간 순위 (마리오카트식) */}
+        {showRank && (
+          <div className={`game-panel !rounded-xl px-3 py-1.5 text-right ${
+            myRank === 1 ? '!border-amber-400/60' : ''
+          }`}>
+            <div className="flex items-baseline justify-end gap-1 leading-none">
+              <span className="text-[11px]">🏁</span>
+              <span className={`text-2xl font-black ${
+                myRank === 1 ? 'text-amber-300' : myRank === rankTotal ? 'text-red-300' : 'text-slate-200'
+              }`}>
+                {myRank}
+              </span>
+              <span className="text-[11px] font-bold text-slate-300">위</span>
+              <span className="text-[10px] text-slate-500">/ {rankTotal}명</span>
+            </div>
+            <div className="text-[10px] text-slate-400 mt-0.5">
+              {myFinished ? `${myFinishMoves ?? moveCount}턴 완주` : `이동 ${moveCount}턴`}
+            </div>
+          </div>
+        )}
+
       {/* 미니맵 - 내가 만든 맵에서 상대방 플레이 (연습/관전 중에는 표시 안 함) */}
       {!isPractice && !spectating && myMap && runnerPosition && (
-        <div className="absolute top-[74px] right-2 z-20">
+        <div>
           <div className="game-panel !rounded-xl p-2">
             <div className="text-[10px] text-slate-400 text-center mb-1 font-medium">
               내 맵 ({runnerInfo ? `${runnerInfo.name.substring(0, 5)} 진행` : '상대 진행'})
@@ -736,11 +812,13 @@ const GamePlay: React.FC<GamePlayProps> = ({
               readOnly={true}
               isMinimapMode={true}
               playerPhotoURL={runnerInfo?.photoURL || undefined}
-              item={myItem}
-              itemConsumed={myItemConsumed}
+              items={myItems}
+              itemsConsumed={myItemsConsumed}
             />
           </div>
         </div>
+      )}
+      </div>
       )}
 
       {/* 방향 패드 - 하단 중앙 오버레이 */}

@@ -286,6 +286,36 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
   }
 };
 
+// 관전자 등록 - 게임이 이미 시작된 방에 구경꾼으로 입장
+// gameState.players에는 절대 쓰지 않아 정산/시작 로직에 영향을 주지 않는다
+export const registerSpectator = async (roomId: string, userId: string): Promise<boolean> => {
+  if (!database || !auth.currentUser) return false;
+
+  try {
+    const specRef = ref(database, `rooms/${roomId}/spectators/${userId}`);
+    await update(specRef, {
+      joined: true,
+      joinedAt: serverTimestamp(),
+      displayName: auth.currentUser.displayName || '익명 사용자',
+      photoURL: auth.currentUser.photoURL || null,
+    });
+
+    // 브라우저 종료 시 관전자 흔적 자동 제거
+    onDisconnect(specRef).remove().catch(() => {});
+
+    await update(ref(database, `userStatus/${userId}`), {
+      currentRoom: roomId,
+      lastActivity: serverTimestamp(),
+    });
+    await update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
+
+    return true;
+  } catch (error) {
+    console.error('관전자 등록 오류:', error);
+    return false;
+  }
+};
+
 // 방 참가
 export const joinRoom = async (roomId: string, userId: string): Promise<boolean> => {
   if (!database || !auth.currentUser) return false;
@@ -314,15 +344,16 @@ export const joinRoom = async (roomId: string, userId: string): Promise<boolean>
     const currentPlayers: string[] = roomData.players ? [...roomData.players] : [];
     const alreadyJoined = currentPlayers.includes(userId);
 
+    // 이미 게임이 시작된 방: 관전자로 입장 (게임 로직에는 일절 개입하지 않음)
+    if (!alreadyJoined && roomData.gameState?.phase && roomData.gameState.phase !== 'setup') {
+      console.log('게임 진행 중인 방 - 관전자로 입장:', roomId);
+      await registerSpectator(roomId, userId);
+      return true;
+    }
+
     // 최대 인원 제한 체크 (신규 입장자만)
     if (!alreadyJoined && currentPlayers.length >= roomData.maxPlayers) {
       console.error('방 인원이 가득 참:', roomId);
-      return false;
-    }
-
-    // 이미 게임이 시작된 방은 신규 참가 차단
-    if (!alreadyJoined && roomData.gameState?.phase && roomData.gameState.phase !== 'setup') {
-      console.error('이미 게임이 진행 중인 방:', roomId);
       return false;
     }
 
@@ -528,6 +559,9 @@ export const leaveRoom = async (roomId: string, userId: string): Promise<boolean
     
     // 게임 상태에서 플레이어 제거
     await remove(ref(database, `rooms/${roomId}/gameState/players/${userId}`));
+
+    // 관전자 흔적 제거
+    await remove(ref(database, `rooms/${roomId}/spectators/${userId}`)).catch(() => {});
     
     // 사용자 상태 업데이트 - 현재 방 정보 null로 설정
     await update(ref(database, `userStatus/${userId}`), {
@@ -994,6 +1028,7 @@ export const clearRoomPresence = async (roomId: string, userId: string) => {
       `rooms/${roomId}/members/${userId}`,
       `rooms/${roomId}/joinedPlayers/${userId}`,
       `rooms/${roomId}/gameState/players/${userId}`,
+      `rooms/${roomId}/spectators/${userId}`,
     ];
 
     // 서버에 등록된 onDisconnect 작업 취소
@@ -1100,13 +1135,20 @@ export const updateRoomUserStatus = async (roomId: string, userId: string, isOnl
     await update(userStatusRef, userData);
     
     // 게임 상태의 플레이어 정보도 업데이트
+    // 주의: 존재할 때만 - update는 없는 경로를 생성하므로, 관전자가 호출하면
+    // gameState.players에 유령 플레이어가 생겨 정산이 영원히 끝나지 않는다
     if (isOnline) {
       const playerRef = ref(db, `rooms/${roomId}/gameState/players/${userId}`);
-      await update(playerRef, { 
-        isOnline: true,
-        lastSeen: serverTimestamp()
-      });
-      
+      const playerSnap = await get(playerRef);
+      const isPlayer = playerSnap.exists();
+
+      if (isPlayer) {
+        await update(playerRef, {
+          isOnline: true,
+          lastSeen: serverTimestamp()
+        });
+      }
+
       // 방 참여 시 연결 종료 처리 설정
       const connectedRef = ref(db, '.info/connected');
       onValue(connectedRef, (snapshot) => {
@@ -1115,11 +1157,13 @@ export const updateRoomUserStatus = async (roomId: string, userId: string, isOnl
             isOnline: false,
             lastSeen: serverTimestamp()
           });
-          
-          onDisconnect(playerRef).update({
-            isOnline: false,
-            lastSeen: serverTimestamp()
-          });
+
+          if (isPlayer) {
+            onDisconnect(playerRef).update({
+              isOnline: false,
+              lastSeen: serverTimestamp()
+            });
+          }
         }
       }, { onlyOnce: true });
     }

@@ -39,6 +39,11 @@
             ".write": "auth != null && $uid === auth.uid"
           }
         },
+        "spectators": {
+          "$uid": {
+            ".write": "auth != null && $uid === auth.uid"
+          }
+        },
 
         "stats": {
           ".write": "auth != null && root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).exists()"

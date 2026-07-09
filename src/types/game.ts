@@ -46,6 +46,7 @@ export interface Player {
   finished?: boolean; // 도착점 골인 여부 (골인 후에는 관전)
   finishMoves?: number; // 완주에 소모한 턴 수 (승패 판정 기준)
   forfeited?: boolean; // 포기 여부
+  moves?: number; // 현재까지 소모한 턴 수 (관전자 표시용, 이동/충돌 시 동기화)
 }
 
 // 맵 아이템 타입 (게임당 1개, 벽 예산 소모)
@@ -69,7 +70,8 @@ export interface GameMap {
   startPosition: Position;
   endPosition: Position;
   obstacles: Obstacle[];
-  item?: MapItem | null; // 설치된 아이템 (최대 1개)
+  items?: MapItem[] | null; // 설치된 아이템들 (벽 예산 내 무제한)
+  item?: MapItem | null; // 레거시 단일 아이템 (구버전 맵 하위호환 - getMapItems로 읽을 것)
 }
 
 // 충돌된 벽 타입
@@ -82,9 +84,10 @@ export interface CollisionWall {
 }
 
 // 아이템 사용(소모) 상태 - 맵 소유자 uid를 키로 기록
+// consumed는 items 배열 인덱스별 사용 여부 (레거시: boolean 단일 값)
 export interface ItemStateEntry {
-  consumed: boolean;
-  type: ItemType;
+  consumed?: Record<number, boolean> | boolean;
+  type?: ItemType;
   consumedAt?: any;
 }
 

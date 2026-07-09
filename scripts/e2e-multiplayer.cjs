@@ -150,11 +150,12 @@ async function setupMap(page) {
     await expectText(pageA, '이동: 0');
     await expectText(pageB, '이동: 0');
 
-    step('6: 3인칭이 기본 시점 (1인칭 버튼 제거 확인)');
+    step('6: 3인칭이 기본 시점 (1인칭 버튼 제거 확인) + 우측 상단 순위 오버레이');
     await pageA.getByRole('button', { name: '3인칭' }).waitFor({ timeout: 10000 });
     const fpCount = await pageA.getByRole('button', { name: '1인칭' }).count();
     if (fpCount > 0) throw new Error('1인칭 버튼이 아직 남아 있음');
-    ok('3인칭 기본 + 1인칭 제거');
+    await expectText(pageA, '/ 2명'); // 실시간 순위 카드 (마리오카트식)
+    ok('3인칭 기본 + 1인칭 제거 + 순위 오버레이');
 
     step('7: [1게임] 자유 이동 - A가 연속 2번 이동해 즉시 완주 (턴 대기 없음)');
     await pageA.keyboard.press('ArrowRight');
