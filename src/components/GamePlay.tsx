@@ -771,11 +771,10 @@ const GamePlay: React.FC<GamePlayProps> = ({
         )}
       </div>
 
-      {/* 우측 상단 오버레이: 실시간 순위 + 미니맵 */}
-      {(showRank || (!isPractice && !spectating && myMap && runnerPosition)) && (
-      <div className="absolute top-[74px] right-2 z-20 flex flex-col items-end gap-1.5">
-        {/* 실시간 순위 (마리오카트식) */}
-        {showRank && (
+      {/* 우측 상단 오버레이: 실시간 순위 */}
+      {showRank && (
+      <div className="absolute top-[74px] right-2 z-20">
+        {(
           <div className={`game-panel !rounded-xl px-3 py-1.5 text-right ${
             myRank === 1 ? '!border-amber-400/60' : ''
           }`}>
@@ -794,10 +793,13 @@ const GamePlay: React.FC<GamePlayProps> = ({
             </div>
           </div>
         )}
+      </div>
+      )}
 
-      {/* 미니맵 - 내가 만든 맵에서 상대방 플레이 (연습/관전 중에는 표시 안 함) */}
+      {/* 미니맵(상대 진행 현황) - 시야를 가리지 않도록 하단 왼쪽 구석에 배치
+          작은 화면에서는 D-패드와 겹치지 않게 축소 */}
       {!isPractice && !spectating && myMap && runnerPosition && (
-        <div>
+        <div className="absolute bottom-2 left-2 z-10 origin-bottom-left scale-[0.62] sm:scale-100">
           <div className="game-panel !rounded-xl p-2">
             <div className="text-[10px] text-slate-400 text-center mb-1 font-medium">
               내 맵 ({runnerInfo ? `${runnerInfo.name.substring(0, 5)} 진행` : '상대 진행'})
@@ -817,8 +819,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
             />
           </div>
         </div>
-      )}
-      </div>
       )}
 
       {/* 방향 패드 - 하단 중앙 오버레이 */}
