@@ -100,6 +100,9 @@ export default function RoomsPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Link href="/dungeon" className="btn-game px-3 py-1.5 text-xs">
+            🗡️ 던전 모드
+          </Link>
           <Link href="/practice" className="btn-sub px-3 py-1.5 text-xs">
             🎯 연습 모드
           </Link>
