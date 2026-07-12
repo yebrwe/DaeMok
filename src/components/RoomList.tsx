@@ -105,7 +105,7 @@ const RoomList: React.FC<RoomListProps> = ({ userId }) => {
                       👥 {playerCount} / {maxPlayers}
                     </span>
                     <span>
-                      {new Date((room as any).createdAt || Date.now()).toLocaleString(undefined, {
+                      {new Date(room.createdAt || Date.now()).toLocaleString(undefined, {
                         month: 'short',
                         day: 'numeric',
                         hour: '2-digit',

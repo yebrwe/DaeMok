@@ -13,7 +13,6 @@ interface GameBoardProps {
   onCellClick?: (position: Position) => void;
   onDirectionClick?: (position: Position, direction: Direction) => void;
   readOnly?: boolean;
-  isMinimapMode?: boolean;
   selectionMode?: 'start' | 'end' | 'none';
   collisionWalls?: CollisionWall[];
   playerPhotoURL?: string;
@@ -33,7 +32,6 @@ const GameBoard: React.FC<GameBoardProps> = ({
   onCellClick,
   onDirectionClick,
   readOnly = false,
-  isMinimapMode = false,
   selectionMode = 'none',
   collisionWalls = [],
   playerPhotoURL,
@@ -47,8 +45,8 @@ const GameBoard: React.FC<GameBoardProps> = ({
   const isRadarRevealed = (position: Position, direction: Direction): boolean =>
     revealedWalls.some((w) => isSameWallSegment(position, direction, w.position, w.direction));
 
-  // 아이템 전체 공개 조건: 맵 제작 중 / 내 맵 미니맵 / 게임 종료 공개
-  const showItemsFully = gamePhase === GamePhase.SETUP || isMinimapMode || revealObstacles;
+  // 아이템 전체 공개 조건: 맵 제작 중 / 게임 종료 공개
+  const showItemsFully = gamePhase === GamePhase.SETUP || revealObstacles;
 
   const itemList = items || [];
 
@@ -68,7 +66,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
     if (pendingCell && isSamePosition(position, pendingCell)) {
       return (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-          <div className={`${isMinimapMode ? 'w-3 h-3' : 'w-6 h-6'} rounded-full border-2 border-purple-500 animate-pulse`} />
+          <div className="w-6 h-6 rounded-full border-2 border-purple-500 animate-pulse" />
         </div>
       );
     }
@@ -82,7 +80,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
       if (it.type === 'mine' && it.position && isSamePosition(position, it.position)) {
         return (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-            <span className={isMinimapMode ? 'text-[9px]' : 'text-lg'}>{consumed ? '💥' : '💣'}</span>
+            <span className="text-lg">{consumed ? '💥' : '💣'}</span>
           </div>
         );
       }
@@ -94,7 +92,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
           return (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
               <div
-                className={`${isMinimapMode ? 'w-3.5 h-3.5 text-[6px]' : 'w-6 h-6 text-[10px]'} rounded-full flex items-center justify-center font-bold ${
+                className={`w-6 h-6 text-[10px] rounded-full flex items-center justify-center font-bold ${
                   isEntrance
                     ? 'bg-purple-600 text-white'
                     : 'bg-purple-100 text-purple-700 border-2 border-purple-500'
@@ -165,62 +163,6 @@ const GameBoard: React.FC<GameBoardProps> = ({
     );
   };
 
-  // 특정 위치에 충돌 벽이 있는지 확인 (같은 벽을 인접 셀의 반대 방향으로 기록한 경우도 포함)
-  const hasCollisionWall = (position: Position, direction: Direction): boolean => {
-    // 위치와 방향이 정확히 일치하는 경우
-    const directMatch = collisionWalls.some(
-      wall => isSamePosition(wall.position, position) && wall.direction === direction
-    );
-    if (directMatch) return true;
-
-    // 인접 셀에서 반대 방향으로 기록된 같은 벽 확인
-    const adjacent: Position =
-      direction === 'up' ? { row: position.row - 1, col: position.col } :
-      direction === 'down' ? { row: position.row + 1, col: position.col } :
-      direction === 'left' ? { row: position.row, col: position.col - 1 } :
-      { row: position.row, col: position.col + 1 };
-
-    if (adjacent.row < 0 || adjacent.row >= BOARD_SIZE || adjacent.col < 0 || adjacent.col >= BOARD_SIZE) {
-      return false;
-    }
-
-    const opposite: Direction =
-      direction === 'up' ? 'down' : direction === 'down' ? 'up' : direction === 'left' ? 'right' : 'left';
-
-    return collisionWalls.some(
-      wall => isSamePosition(wall.position, adjacent) && wall.direction === opposite
-    );
-  };
-
-  // 미니맵용 간단한 벽 렌더링 - 상대가 부딪힌 벽은 빨간색 흔적으로 표시
-  const renderMinimapObstacles = (position: Position) => {
-    const edge = (direction: Direction, positionClass: string, sizeClass: string) => {
-      const hit = hasCollisionWall(position, direction);
-      const blocked = hasObstacle(position, direction);
-      const itemWallIdx = findItemWallIndex(position, direction);
-      if (!hit && !blocked && itemWallIdx < 0) return null;
-      const color = hit
-        ? 'bg-red-500'
-        : itemWallIdx >= 0
-          ? itemsConsumed?.[itemWallIdx] ? 'bg-slate-400' : 'bg-yellow-500'
-          : 'bg-yellow-500';
-      return (
-        <div
-          className={`absolute ${sizeClass} ${positionClass} ${color}`}
-        ></div>
-      );
-    };
-
-    return (
-      <>
-        {edge('up', 'top-0 left-0', 'w-full h-1')}
-        {edge('down', 'bottom-0 left-0', 'w-full h-1')}
-        {edge('left', 'top-0 left-0', 'w-1 h-full')}
-        {edge('right', 'top-0 right-0', 'w-1 h-full')}
-      </>
-    );
-  };
-
   // 셀 렌더링 함수
   const renderCell = (position: Position) => {
     const cellType = getCellType(position);
@@ -228,7 +170,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
     const isHovered = hoveredCell && isSamePosition(hoveredCell, position);
     
     const cellClasses = `
-      relative ${isMinimapMode ? 'w-6 h-6' : 'w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14'} 
+      relative w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14
       ${cellType === 'empty' || cellType === 'player' ? 'bg-white' : ''}
       ${!readOnly && (gamePhase === GamePhase.SETUP || gamePhase === GamePhase.PLAY) ? 'cursor-pointer' : ''}
       touch-action-none transition-colors duration-300 ease-in-out
@@ -251,18 +193,18 @@ const GameBoard: React.FC<GameBoardProps> = ({
         }}
         onMouseEnter={() => {
           if (isMouseDownRef.current) return; // 마우스 드래그 중에는 이벤트 무시
-          !isMinimapMode && setHoveredCellWithDebounce(position);
+          setHoveredCellWithDebounce(position);
         }}
         onMouseLeave={() => {
           if (isMouseDownRef.current) return; // 마우스 드래그 중에는 이벤트 무시
-          !isMinimapMode && setHoveredCellWithDebounce(null);
+          setHoveredCellWithDebounce(null);
         }}
       >
         {/* 시작점 마커 */}
         {cellType === 'start' && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className={`${isMinimapMode ? 'w-3 h-3' : 'w-6 h-6'} rounded-full bg-green-500 flex items-center justify-center`}>
-              {!isMinimapMode && <span className="text-white font-bold text-xs">S</span>}
+            <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+              <span className="text-white font-bold text-xs">S</span>
             </div>
           </div>
         )}
@@ -270,8 +212,8 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 도착점 마커 */}
         {cellType === 'end' && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className={`${isMinimapMode ? 'w-3 h-3' : 'w-6 h-6'} rounded-full bg-red-500 flex items-center justify-center`}>
-              {!isMinimapMode && <span className="text-white font-bold text-xs">E</span>}
+            <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center">
+              <span className="text-white font-bold text-xs">E</span>
             </div>
           </div>
         )}
@@ -279,7 +221,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 플레이어 오버레이 마커: 플레이어 위치가 해당 셀에 있을 경우 항상 표시 */}
         {isPlayer && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className={`${isMinimapMode ? 'w-3 h-3' : 'w-6 h-6'} rounded-full bg-blue-500 flex items-center justify-center z-20 overflow-hidden ${isMinimapMode ? 'border border-white' : 'border-2 border-white'}`}>
+            <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center z-20 overflow-hidden border-2 border-white">
               {playerPhotoURL ? (
                 <img 
                   src={playerPhotoURL} 
@@ -287,14 +229,14 @@ const GameBoard: React.FC<GameBoardProps> = ({
                   className="w-full h-full object-cover rounded-full"
                 />
               ) : (
-                <span className={`text-white font-bold ${isMinimapMode ? 'text-[6px]' : 'text-xs'}`}>P</span>
+                <span className="text-white font-bold text-xs">P</span>
               )}
             </div>
           </div>
         )}
         
         {/* 호버 시 시작점/도착점 미리보기 */}
-        {isHovered && cellType === 'empty' && !isMinimapMode && (
+        {isHovered && cellType === 'empty' && (
           <>
             {selectionMode === 'start' && (
               <div className="absolute inset-0 flex items-center justify-center">
@@ -315,9 +257,6 @@ const GameBoard: React.FC<GameBoardProps> = ({
         
         {/* 아이템 마커 (지뢰/웜홀) */}
         {renderItemCellMarker(position)}
-
-        {/* 미니맵 모드에서만 장애물 표시 (모바일용) */}
-        {isMinimapMode && renderMinimapObstacles(position)}
       </div>
     );
   };
@@ -421,7 +360,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
           const itemWallIdx = findItemWallIndex(position, direction);
           if (itemWallIdx < 0 || !showItemsFully) return null;
           const consumed = !!itemsConsumed?.[itemWallIdx];
-          if (gamePhase === GamePhase.SETUP || isMinimapMode) {
+          if (gamePhase === GamePhase.SETUP) {
             return (
               <div className="absolute inset-0 flex items-center justify-center">
                 <div className={`w-3/4 h-1/2 ${consumed ? 'bg-slate-400/70' : 'bg-yellow-500'}`} />
@@ -545,7 +484,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
           const itemWallIdx = findItemWallIndex(position, direction);
           if (itemWallIdx < 0 || !showItemsFully) return null;
           const consumed = !!itemsConsumed?.[itemWallIdx];
-          if (gamePhase === GamePhase.SETUP || isMinimapMode) {
+          if (gamePhase === GamePhase.SETUP) {
             return (
               <div className="absolute inset-0 flex items-center justify-center">
                 <div className={`w-1/2 h-3/4 ${consumed ? 'bg-slate-400/70' : 'bg-yellow-500'}`} />
@@ -614,40 +553,21 @@ const GameBoard: React.FC<GameBoardProps> = ({
         isMouseDownRef.current = false;
       }}
     >
-      {isMinimapMode ? (
-        // 미니맵 모드일 때는 단순 8x8 그리드
-        <div
-          className="grid gap-0 border-2 border-slate-500 bg-slate-300 p-1 minimap-container rounded-md shadow-md touch-action-none mx-auto"
-          style={{ 
-            gridTemplateColumns: `repeat(${BOARD_SIZE}, 1fr)`,
-            gridTemplateRows: `repeat(${BOARD_SIZE}, 1fr)`
-          }}
-        >
-          {Array.from({ length: BOARD_SIZE }).map((_, row) =>
-            Array.from({ length: BOARD_SIZE }).map((_, col) => {
-              const position = { row, col };
-              return renderCell(position);
-            })
-          )}
-        </div>
-      ) : (
-        // 일반 모드일 때는 셀+벽+교차점을 포함한 그리드
-        <div
-          className="grid gap-0 border-4 border-slate-600 bg-slate-300 p-1 sm:p-2 rounded-xl shadow-xl shadow-black/40 touch-action-none overflow-auto mx-auto"
-          style={{ 
-            gridTemplateColumns: `repeat(${BOARD_SIZE * 2 - 1}, auto)`,
-            gridTemplateRows: `repeat(${BOARD_SIZE * 2 - 1}, auto)`
-          }}
-        >
-          {Array.from({ length: BOARD_SIZE * 2 - 1 }).map((_, row) =>
-            Array.from({ length: BOARD_SIZE * 2 - 1 }).map((_, col) => 
-              renderGridItem(row, col)
-            )
-          )}
-        </div>
-      )}
+      <div
+        className="grid gap-0 border-4 border-slate-600 bg-slate-300 p-1 sm:p-2 rounded-xl shadow-xl shadow-black/40 touch-action-none overflow-auto mx-auto"
+        style={{
+          gridTemplateColumns: `repeat(${BOARD_SIZE * 2 - 1}, auto)`,
+          gridTemplateRows: `repeat(${BOARD_SIZE * 2 - 1}, auto)`
+        }}
+      >
+        {Array.from({ length: BOARD_SIZE * 2 - 1 }).map((_, row) =>
+          Array.from({ length: BOARD_SIZE * 2 - 1 }).map((_, col) =>
+            renderGridItem(row, col)
+          )
+        )}
+      </div>
     </div>
   );
 };
 
-export default GameBoard; 
+export default GameBoard;

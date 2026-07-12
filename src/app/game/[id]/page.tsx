@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getAuth } from 'firebase/auth';
 import { getDatabase, ref, get } from 'firebase/database';
@@ -11,7 +11,6 @@ export default function GamePage({ params }: { params: Promise<{ id: string }> }
   const unwrappedParams = React.use(params);
   const gameId = unwrappedParams.id;
   
-  const [loading, setLoading] = useState(true);
   const router = useRouter();
   
   useEffect(() => {
@@ -47,8 +46,6 @@ export default function GamePage({ params }: { params: Promise<{ id: string }> }
       } catch (error) {
         console.error('게임 페이지 초기화 오류:', error);
         router.push('/rooms');
-      } finally {
-        setLoading(false);
       }
     };
     
@@ -64,4 +61,4 @@ export default function GamePage({ params }: { params: Promise<{ id: string }> }
       </div>
     </div>
   );
-} 
+}

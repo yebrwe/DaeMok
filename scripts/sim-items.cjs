@@ -1,15 +1,18 @@
 /**
  * 아이템 밸런스 몬테카를로 시뮬레이션
  *
- * 앱 규칙 그대로:
- *  - 6x6, 자유 이동, 턴 = 이동 + 벽 충돌 (보드 밖 이동은 턴 미소모라 시뮬 러너는 시도 안 함)
+ * 엄격한 교대 턴 규칙:
+ *  - 6x6, 이동/벽 충돌/탐지기 사용은 각각 정확히 1턴을 소비
+ *    (보드 밖 이동은 무효 입력이라 시뮬 러너는 시도 안 함)
  *  - 러너는 벽/아이템을 모름. "아는 정보"로 BFS 최단 경로를 계획하고 걷다가
  *    부딪히면(+1턴) 그 벽을 기억하고 재계획 (합리적 무정보 러너)
- *  - 지뢰: 밟으면(+1턴) 위치 히스토리 기준 2턴 전 위치로 (1회성)
+ *  - 모든 소비 턴은 턴 종료 위치를 히스토리에 기록. 충돌/탐지기는 제자리 기록
+ *  - 지뢰: 밟으면(+1턴) 전체 턴 히스토리 기준 실제 2턴 전 위치로 (1회성)
  *  - 웜홀: 입구 밟으면(+1턴) 출구로 순간이동 (1회성)
  *  - 1회성 벽: 한 번 막고(+1턴) 소멸. 러너는 일반 벽으로 기억해 영구히 우회
  *    (믿는 그래프가 막히면 그 벽을 다시 시도해 통과 - 인간의 재시도 모델)
- *  - 탐지기: 내 주변 3x3 칸의 벽(위장벽 포함)을 공개. 첫 충돌 직후 사용 전략.
+ *  - 탐지기: 위치를 유지한 채 1턴을 소비해 주변 3x3 칸의 벽(위장벽 포함)을 공개.
+ *    첫 충돌 다음 자기 턴에 사용하는 전략
  *
  * 실행: node scripts/sim-items.cjs [trials]
  */
@@ -140,11 +143,16 @@ function runGame(map, items = {}) {
 
   const { start, end, walls } = map;
   const believed = new Set(); // 러너가 알게 된 벽 (위장벽 포함 - 진짜라고 믿음)
-  const history = [start]; // 성공 이동마다 기록 (지뢰 넉백용)
+  // 시작 위치 + 소비된 각 턴의 종료 위치. 제자리 행동도 중복 위치로 기록한다.
+  const history = [start];
   let pos = start;
   let turns = 0;
-  let bumped = false;
   const consumedFake = new Set();
+
+  const recordTurn = (resolvedPosition) => {
+    turns++;
+    history.push(resolvedPosition);
+  };
 
   const useRadar = () => {
     // 내 주변 3x3 칸의 모든 벽 세그먼트 공개 (위장벽은 일반 벽으로 인식)
@@ -163,6 +171,8 @@ function runGame(map, items = {}) {
       }
     }
     radarLeft--;
+    // 탐지기 사용은 이동 없이 끝나는 별도의 1턴이다.
+    recordTurn(pos);
   };
 
   let safety = 0;
@@ -185,30 +195,27 @@ function runGame(map, items = {}) {
 
     // 진짜 벽 충돌
     if (walls.has(key)) {
-      turns++;
+      recordTurn(pos);
       believed.add(key);
       if (radarLeft > 0) { useRadar(); }
-      bumped = true;
       continue;
     }
     // 위장 1회성 벽: 한 번 막고 소멸, 러너는 일반 벽으로 기억
     if (fakeWalls.has(key) && !consumedFake.has(key)) {
-      turns++;
+      recordTurn(pos);
       believed.add(key);
       consumedFake.add(key);
       if (radarLeft > 0) { useRadar(); }
-      bumped = true;
       continue;
     }
 
     // 이동 성공
-    turns++;
     // 지뢰
     if (mines.has(next)) {
       mines.delete(next);
       const back = history.length >= 2 ? history[history.length - 2] : history[0];
       pos = back;
-      history.push(back);
+      recordTurn(back);
       continue;
     }
     // 웜홀
@@ -216,11 +223,11 @@ function runGame(map, items = {}) {
       const exit = wormholes.get(next);
       wormholes.delete(next);
       pos = exit;
-      history.push(exit);
+      recordTurn(exit);
       continue;
     }
     pos = next;
-    history.push(next);
+    recordTurn(next);
   }
   return turns;
 }

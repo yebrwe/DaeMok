@@ -1,11 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { CollisionWall, GameMap, GamePhase } from '@/types/game';
+import { CollisionWall, GameMap, GamePhase, GameState, Player, Room } from '@/types/game';
 import GameSetup from './GameSetup';
 import GamePlay from './GamePlay';
-import GameBoard from './GameBoard';
-import GameBoard3D from './three/GameBoard3D';
+import LiveBoardGrid, { LiveBoardEntry } from './LiveBoardGrid';
 import { useGameState } from '@/hooks/useFirebase';
 import {
   placeObstacles,
@@ -18,7 +17,7 @@ import {
   getRoomOnlineUsers,
   clearRoomPresence
 } from '@/lib/firebase';
-import { getMapItems } from '@/lib/gameUtils';
+import { getFirstTurnPlayerId, getNextTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
 import { useRouter } from 'next/navigation';
 import { getDatabase, ref, update, get, remove, onValue, serverTimestamp, runTransaction } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
@@ -103,6 +102,13 @@ interface GameRoomProps {
   roomId: string;
 }
 
+interface RoomStat {
+  wins: number;
+  losses: number;
+  draws?: number;
+  displayName?: string;
+}
+
 const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 사용자 상태 확인
   const { verified, error: verifyError } = useVerifyUser(userId);
@@ -114,23 +120,14 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string>('');
   const playersStatus = usePlayersActivity(roomId);
-  const [roomData, setRoomData] = useState<any>(null);
-  // 관전 대상 플레이어 (관전자 전용 - 칩 클릭으로 순환)
-  const [specTarget, setSpecTarget] = useState<string | null>(null);
+  const [roomData, setRoomData] = useState<Room | null>(null);
   const [specViewMode, setSpecViewMode] = useState<'third' | '2d'>('third');
   const promotingRef = useRef(false);
 
   // 관전자 여부: 게임 상태에 플레이어로 등록되어 있지 않으면 관전자
   const amPlayer = !!gameState?.players?.[userId];
   const isSpectator = !!gameState && !amPlayer;
-  const [roomStats, setRoomStats] = useState<{
-    [userId: string]: {
-      wins: number;
-      losses: number;
-      draws?: number;
-      displayName?: string;
-    }
-  }>({});
+  const [roomStats, setRoomStats] = useState<Record<string, RoomStat>>({});
   
   // 방 정보 가져오기
   useEffect(() => {
@@ -171,9 +168,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     
     return () => unsubscribe();
   }, [roomId]);
-  
-  // 플레이어 목록 계산 - null-safe 방식으로 항상 값을 가지도록 함
-  const players = gameState ? Object.values(gameState.players || {}) : [];
   
   // 승자 메시지 함수를 useCallback으로 메모이제이션 (다인전 인식)
   const getWinnerMessage = useCallback(() => {
@@ -252,6 +246,30 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       setOpponentMap(null);
     }
   }, [gameState, userId]);
+
+  // 배포 전 생성된 방처럼 턴 필드가 없거나 탈락자를 가리키는 상태를 한 번 복구한다.
+  useEffect(() => {
+    if (!gameState || gameState.phase !== GamePhase.PLAY) return;
+    const current = gameState.currentTurn ? gameState.players?.[gameState.currentTurn] : null;
+    if (current && !current.finished && !current.forfeited && !current.hasLeft) return;
+
+    const database = getDatabase();
+    runTransaction(ref(database, `rooms/${roomId}/gameState`), (state: GameState | null) => {
+      if (!state || state.phase !== GamePhase.PLAY) return;
+      const activeCurrent = state.currentTurn ? state.players?.[state.currentTurn] : null;
+      if (activeCurrent && !activeCurrent.finished && !activeCurrent.forfeited && !activeCurrent.hasLeft) return;
+
+      const turnOrder = getTurnOrder(state.players || {}, state.turnOrder);
+      const next = getFirstTurnPlayerId(state.players || {}, turnOrder);
+      if (!next) return;
+      state.turnOrder = turnOrder;
+      state.currentTurn = next;
+      state.turnNumber = state.turnNumber || 1;
+      state.turnMessage = `${state.players[next]?.displayName || '플레이어'}의 턴`;
+      state.turnMessageTimestamp = Date.now();
+      return state;
+    }, { applyLocally: false }).catch((error) => console.error('턴 상태 복구 오류:', error));
+  }, [gameState, roomId]);
   
   // 맵 설정 완료 처리
   const handleMapComplete = async (map: GameMap) => {
@@ -275,7 +293,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   
   // 정산: 전원이 완주 또는 포기했으면 "완주자 중 최소 턴"이 우승 (동률 -> 공동 우승 = 무승부)
   // 트랜잭션 내부에서 호출되므로 순수 함수로 유지
-  const settleResult = (players: Record<string, any>): { winner: string | null; draw: boolean | null } | null => {
+  const settleResult = (players: Record<string, Player>): { winner: string | null; draw: boolean | null } | null => {
     const ids = Object.keys(players);
     const allDone = ids.every((id) => players[id]?.finished || players[id]?.forfeited);
     if (!allDone) return null;
@@ -294,7 +312,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     return best.length === 1 ? { winner: best[0], draw: null } : { winner: null, draw: true };
   };
 
-  // 완주 처리 - 자유 이동이라 여러 명이 거의 동시에 완주할 수 있으므로 트랜잭션으로 원자 처리
+  // 완주 처리 - 마지막 이동 트랜잭션에서 기록된 완주 상태를 정산한다.
   const handleGameComplete = async (moves: number) => {
     console.log(`완주! 총 ${moves}턴 소모.`);
 
@@ -302,23 +320,33 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
 
     try {
-      const result = await runTransaction(gameStateRef, (state: any) => {
+      const result = await runTransaction(gameStateRef, (state: GameState | null) => {
         if (!state) return state;
         if (state.phase !== GamePhase.PLAY) return; // 이미 종료됨 - 중단
 
         const players = state.players || {};
-        players[userId] = {
-          ...players[userId],
-          finished: true,
-          finishMoves: moves,
-        };
+        const alreadyFinished = !!players[userId]?.finished;
+        if (!alreadyFinished) {
+          players[userId] = {
+            ...players[userId],
+            finished: true,
+            finishMoves: moves,
+          };
+        }
         state.players = players;
+
+        if (state.currentTurn === userId) {
+          state.currentTurn = getNextTurnPlayerId(players, userId, state.turnOrder);
+        }
 
         const settled = settleResult(players);
         if (settled) {
           state.phase = GamePhase.END;
           state.winner = settled.winner;
           state.draw = settled.draw;
+        } else if (alreadyFinished) {
+          // 이동 트랜잭션이 이미 완주를 기록했으며 아직 정산 시점이 아니므로 추가 PUT을 만들지 않는다.
+          return;
         }
 
         return state;
@@ -341,7 +369,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
 
     try {
-      const result = await runTransaction(gameStateRef, (state: any) => {
+      const result = await runTransaction(gameStateRef, (state: GameState | null) => {
         if (!state) return state;
         if (state.phase !== GamePhase.PLAY) return; // 이미 종료됨
 
@@ -351,6 +379,14 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           forfeited: true,
         };
         state.players = players;
+
+        if (state.currentTurn === userId) {
+          state.currentTurn = getNextTurnPlayerId(players, userId, state.turnOrder);
+          state.turnMessage = state.currentTurn
+            ? `${players[state.currentTurn]?.displayName || '플레이어'}의 턴`
+            : '모든 플레이어의 주행이 끝났습니다.';
+          state.turnMessageTimestamp = Date.now();
+        }
 
         const settled = settleResult(players);
         if (settled) {
@@ -375,32 +411,30 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
 
   // 전적 업데이트 (정산된 최종 상태 기준)
   // 승자 1명: 승자 wins+, 나머지 losses+ / 공동 우승: 동률자 draws+, 나머지 losses+
-  const updateGameStats = async (finalState: any) => {
+  const updateGameStats = async (finalState: GameState) => {
     if (!roomId || !finalState?.players) return;
 
     const database = getDatabase();
     const statsRef = ref(database, `rooms/${roomId}/stats`);
 
     try {
-      const players = finalState.players as Record<string, any>;
+      const players = finalState.players;
       const statsSnapshot = await get(statsRef);
-      const currentStats = statsSnapshot.exists() ? statsSnapshot.val() : {};
-      const updatedStats: any = { ...currentStats };
+      const currentStats = statsSnapshot.exists() ? statsSnapshot.val() as Record<string, RoomStat> : {};
+      const updatedStats: Record<string, RoomStat> = { ...currentStats };
 
       // 공동 우승자 집합 계산 (draw인 경우)
       let tiedWinners = new Set<string>();
       if (finalState.draw) {
-        const finishers = Object.entries(players).filter(
-          ([, p]: [string, any]) => p.finished && !p.forfeited
-        );
+        const finishers = Object.entries(players).filter(([, player]) => player.finished && !player.forfeited);
         if (finishers.length > 0) {
           const minMoves = Math.min(
-            ...finishers.map(([, p]: [string, any]) =>
-              typeof p.finishMoves === 'number' ? p.finishMoves : Number.MAX_SAFE_INTEGER
+            ...finishers.map(([, player]) =>
+              typeof player.finishMoves === 'number' ? player.finishMoves : Number.MAX_SAFE_INTEGER
             )
           );
-          finishers.forEach(([id, p]: [string, any]) => {
-            if (p.finishMoves === minMoves) tiedWinners.add(id);
+          finishers.forEach(([id, player]) => {
+            if (player.finishMoves === minMoves) tiedWinners.add(id);
           });
         } else {
           // 전원 포기 - 모두 무승부 처리
@@ -445,6 +479,10 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 게임 재시작 함수 수정
   const handleRestartGame = async () => {
     if (!roomId || !gameState) return;
+    if (roomData?.createdBy !== userId) {
+      setMessage('방장이 재시작할 때까지 기다려주세요.');
+      return;
+    }
     
     try {
       console.log('게임 재시작 시작, 현재 상태:', {
@@ -471,16 +509,29 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         return;
       }
       
-      // 재시작 정보 기록 (자유 이동 모드 - 선턴 개념 없음, 관련 레거시 필드는 null로 정리)
+      const allPlayers = (currentGameState?.players || {}) as Record<string, Player>;
+      const roomPlayerIds = Array.isArray(roomData?.players)
+        ? roomData.players.filter((id: string) => !!allPlayers[id])
+        : Object.keys(allPlayers).filter((id) => !allPlayers[id]?.hasLeft);
+      const currentPlayers = Object.fromEntries(roomPlayerIds.map((id: string) => [id, allPlayers[id]]));
+      const turnOrder = getTurnOrder(currentPlayers, roomPlayerIds);
+      const preferredStarter = roomData?.createdBy && currentPlayers[roomData.createdBy]
+        ? roomData.createdBy
+        : getFirstTurnPlayerId(currentPlayers, turnOrder);
+
+      // 재시작 정보 기록. 다음 게임도 같은 순서를 유지하고 방장에게 선턴을 준다.
       const restartData = {
         phase: GamePhase.SETUP,
         winner: null,
         draw: null,
-        currentTurn: null,
+        currentTurn: preferredStarter,
+        turnOrder,
+        turnNumber: null,
         maps: null,
         assignments: null,
         collisionWalls: null,
         itemState: null,
+        revealedWallsByPlayer: null,
         turnMessage: null,
         turnMessageTimestamp: null,
         restartedBy: userId,
@@ -489,6 +540,10 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
 
       // Firebase에 업데이트
       await update(gameStateRef, restartData);
+      await update(ref(database, `rooms/${roomId}`), {
+        status: 'waiting',
+        lastActivity: serverTimestamp(),
+      });
       
       // 맵 데이터를 완전히 제거하기 위한 추가 조치
       const mapsRef = ref(database, `rooms/${roomId}/gameState/maps`);
@@ -504,17 +559,21 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       const players = playersSnapshot.val();
       
       if (players) {
-        const updatedPlayers: Record<string, any> = {};
+        const updatedPlayers: Record<string, unknown> = {};
 
         Object.keys(players).forEach(playerId => {
-          updatedPlayers[playerId] = {
-            ...players[playerId],
-            isReady: false,
-            finished: null,   // 완주/포기 상태 초기화 (null이면 RTDB에서 키 제거)
-            finishMoves: null,
-            forfeited: null,
-            moves: null       // 턴 카운터 초기화 (관전자 표시용)
-          };
+          updatedPlayers[playerId] = roomPlayerIds.includes(playerId)
+            ? {
+                ...players[playerId],
+                isReady: false,
+                finished: null,
+                finishMoves: null,
+                forfeited: null,
+                hasLeft: null,
+                moves: null,
+                positionHistory: null,
+              }
+            : null;
         });
 
         await update(playersRef, updatedPlayers);
@@ -900,12 +959,16 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           </div>
           )}
 
-          {/* 진행 상태 표시 (자유 이동 - 각자 자기 속도로 완주) */}
+          {/* 서버가 확정한 현재 턴 */}
           {!isSpectator && gameState.phase === GamePhase.PLAY && (
             me?.finished ? (
               <div className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-400/15 text-purple-300 border border-purple-400/40">관전 중</div>
+            ) : gameState.currentTurn === userId ? (
+              <div className="badge-turn !text-[10px]">내 턴</div>
             ) : (
-              <div className="badge-turn !text-[10px]">진행 중</div>
+              <div className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700 text-slate-200 border border-slate-500">
+                {gameState.players?.[gameState.currentTurn || '']?.displayName?.substring(0, 6) || '상대'} 턴
+              </div>
             )
           )}
 
@@ -954,11 +1017,11 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   };
   
 
-  // 관전자 스테이지 - 플레이 중인 사람의 화면을 그대로 미러링, 칩 클릭으로 대상 전환
+  // 관전자도 한 화면에서 최대 4명의 보드를 동시에 본다.
   const renderSpectatorStage = () => {
     if (!gameState) return null;
     const playersMap = gameState.players || {};
-    const ids = Object.keys(playersMap).sort();
+    const ids = (gameState.turnOrder || Object.keys(playersMap)).filter((id) => !!playersMap[id]).slice(0, 4);
 
     // 재시작 등으로 SETUP이면 다음 게임 대기 (빈자리가 나면 자동 승격됨)
     if (gameState.phase === GamePhase.SETUP || ids.length === 0) {
@@ -978,97 +1041,60 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       );
     }
 
-    const targetId =
-      specTarget && playersMap[specTarget]
-        ? specTarget
-        : (ids.find((id) => !playersMap[id]?.finished && !playersMap[id]?.forfeited) ?? ids[0]);
-    const target = playersMap[targetId];
-    const ownerId = gameState.assignments?.[targetId] ?? null;
-    const map = ownerId ? gameState.maps?.[ownerId] ?? null : null;
+    const collisionList = Object.values(gameState.collisionWalls || {}).filter(Boolean) as CollisionWall[];
+    const pawnColors = ['#3b82f6', '#ef4444', '#22c55e', '#eab308'];
+    const boards: LiveBoardEntry[] = ids.flatMap((runnerId, index) => {
+      const runner = playersMap[runnerId];
+      const ownerId = gameState.assignments?.[runnerId];
+      const runnerMap = ownerId ? gameState.maps?.[ownerId] : null;
+      if (!runner || !ownerId || !runnerMap) return [];
 
-    if (!map || !target) {
-      return (
-        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950">
-          <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-        </div>
-      );
-    }
+      const consumedRaw = gameState.itemState?.[ownerId]?.consumed;
+      const consumed = consumedRaw === true
+        ? { 0: true }
+        : consumedRaw && typeof consumedRaw === 'object'
+          ? consumedRaw
+          : {};
 
-    // 대상이 부딪힌 벽만 - 플레이어 본인이 보는 화면과 동일 (숨은 벽은 종료 공개 전까지 안 보임)
-    const collisions = (Object.values(gameState.collisionWalls || {}) as CollisionWall[]).filter(
-      (w) => w?.playerId === targetId
-    );
-    const mapItems = getMapItems(map);
-    const consumedRaw = ownerId ? gameState.itemState?.[ownerId]?.consumed : null;
-    const consumedMap: Record<number, boolean> =
-      consumedRaw && typeof consumedRaw === 'object' ? consumedRaw : consumedRaw === true ? { 0: true } : {};
-    const reveal = gameState.phase === GamePhase.END;
-    const liveMoves = typeof target.moves === 'number' ? target.moves : 0;
-    const celebrating = !!target.finished && !target.forfeited;
+      return [{
+        runnerId,
+        runnerName: runner.displayName || `플레이어 ${index + 1}`,
+        runnerPhotoURL: runner.photoURL || null,
+        mapOwnerId: ownerId,
+        mapOwnerName: playersMap[ownerId]?.displayName || null,
+        map: runnerMap,
+        position: runner.position || runnerMap.startPosition,
+        moves: runner.moves || 0,
+        finished: !!runner.finished,
+        finishMoves: runner.finishMoves ?? null,
+        forfeited: !!runner.forfeited,
+        collisions: collisionList.filter(
+          (wall) => wall.playerId === runnerId && wall.mapOwnerId === ownerId
+        ),
+        itemsConsumed: consumed,
+        revealedWalls: gameState.revealedWallsByPlayer?.[runnerId] || [],
+        celebrating: !!runner.finished && !runner.forfeited,
+        revealObstacles: !!runner.finished,
+        pawnColor: pawnColors[index],
+      }];
+    });
 
     return (
       <div className="absolute inset-0 overflow-hidden">
-        {specViewMode === 'third' ? (
-          <GameBoard3D
-            gamePhase={GamePhase.PLAY}
-            startPosition={map.startPosition}
-            endPosition={map.endPosition}
-            playerPosition={target.position}
-            obstacles={map.obstacles}
-            collisionWalls={collisions}
-            readOnly
-            revealObstacles={reveal}
-            items={mapItems}
-            itemsConsumed={consumedMap}
-            celebrating={celebrating}
-            fullscreen
-          />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center overflow-auto py-24 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950">
-            <GameBoard
-              gamePhase={GamePhase.PLAY}
-              startPosition={map.startPosition}
-              endPosition={map.endPosition}
-              playerPosition={target.position}
-              obstacles={map.obstacles}
-              collisionWalls={collisions}
-              readOnly
-              playerPhotoURL={target.photoURL || undefined}
-              revealObstacles={reveal}
-              items={mapItems}
-              itemsConsumed={consumedMap}
-            />
-          </div>
-        )}
+        <LiveBoardGrid
+          boards={boards}
+          currentTurnId={gameState.currentTurn}
+          viewMode={specViewMode}
+          gameEnded={gameState.phase === GamePhase.END}
+          className="absolute inset-0 px-2 pb-2 pt-12"
+          emptyState={<span className="text-sm text-slate-400">보드 동기화 중</span>}
+        />
 
-        {/* 관전 HUD - 플레이어 칩 (클릭으로 관전 대상 전환) + 시점 토글 */}
-        <div className="absolute top-2 inset-x-0 z-20 px-2">
-          <div className="max-w-2xl mx-auto flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {ids.map((pid) => {
-                const p = playersMap[pid];
-                const selected = pid === targetId;
-                const statusText = p?.forfeited
-                  ? '포기'
-                  : p?.finished
-                    ? `${p?.finishMoves ?? '?'}턴 ✓`
-                    : `${typeof p?.moves === 'number' ? p.moves : 0}턴`;
-                return (
-                  <button
-                    key={pid}
-                    onClick={() => setSpecTarget(pid)}
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-bold border backdrop-blur-sm transition-colors ${
-                      selected
-                        ? 'bg-amber-400 text-slate-900 border-amber-400'
-                        : 'bg-slate-900/70 text-slate-300 border-slate-600/60 hover:border-amber-400/50'
-                    }`}
-                  >
-                    {p?.displayName?.substring(0, 6) || '플레이어'} · {statusText}
-                  </button>
-                );
-              })}
+        <div className="absolute inset-x-0 top-2 z-20 px-2">
+          <div className="mx-auto flex max-w-2xl items-center justify-between gap-2">
+            <div className="rounded bg-purple-500/20 px-2 py-1 text-[11px] font-bold text-purple-100 backdrop-blur-sm">
+              관전 중 · TURN {gameState.turnNumber || 1}
             </div>
-
             <div className="flex rounded-xl overflow-hidden border border-slate-600/60 backdrop-blur-sm">
               {(['third', '2d'] as const).map((m) => (
                 <button
@@ -1082,14 +1108,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                 </button>
               ))}
             </div>
-          </div>
-        </div>
-
-        {/* 관전 대상 안내 배너 */}
-        <div className="absolute top-[46px] left-1/2 -translate-x-1/2 z-20 pointer-events-none">
-          <div className="text-[11px] px-3 py-1 rounded-full bg-purple-500/20 border border-purple-400/50 text-purple-100 backdrop-blur-sm whitespace-nowrap">
-            👁 {target.displayName?.substring(0, 8) || '플레이어'} 관전 중
-            {target.forfeited ? ' · 포기함' : target.finished ? ` · ${target.finishMoves ?? '?'}턴 완주` : ` · 이동: ${liveMoves}`}
           </div>
         </div>
       </div>
@@ -1123,6 +1141,20 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               onClick={() => window.location.href = '/login'}
             >
               로그인 페이지로 이동
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (error) {
+      return (
+        <div className="flex items-center justify-center h-screen">
+          <div className="text-center p-8 game-panel !border-red-500/40">
+            <h2 className="text-xl font-bold mb-3 text-red-400">게임방 오류</h2>
+            <p className="text-slate-300 text-sm">{error}</p>
+            <button className="btn-game mt-5 px-6 py-2 text-sm" onClick={() => router.push('/rooms')}>
+              로비로 이동
             </button>
           </div>
         </div>
@@ -1227,6 +1259,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               onGameComplete={handleGameComplete}
               userId={userId}
               roomId={roomId}
+              gameState={gameState}
               myMap={myMap || undefined}
               gameEnded={gameState.phase === GamePhase.END}
               myFinished={!!gameState.players?.[userId]?.finished}
@@ -1242,12 +1275,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                 return counts.length > 0 ? Math.min(...counts) : null;
               })()}
               onForfeit={handleForfeit}
-              mapOwnerId={gameState.assignments?.[userId] ?? null}
-              myMapRunnerId={
-                Object.entries(gameState.assignments ?? {}).find(
-                  ([, ownerId]) => ownerId === userId
-                )?.[0] ?? null
-              }
               othersInfo={Object.entries(gameState.players || {})
                 .filter(([id]) => id !== userId)
                 .map(([id, p]) => ({
@@ -1316,9 +1343,13 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                   </button>
                 ) : (
                   <div className="flex gap-1.5">
-                    <button className="btn-game px-5 py-1.5 text-xs" onClick={handleRestartGame}>
-                      재시작
-                    </button>
+                    {roomData?.createdBy === userId ? (
+                      <button className="btn-game px-5 py-1.5 text-xs" onClick={handleRestartGame}>
+                        재시작
+                      </button>
+                    ) : (
+                      <span className="px-3 py-1.5 text-xs text-slate-400">방장 재시작 대기</span>
+                    )}
                     <button className="btn-sub px-4 py-1.5 text-xs" onClick={handleLeaveWithConfirm}>
                       나가기
                     </button>

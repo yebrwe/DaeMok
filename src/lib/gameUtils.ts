@@ -1,4 +1,4 @@
-import { Direction, GameMap, ItemType, MapItem, Obstacle, Position } from '@/types/game';
+import { Direction, GameMap, ItemType, MapItem, Obstacle, Player, Position } from '@/types/game';
 
 // 보드 크기 상수
 export const BOARD_SIZE = 6;
@@ -20,6 +20,46 @@ export const ITEM_LABELS: Record<ItemType, string> = {
   wormhole: '웜홀',
   radar: '탐지기',
 };
+
+export function isTurnEligible(player: Player | null | undefined): boolean {
+  return !!player && !player.finished && !player.forfeited && !player.hasLeft;
+}
+
+export function getTurnOrder(
+  players: Record<string, Player>,
+  preferredOrder?: string[] | null
+): string[] {
+  const playerIds = Object.keys(players);
+  const known = new Set(playerIds);
+  const ordered = (preferredOrder || []).filter(
+    (id, index, ids) => known.has(id) && ids.indexOf(id) === index
+  );
+  const missing = playerIds.filter((id) => !ordered.includes(id)).sort();
+  return [...ordered, ...missing];
+}
+
+export function getFirstTurnPlayerId(
+  players: Record<string, Player>,
+  preferredOrder?: string[] | null
+): string | null {
+  return getTurnOrder(players, preferredOrder).find((id) => isTurnEligible(players[id])) ?? null;
+}
+
+export function getNextTurnPlayerId(
+  players: Record<string, Player>,
+  currentPlayerId: string | null | undefined,
+  preferredOrder?: string[] | null
+): string | null {
+  const order = getTurnOrder(players, preferredOrder);
+  if (order.length === 0) return null;
+
+  const currentIndex = currentPlayerId ? order.indexOf(currentPlayerId) : -1;
+  for (let offset = 1; offset <= order.length; offset += 1) {
+    const candidate = order[(currentIndex + offset + order.length) % order.length];
+    if (isTurnEligible(players[candidate])) return candidate;
+  }
+  return null;
+}
 
 // 두 (위치, 방향) 쌍이 같은 벽 세그먼트를 가리키는지 확인
 // 예: (2,3)의 'right'와 (2,4)의 'left'는 같은 벽
@@ -185,4 +225,4 @@ export function isValidMap(map: GameMap): boolean {
     map.endPosition,
     map.obstacles
   );
-} 
+}

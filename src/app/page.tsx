@@ -3,7 +3,6 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
-import Image from 'next/image';
 
 export default function Home() {
   const { user, loading } = useAuth();

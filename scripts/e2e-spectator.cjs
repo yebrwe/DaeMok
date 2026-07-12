@@ -10,10 +10,11 @@
  *
  * 검증 시나리오:
  *   A, B 로그인 -> 2인 방 생성/참가 -> 게임 시작 (게임 중 상태)
- *   C 로그인 -> 로비에서 '👁 관전하기' -> 관전 모드 진입 (플레이어 칩 2개)
- *   A가 이동 -> C의 관전 화면에 A의 이동 수 실시간 반영
- *   C가 칩 클릭으로 B 관전 전환 -> B 시점 표시
- *   A 완주 / B 포기 -> C에게 결과 카드 (관전자 문구, 재시작 버튼 없음)
+ *   C 로그인 -> 로비에서 관전하기 -> 관전 모드 진입
+ *   참가자/관전자 모두 동시 보드 2개, 레거시 미니맵 부재 확인
+ *   B의 대기 입력 무효 -> A 이동 -> C의 관전 화면에 A의 턴 수 실시간 반영
+ *   B 행동도 C의 두 번째 보드에 실시간 반영
+ *   B 행동으로 A에게 턴 교대 -> A 완주 / B 포기 -> C에게 결과 카드
  *   플레이어 재시작 -> C는 정원(2/2) 가득이라 관전 대기 유지
  *   C 나가기 -> 로비 복귀 (게임에 영향 없음 확인: A/B는 맵 제작 화면 유지)
  *   A(방장) 나가기 -> 방 삭제 -> B 리디렉션
@@ -45,6 +46,63 @@ function ok(msg) { console.log('  OK:', msg); }
 async function expectText(page, text, timeout = 20000) {
   await page.getByText(text, { exact: false }).first().waitFor({ state: 'visible', timeout });
   ok(`saw: ${JSON.stringify(text)}`);
+}
+
+async function expectPlayerBoardCount(page, expected, timeout = 20000) {
+  const boards = page.locator('[data-player-board]');
+  await boards.nth(expected - 1).waitFor({ state: 'visible', timeout });
+  await page.waitForTimeout(100);
+  const count = await boards.count();
+  if (count !== expected) {
+    throw new Error(`플레이어 보드 수 불일치: expected=${expected}, actual=${count}`);
+  }
+  if (count > 4) throw new Error(`동시 보드가 최대 4개를 초과함: ${count}`);
+  ok(`player boards: ${count}`);
+}
+
+async function expectNoLegacyMinimap(page) {
+  const legacyLabels = await page.getByText(/내 맵 \(/).count();
+  const legacyNodes = await page.locator('[data-player-minimap]').count();
+  if (legacyLabels > 0 || legacyNodes > 0) {
+    throw new Error(`레거시 미니맵이 남아 있음: labels=${legacyLabels}, nodes=${legacyNodes}`);
+  }
+  ok('legacy minimap absent');
+}
+
+async function expectMyBoardTurns(page, expected, timeout = 20000) {
+  const myBoard = page.locator('[data-player-board][data-my-player="true"]');
+  await myBoard.waitFor({ state: 'visible', timeout });
+  await myBoard.getByText(new RegExp(`(?:턴|이동):\\s*${expected}(?:\\D|$)`)).first()
+    .waitFor({ state: 'visible', timeout });
+  await page.getByText(`턴: ${expected}`, { exact: true }).first()
+    .waitFor({ state: 'visible', timeout });
+  ok(`my turns: ${expected}`);
+}
+
+async function expectNamedBoardTurns(page, name, expected, timeout = 20000) {
+  const board = page.getByRole('region', { name: `${name} 게임 보드`, exact: true });
+  await board.waitFor({ state: 'visible', timeout });
+  await board.getByText(new RegExp(`(?:턴|이동):\\s*${expected}(?:\\D|$)`)).first()
+    .waitFor({ state: 'visible', timeout });
+  ok(`${name} board turns: ${expected}`);
+}
+
+async function getMyBoardTurns(page) {
+  const text = await page.locator('[data-player-board][data-my-player="true"]').innerText();
+  const match = text.match(/(?:턴|이동):\s*(\d+)/);
+  if (!match) throw new Error(`내 보드에서 턴 수를 찾지 못함: ${JSON.stringify(text)}`);
+  return Number(match[1]);
+}
+
+async function expectWaitingInputIgnored(page, key, expectedTurns) {
+  const before = await getMyBoardTurns(page);
+  await page.keyboard.press(key);
+  await page.waitForTimeout(500);
+  const after = await getMyBoardTurns(page);
+  if (before !== expectedTurns || after !== expectedTurns) {
+    throw new Error(`대기 입력이 턴을 변경함: before=${before}, after=${after}, expected=${expectedTurns}`);
+  }
+  ok(`waiting input ignored (${key}, turns=${expectedTurns})`);
 }
 
 async function signInWithFakeGoogle(page, acc) {
@@ -125,9 +183,15 @@ async function setupMap(page) {
 
     await expectText(pageA, '모두 준비되었습니다');
     await pageA.getByRole('button', { name: '게임 시작' }).click();
-    await expectText(pageA, '이동: 0');
-    await expectText(pageB, '이동: 0');
-    ok('게임 시작됨 (2인전 진행 중)');
+    await expectMyBoardTurns(pageA, 0);
+    await expectMyBoardTurns(pageB, 0);
+    await expectPlayerBoardCount(pageA, 2);
+    await expectPlayerBoardCount(pageB, 2);
+    await expectNoLegacyMinimap(pageA);
+    await expectNoLegacyMinimap(pageB);
+    await expectText(pageA, '내 턴');
+    await expectText(pageB, `${ACCOUNTS.a.name} 턴`);
+    ok('게임 시작됨 (엄격 교대 2인전 + 동시 보드 2개)');
 
     step('2: C 로그인 -> 로비에 게임중 방이 관전 가능으로 표시');
     await signInWithFakeGoogle(pageC, ACCOUNTS.c);
@@ -138,34 +202,37 @@ async function setupMap(page) {
     await watchBtn.waitFor({ timeout: 20000 });
     ok('게임중 배지 + 관전하기 버튼 표시');
 
-    step('3: C 관전 입장 -> 관전 모드 HUD (플레이어 칩 2개)');
+    step('3: C 관전 입장 -> 관전 HUD + 동시 보드 2개');
     await watchBtn.click();
     await pageC.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
     await expectText(pageC, '관전 모드');
     await expectText(pageC, '관전 중');
-    const chipA = pageC.getByRole('button', { name: new RegExp(ACCOUNTS.a.name.substring(0, 5)) }).first();
-    const chipB = pageC.getByRole('button', { name: new RegExp(ACCOUNTS.b.name.substring(0, 5)) }).first();
-    await chipA.waitFor({ timeout: 15000 });
-    await chipB.waitFor({ timeout: 15000 });
-    ok('플레이어 칩 2개 (PlayA/PlayB)');
+    await expectPlayerBoardCount(pageC, 2);
+    await expectNoLegacyMinimap(pageC);
+    await expectNamedBoardTurns(pageC, ACCOUNTS.a.name, 0);
+    await expectNamedBoardTurns(pageC, ACCOUNTS.b.name, 0);
+    ok('동시 보드 2개 (PlayA/PlayB)');
 
-    step('4: A가 1칸 이동 -> C 관전 화면에 이동 수 실시간 반영');
-    await chipA.click();
-    await expectText(pageC, `${ACCOUNTS.a.name.substring(0, 8)} 관전 중`);
+    step('4: B 대기 입력 무효 -> A 1칸 이동 -> C 보드에 턴 수 실시간 반영');
+    await expectWaitingInputIgnored(pageB, 'ArrowRight', 0);
     await pageA.keyboard.press('ArrowRight');
-    await expectText(pageA, '이동: 1');
-    await expectText(pageC, '이동: 1'); // 관전 배너의 실시간 카운터
+    await expectMyBoardTurns(pageA, 1);
+    await expectText(pageB, '내 턴');
+    await expectNamedBoardTurns(pageC, ACCOUNTS.a.name, 1);
     await pageC.screenshot({ path: path.join(OUT, 'spectator-watching.png') });
-    ok('A의 이동이 관전자 화면에 동기화됨');
+    ok('A의 턴이 관전자 동시 보드에 동기화됨');
 
-    step('5: C가 칩 클릭으로 B 관전 전환');
-    await chipB.click();
-    await expectText(pageC, `${ACCOUNTS.b.name.substring(0, 8)} 관전 중`);
-    ok('관전 대상 전환 (B)');
+    step('5: B 행동도 C의 두 번째 보드에 반영되고 A에게 교대');
+    await pageB.keyboard.press('ArrowDown');
+    await expectMyBoardTurns(pageB, 1);
+    await expectNamedBoardTurns(pageC, ACCOUNTS.b.name, 1);
+    await expectText(pageA, '내 턴');
+    ok('B 보드 동기화 및 B -> A 턴 교대');
 
-    step('6: A 완주 + B 포기 -> C에게 제3자 결과 카드 (재시작 버튼 없음)');
+    step('6: A 완주 후 B로 skip + B 포기 -> C에게 제3자 결과 카드');
     await pageA.keyboard.press('ArrowRight'); // 2턴 완주
-    await expectText(pageA, '축하합니다');
+    await expectText(pageA, '턴으로 완주했습니다');
+    await expectText(pageB, '내 턴');
     // B: 상대 완주 후 포기 가능
     await expectText(pageB, '포기하기');
     await pageB.getByRole('button', { name: '포기하기' }).click();
@@ -188,7 +255,9 @@ async function setupMap(page) {
     await setupMap(pageB);
     await expectText(pageA, '모두 준비되었습니다');
     await pageA.getByRole('button', { name: '게임 시작' }).click();
-    await expectText(pageA, '이동: 0');
+    await expectMyBoardTurns(pageA, 0);
+    await expectPlayerBoardCount(pageC, 2);
+    await expectNoLegacyMinimap(pageC);
     await expectText(pageC, '관전 중');
     ok('두 번째 게임 자동 관전');
 
@@ -197,7 +266,8 @@ async function setupMap(page) {
     await pageC.waitForURL(/\/rooms$/, { timeout: 20000 });
     // A는 계속 플레이 가능해야 함
     await pageA.keyboard.press('ArrowRight');
-    await expectText(pageA, '이동: 1');
+    await expectMyBoardTurns(pageA, 1);
+    await expectText(pageB, '내 턴');
     ok('관전자 퇴장이 게임에 영향 없음');
 
     step('10: A(방장) 나가기 -> 방 삭제 -> B 리디렉션');

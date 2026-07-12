@@ -273,7 +273,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       setObstacles(updatedObstacles);
     } else {
       // 새 장애물 배열 생성
-      let newObstacles = [...obstacles];
+      const newObstacles = [...obstacles];
       
       // 인접 셀의 공유 벽에 이미 장애물이 있는지 확인
       const adjacentObstacleExists = adjacentPosition && oppositeDirection && 
@@ -513,7 +513,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
                 {lastPlaced === 'oneTimeWall' && '🧱 1회성 벽 배치됨 - 일반 벽처럼 한 번 막고, 다음 시도부터 조용히 통과됩니다.'}
                 {lastPlaced === 'mine' && '💣 지뢰 배치됨 - 상대가 밟으면 2턴 전 위치로 되돌아갑니다.'}
                 {lastPlaced === 'wormhole' && '🌀 웜홀 배치됨 - 입구를 밟으면 출구로 순간이동합니다. (1회성)'}
-                {lastPlaced === 'radar' && '🔍 탐지기 확보됨 - 게임 중 1회, 내 주변 한 칸(대각선 포함)의 벽을 탐지합니다.'}
+                {lastPlaced === 'radar' && '🔍 탐지기 확보됨 - 한 개당 1턴을 사용해 주변 벽을 탐지합니다.'}
               </p>
             )}
           </div>

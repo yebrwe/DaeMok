@@ -10,7 +10,7 @@ export interface UserProfile {
   email?: string | null;
   photoURL: string | null;
   isOnline?: boolean;
-  lastSeen?: any; // 서버 타임스탬프를 저장하기 위한 필드
+  lastSeen?: unknown; // 서버 타임스탬프를 저장하기 위한 필드
 }
 
 // 셀 좌표 타입
@@ -41,15 +41,16 @@ export interface Player {
   hasLeft?: boolean;
   lastPosition?: Position;
   isOnline?: boolean;
-  lastSeen?: any; // serverTimestamp 타입
+  lastSeen?: unknown; // serverTimestamp 타입
   photoURL?: string | null; // 프로필 이미지 URL 추가
   finished?: boolean; // 도착점 골인 여부 (골인 후에는 관전)
   finishMoves?: number; // 완주에 소모한 턴 수 (승패 판정 기준)
   forfeited?: boolean; // 포기 여부
-  moves?: number; // 현재까지 소모한 턴 수 (관전자 표시용, 이동/충돌 시 동기화)
+  moves?: number; // 현재까지 소모한 턴 수 (이동/충돌/액티브 아이템 포함)
+  positionHistory?: Position[]; // 지뢰 효과 계산용 턴 종료 위치 기록
 }
 
-// 맵 아이템 타입 (게임당 1개, 벽 예산 소모)
+// 맵 아이템 타입 (벽 예산 안에서 여러 개 배치 가능)
 export type ItemType = 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
 
 export interface MapItem {
@@ -59,10 +60,10 @@ export interface MapItem {
   wallDirection?: Direction;
   // mine: 밟으면 2턴 전 위치로 되돌아감 (벽 3개 소모)
   position?: Position;
-  // wormhole: 입구를 밟으면 출구로 순간이동, 1회성 (벽 5개 소모)
+  // wormhole: 입구를 밟으면 출구로 순간이동, 1회성 (벽 7개 소모)
   entrance?: Position;
   exit?: Position;
-  // radar: 배치 불필요 - 게임 중 1회 사용해 내 주변 3x3의 벽을 탐지 (벽 3개 소모)
+  // radar: 한 개당 1턴을 사용해 내 주변 3x3의 벽을 탐지 (벽 5개 소모)
 }
 
 // 게임 맵 타입
@@ -88,7 +89,7 @@ export interface CollisionWall {
 export interface ItemStateEntry {
   consumed?: Record<number, boolean> | boolean;
   type?: ItemType;
-  consumedAt?: any;
+  consumedAt?: unknown;
 }
 
 // 게임 상태 타입
@@ -99,12 +100,15 @@ export interface GameState {
   // 순환 릴레이 맵 배정: { 달리는 사람 uid: 그가 달리는 맵의 주인 uid }
   assignments?: Record<string, string>;
   currentTurn?: string | null;
+  turnOrder?: string[];
+  turnNumber?: number;
   winner?: string | null;
   draw?: boolean; // 최소 턴 동률 -> 무승부(공동 우승)
-  collisionWalls?: any[];
+  collisionWalls?: Record<string, CollisionWall> | CollisionWall[];
   itemState?: Record<string, ItemStateEntry>;
+  revealedWallsByPlayer?: Record<string, Obstacle[]>;
   turnMessage?: string;
-  turnMessageTimestamp?: any;
+  turnMessageTimestamp?: unknown;
 }
 
 // 게임 방 타입
@@ -119,17 +123,3 @@ export interface Room {
   status?: 'waiting' | 'playing' | 'ended';
   lastActivity?: number | null;
 }
-
-// 실시간 이벤트 타입
-export enum SocketEvents {
-  JOIN_ROOM = 'join_room',
-  LEAVE_ROOM = 'leave_room',
-  CREATE_ROOM = 'create_room',
-  PLAYER_READY = 'player_ready',
-  GAME_START = 'game_start',
-  PLACE_OBSTACLE = 'place_obstacle',
-  MOVE_PLAYER = 'move_player',
-  GAME_END = 'game_end',
-  ROOM_UPDATED = 'room_updated',
-  ERROR = 'error'
-} 

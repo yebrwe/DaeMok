@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
-import { Canvas, useFrame, ThreeEvent } from '@react-three/fiber';
+import { Canvas, useFrame, useThree, ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { CollisionWall, Direction, GamePhase, MapItem, Obstacle, Position } from '@/types/game';
@@ -883,7 +883,7 @@ function WormholeVisual({ entrance, exit, consumed }: { entrance: Position; exit
 }
 
 // ===== 보드 내용물 =====
-interface GameBoard3DProps {
+export interface GameBoard3DProps {
   gamePhase: GamePhase;
   startPosition?: Position;
   endPosition?: Position;
@@ -906,9 +906,31 @@ interface GameBoard3DProps {
   celebrating?: boolean; // 골인 세리머니
   fullscreen?: boolean;
   heightClassName?: string;
+  compact?: boolean; // 동시 보드용 저비용 렌더링
 }
 
-function BoardContents({
+function CompactBoardCamera({ enabled }: { enabled: boolean }) {
+  const { camera, size } = useThree();
+
+  useEffect(() => {
+    if (!enabled || !(camera instanceof THREE.PerspectiveCamera)) return;
+
+    // 2x2 타일에서는 시점을 더 높이고, 세로로 긴 모바일 칸은 거리를 늘린다.
+    const aspect = size.width / Math.max(size.height, 1);
+    const distanceScale = Math.min(2.4, Math.max(1, 0.92 / Math.max(aspect, 0.4)));
+    camera.position.set(
+      CENTER,
+      SPAN * 2.1 * distanceScale,
+      CENTER + SPAN * 1.1 * distanceScale
+    );
+    camera.lookAt(CENTER, 0, CENTER);
+    camera.updateProjectionMatrix();
+  }, [camera, enabled, size.height, size.width]);
+
+  return null;
+}
+
+const BoardContents: React.FC<GameBoard3DProps> = ({
   gamePhase,
   startPosition,
   endPosition,
@@ -929,48 +951,27 @@ function BoardContents({
   fx = null,
   pawnVia = null,
   celebrating = false,
-}: GameBoard3DProps) {
+}) => {
   const isSetup = gamePhase === GamePhase.SETUP;
 
-  const obstacleSegments = useMemo(
-    () => dedupeSegments(obstacles || []),
-    [obstacles]
-  );
-
-  const collisionSegments = useMemo(
-    () => dedupeSegments(collisionWalls || []),
-    [collisionWalls]
-  );
-
-  const radarSegments = useMemo(
-    () => dedupeSegments(revealedWalls || []),
-    [revealedWalls]
-  );
-
-  const collisionKeys = useMemo(
-    () => new Set(collisionSegments.map(segmentKey)),
-    [collisionSegments]
-  );
-
-  const allSlots = useMemo(() => {
-    const slots: WallSegment[] = [];
-    for (let r = 0; r < BOARD_SIZE - 1; r++)
-      for (let c = 0; c < BOARD_SIZE; c++) slots.push({ type: 'H', row: r, col: c });
-    for (let r = 0; r < BOARD_SIZE; r++)
-      for (let c = 0; c < BOARD_SIZE - 1; c++) slots.push({ type: 'V', row: r, col: c });
-    return slots;
-  }, []);
-
-  const occupiedKeys = useMemo(() => {
-    const keys = new Set(obstacleSegments.map(segmentKey));
-    (items || []).forEach((it) => {
-      if (it.type === 'oneTimeWall' && it.wallPosition && it.wallDirection) {
-        const seg = obstacleToSegment(it.wallPosition, it.wallDirection);
-        if (seg) keys.add(segmentKey(seg));
-      }
-    });
-    return keys;
-  }, [obstacleSegments, items]);
+  const obstacleSegments = dedupeSegments(obstacles || []);
+  const collisionSegments = dedupeSegments(collisionWalls || []);
+  const radarSegments = dedupeSegments(revealedWalls || []);
+  const collisionKeys = new Set(collisionSegments.map(segmentKey));
+  const allSlots: WallSegment[] = [];
+  for (let row = 0; row < BOARD_SIZE - 1; row += 1) {
+    for (let col = 0; col < BOARD_SIZE; col += 1) allSlots.push({ type: 'H', row, col });
+  }
+  for (let row = 0; row < BOARD_SIZE; row += 1) {
+    for (let col = 0; col < BOARD_SIZE - 1; col += 1) allSlots.push({ type: 'V', row, col });
+  }
+  const occupiedKeys = new Set(obstacleSegments.map(segmentKey));
+  (items || []).forEach((item) => {
+    if (item.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
+      const segment = obstacleToSegment(item.wallPosition, item.wallDirection);
+      if (segment) occupiedKeys.add(segmentKey(segment));
+    }
+  });
 
   const tiles = [];
   for (let row = 0; row < BOARD_SIZE; row++) {
@@ -1069,11 +1070,15 @@ function BoardContents({
       )}
     </group>
   );
-}
+};
 
 // ===== 메인 컴포넌트 (Canvas 래퍼) =====
 const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
-  const { heightClassName = 'h-[340px] sm:h-[420px] md:h-[460px]', fullscreen = false } = props;
+  const {
+    heightClassName = 'h-[340px] sm:h-[420px] md:h-[460px]',
+    fullscreen = false,
+    compact = false,
+  } = props;
 
   useEffect(() => {
     return () => {
@@ -1090,16 +1095,18 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
       }
     >
       <Canvas
-        shadows
-        dpr={[1, 2]}
+        shadows={!compact}
+        dpr={compact ? [1, 1.25] : [1, 2]}
         camera={{ position: TP_CAMERA_POS, fov: 42 }}
       >
+        <CompactBoardCamera enabled={compact} />
+
         {/* 조명 */}
         <ambientLight intensity={0.75} />
         <directionalLight
           position={[CENTER + 6, 10, CENTER - 5]}
           intensity={1.2}
-          castShadow
+          castShadow={!compact}
           shadow-mapSize-width={1024}
           shadow-mapSize-height={1024}
           shadow-camera-left={-8}
@@ -1111,13 +1118,15 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
 
         <BoardContents {...props} />
 
-        <OrbitControls
-          makeDefault
-          target={[CENTER, 0, CENTER]}
-          enablePan={false}
-          enableZoom={false}
-          maxPolarAngle={Math.PI * 0.44}
-        />
+        {!compact && (
+          <OrbitControls
+            makeDefault
+            target={[CENTER, 0, CENTER]}
+            enablePan={false}
+            enableZoom={false}
+            maxPolarAngle={Math.PI * 0.44}
+          />
+        )}
       </Canvas>
     </div>
   );

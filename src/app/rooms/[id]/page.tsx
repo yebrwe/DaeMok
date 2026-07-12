@@ -19,7 +19,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const [retryCount, setRetryCount] = useState(0);
   const [authVerified, setAuthVerified] = useState(false);
   
-  const { isConnected, error } = useRoomPresence(
+  const { error } = useRoomPresence(
     authVerified ? user?.uid || '' : '', 
     authVerified ? roomId : ''
   );
@@ -160,4 +160,4 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   }
   
   return <GameRoom userId={userId} roomId={roomId} />;
-} 
+}

@@ -12,14 +12,16 @@
  *   3. NEXT_PUBLIC_FIREBASE_EMULATOR=1 npm run build && npm run start
  *   4. EMULATOR=1 node scripts/e2e-multiplayer.cjs
  *
- * 검증 시나리오 (자유 이동 - 턴 대기 없음, 최종 턴 수 비교로 승부):
+ * 검증 시나리오 (엄격 교대 턴, 최종 개인 턴 수 비교로 승부):
  *   구글 로그인(에뮬레이터 가짜 계정) x2 -> 방 생성/참가 -> 맵 제작 x2 -> 자동 시작
- *   [1게임] 3인칭 기본(1인칭 제거) 확인 -> A 연속 이동 선완주(관전 전환) -> B 헛걸음 -> 승리 불가 안내
- *           -> B 포기 -> A 승리
- *   [2게임] 재시작 -> B 선완주 -> A 동턴 완주 -> 무승부
+ *   [1게임] 동시 보드 2개 확인 -> B의 대기 입력 무효 -> A/B 교대 -> A 선완주
+ *           -> 완주자 턴 건너뜀 -> B 포기 -> A 승리
+ *   [2게임] 재시작 -> A/B 교대 -> 양쪽 2턴 완주 -> 무승부
+ *   [3인전] 동시 보드 3개 확인 -> A/B/C 교대 -> A/B 완주자 건너뜀 -> C 포기
  *   마지막: 방장 나가기 -> 방 즉시 삭제 -> 상대 자동 리디렉션
  */
 const { chromium } = require('playwright');
+const { PNG } = require('playwright-core/lib/utilsBundle');
 const fs = require('fs');
 const path = require('path');
 
@@ -37,6 +39,8 @@ const ROOM_NAME = `e2e테스트-${STAMP % 1000000}`;
 const ACCOUNTS = {
   a: { email: `daemok.e2e.a.${STAMP}@example.com`, name: 'TestA' },
   b: { email: `daemok.e2e.b.${STAMP}@example.com`, name: 'TestB' },
+  c: { email: `daemok.e2e.c.${STAMP}@example.com`, name: 'TestC' },
+  d: { email: `daemok.e2e.d.${STAMP}@example.com`, name: 'TestD' },
 };
 
 function step(msg) { console.log('STEP:', msg); }
@@ -45,6 +49,87 @@ function ok(msg) { console.log('  OK:', msg); }
 async function expectText(page, text, timeout = 20000) {
   await page.getByText(text, { exact: false }).first().waitFor({ state: 'visible', timeout });
   ok(`saw: ${JSON.stringify(text)}`);
+}
+
+async function expectPlayerBoardCount(page, expected, timeout = 20000) {
+  const boards = page.locator('[data-player-board]');
+  await boards.nth(expected - 1).waitFor({ state: 'visible', timeout });
+  await page.waitForTimeout(100);
+  const count = await boards.count();
+  if (count !== expected) {
+    throw new Error(`플레이어 보드 수 불일치: expected=${expected}, actual=${count}`);
+  }
+  if (count > 4) throw new Error(`동시 보드가 최대 4개를 초과함: ${count}`);
+  ok(`player boards: ${count}`);
+}
+
+async function expectNoLegacyMinimap(page) {
+  const legacyLabels = await page.getByText(/내 맵 \(/).count();
+  const legacyNodes = await page.locator('[data-player-minimap]').count();
+  if (legacyLabels > 0 || legacyNodes > 0) {
+    throw new Error(`레거시 미니맵이 남아 있음: labels=${legacyLabels}, nodes=${legacyNodes}`);
+  }
+  ok('legacy minimap absent');
+}
+
+async function expectNonBlankCanvases(page, expected) {
+  await page.waitForTimeout(500);
+  const canvases = page.locator('[data-player-board] canvas');
+  const stats = [];
+  for (let canvasIndex = 0; canvasIndex < await canvases.count(); canvasIndex += 1) {
+    const image = PNG.sync.read(await canvases.nth(canvasIndex).screenshot());
+    const data = image.data;
+    let opaque = 0;
+    let min = 255;
+    let max = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      if (data[index + 3] > 0) opaque += 1;
+      const lightness = Math.round((data[index] + data[index + 1] + data[index + 2]) / 3);
+      min = Math.min(min, lightness);
+      max = Math.max(max, lightness);
+    }
+    stats.push({ opaque, range: max - min });
+  }
+  if (stats.length !== expected || stats.some((stat) => stat.opaque < 100 || stat.range < 15)) {
+    throw new Error(`3D 캔버스가 비었거나 프레임이 잘못됨: ${JSON.stringify(stats)}`);
+  }
+  ok(`nonblank 3D canvases: ${stats.length}`);
+}
+
+async function expectMyBoardTurns(page, expected, timeout = 20000) {
+  const myBoard = page.locator('[data-player-board][data-my-player="true"]');
+  await myBoard.waitFor({ state: 'visible', timeout });
+  await myBoard.getByText(new RegExp(`(?:턴|이동):\\s*${expected}(?:\\D|$)`)).first()
+    .waitFor({ state: 'visible', timeout });
+  await page.getByText(`턴: ${expected}`, { exact: true }).first()
+    .waitFor({ state: 'visible', timeout });
+  ok(`my turns: ${expected}`);
+}
+
+async function getMyBoardTurns(page) {
+  const text = await page.locator('[data-player-board][data-my-player="true"]').innerText();
+  const match = text.match(/(?:턴|이동):\s*(\d+)/);
+  if (!match) throw new Error(`내 보드에서 턴 수를 찾지 못함: ${JSON.stringify(text)}`);
+  return Number(match[1]);
+}
+
+async function expectWaitingInputIgnored(page, key, expectedTurns) {
+  const moveButtons = page.getByRole('button', { name: /^(위|아래|왼쪽|오른쪽)으로 이동$/ });
+  const buttonCount = await moveButtons.count();
+  for (let index = 0; index < buttonCount; index += 1) {
+    if (!(await moveButtons.nth(index).isDisabled())) {
+      throw new Error('대기 중인데 방향 버튼이 활성화되어 있음');
+    }
+  }
+
+  const before = await getMyBoardTurns(page);
+  await page.keyboard.press(key);
+  await page.waitForTimeout(500);
+  const after = await getMyBoardTurns(page);
+  if (before !== expectedTurns || after !== expectedTurns) {
+    throw new Error(`대기 입력이 턴을 변경함: before=${before}, after=${after}, expected=${expectedTurns}`);
+  }
+  ok(`waiting input ignored (${key}, turns=${expectedTurns})`);
 }
 
 // 구글 로그인 - 에뮬레이터의 가짜 계정 팝업을 자동 조작
@@ -147,85 +232,102 @@ async function setupMap(page) {
     await expectText(pageB, '방장이 시작하면 게임이 시작됩니다');
     await expectText(pageA, '모두 준비되었습니다');
     await pageA.getByRole('button', { name: '게임 시작' }).click();
-    await expectText(pageA, '이동: 0');
-    await expectText(pageB, '이동: 0');
+    await expectMyBoardTurns(pageA, 0);
+    await expectMyBoardTurns(pageB, 0);
 
-    step('6: 3인칭이 기본 시점 (1인칭 버튼 제거 확인) + 우측 상단 순위 오버레이');
+    step('6: 3인칭 기본 + 동시 보드 2개 + 레거시 미니맵 부재');
     await pageA.getByRole('button', { name: '3인칭' }).waitFor({ timeout: 10000 });
     const fpCount = await pageA.getByRole('button', { name: '1인칭' }).count();
     if (fpCount > 0) throw new Error('1인칭 버튼이 아직 남아 있음');
+    await expectPlayerBoardCount(pageA, 2);
+    await expectPlayerBoardCount(pageB, 2);
+    await expectNoLegacyMinimap(pageA);
+    await expectNoLegacyMinimap(pageB);
     await expectText(pageA, '/ 2명'); // 실시간 순위 카드 (마리오카트식)
-    ok('3인칭 기본 + 1인칭 제거 + 순위 오버레이');
+    await expectText(pageA, '내 턴');
+    await expectText(pageB, `${ACCOUNTS.a.name} 턴`);
+    ok('3인칭 기본 + 동시 보드 + 턴 HUD 확인');
 
-    step('7: [1게임] 자유 이동 - A가 연속 2번 이동해 즉시 완주 (턴 대기 없음)');
+    step('7: [1게임] B의 대기 입력 무효 -> A/B 한 행동씩 교대');
+    await expectWaitingInputIgnored(pageB, 'ArrowRight', 0);
     await pageA.keyboard.press('ArrowRight');
-    await expectText(pageA, '이동: 1');
+    await expectMyBoardTurns(pageA, 1);
+    await expectText(pageB, '내 턴');
+    await expectWaitingInputIgnored(pageA, 'ArrowRight', 1);
+    await pageB.keyboard.press('ArrowDown');
+    await expectMyBoardTurns(pageB, 1);
+    await expectText(pageA, '내 턴');
+
+    step('8: A가 두 번째 행동으로 선완주 -> B로 턴 이동');
     await pageA.keyboard.press('ArrowRight');
     await expectText(pageA, '턴으로 완주했습니다');
-    ok('A 연속 이동으로 2턴 완주 (자유 이동 확인)');
+    await expectMyBoardTurns(pageA, 2);
+    await expectText(pageB, '내 턴');
+    ok('A 2턴 완주 후 완주자를 건너뛰고 B 턴 유지');
 
-    step('8: A = 관전 모드(승부 미확정), B = 목표 턴 수 + 포기 버튼');
+    step('9: A = 관전 모드(승부 미확정), B = 목표 턴 수 + 포기 버튼');
     await expectText(pageA, '관전 중');
     await pageA.waitForTimeout(1000);
     await pageA.screenshot({ path: `${OUT}/mp-01-A-spectate.png` });
     await expectText(pageB, '상대방이 2턴으로 완주했습니다');
-    await expectText(pageB, '1턴 이내로 완주하면 승리합니다');
+    await expectText(pageB, '다음 이동에 바로 골인하면 무승부입니다');
     await pageB.getByRole('button', { name: '포기하기' }).waitFor({ timeout: 15000 });
     await pageB.screenshot({ path: `${OUT}/mp-02-B-forfeit-option.png` });
 
-    step('9: [probe] B 헛걸음 2번 -> 승리 불가 안내로 전환');
-    await pageB.keyboard.press('ArrowDown');
-    await expectText(pageB, '이동: 1');
+    step('10: B 두 번째 헛걸음 -> A 완주자를 건너뛰어 B가 계속 현재 턴');
     await pageB.keyboard.press('ArrowUp');
-    await expectText(pageB, '이동: 2');
+    await expectMyBoardTurns(pageB, 2);
+    await expectText(pageB, '내 턴');
     await expectText(pageB, '승리할 수 없습니다');
     await pageA.waitForTimeout(800);
     await pageA.screenshot({ path: `${OUT}/mp-03-A-watching-B-move.png` });
 
-    step('10: B 포기 -> A 승리 / B 패배');
+    step('11: B 포기 -> A 승리 / B 패배');
     await pageB.getByRole('button', { name: '포기하기' }).click();
     await expectText(pageA, '승리했습니다! (상대 포기)');
     await expectText(pageB, '포기하여 패배했습니다');
     await pageA.screenshot({ path: `${OUT}/mp-04-A-win.png` });
     await pageB.screenshot({ path: `${OUT}/mp-05-B-forfeit-lose.png` });
 
-    step('11: 재시작 -> 양쪽 모두 맵 제작으로 복귀');
+    step('12: 재시작 -> 양쪽 모두 맵 제작으로 복귀');
     await pageA.getByRole('button', { name: '재시작' }).click();
     await expectText(pageA, '시작점을 선택하세요');
     await expectText(pageB, '시작점을 선택하세요');
 
-    step('12: [2게임] 맵 제작 x2 -> 방장 시작');
+    step('13: [2게임] 맵 제작 x2 -> 방장 시작');
     await setupMap(pageA);
     await setupMap(pageB);
     await expectText(pageA, '모두 준비되었습니다');
     await pageA.getByRole('button', { name: '게임 시작' }).click();
-    await expectText(pageA, '이동: 0');
-    await expectText(pageB, '이동: 0');
+    await expectMyBoardTurns(pageA, 0);
+    await expectMyBoardTurns(pageB, 0);
+    await expectText(pageA, '내 턴');
 
-    step('13: B 2턴 선완주 -> A는 목표/무승부 안내');
-    await pageB.keyboard.press('ArrowRight');
-    await expectText(pageB, '이동: 1');
-    await pageB.keyboard.press('ArrowRight');
-    await expectText(pageB, '턴으로 완주했습니다');
-    await expectText(pageA, '상대방이 2턴으로 완주했습니다');
-    await expectText(pageA, '1턴 이내로 완주하면 승리합니다');
+    step('14: A/B가 오른쪽으로 한 칸씩 엄격 교대');
     await pageA.keyboard.press('ArrowRight');
-    await expectText(pageA, '이동: 1');
-    await expectText(pageA, '다음 이동에 바로 골인하면 무승부입니다');
+    await expectMyBoardTurns(pageA, 1);
+    await expectText(pageB, '내 턴');
+    await pageB.keyboard.press('ArrowRight');
+    await expectMyBoardTurns(pageB, 1);
+    await expectText(pageA, '내 턴');
 
-    step('14: A도 2턴으로 완주 -> 무승부');
+    step('15: A 선완주 후 B로 턴 skip -> B도 2턴 완주해 무승부');
     await pageA.keyboard.press('ArrowRight');
+    await expectText(pageA, '턴으로 완주했습니다');
+    await expectText(pageB, '내 턴');
+    await expectText(pageB, '다음 이동에 바로 골인하면 무승부입니다');
+    await pageB.keyboard.press('ArrowRight');
     await expectText(pageA, '무승부입니다!');
     await expectText(pageB, '무승부입니다!');
     await pageA.screenshot({ path: `${OUT}/mp-07-draw.png` });
 
-    step('15: A(방장) 나가기 -> 방 삭제(방장 권한) -> B 자동 리디렉션');
+    step('16: A(방장) 나가기 -> 방 삭제(방장 권한) -> B 자동 리디렉션');
     await pageA.getByRole('button', { name: '나가기' }).first().click();
     await pageA.waitForURL(/\/rooms$/, { timeout: 20000 });
     await pageB.waitForURL(/\/rooms$/, { timeout: 25000 });
 
     // ============ 3인전 (순환 릴레이) ============
-    step('16: [3인전] C 로그인 + A가 3인 방 생성');
+    step('17: [3인전] C 로그인 + A가 3인 방 생성');
     const ctxC = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const pageC = await ctxC.newPage();
     pageC.on('dialog', (d) => d.accept());
@@ -234,7 +336,7 @@ async function setupMap(page) {
         console.log('[C PERMISSION]', m.text().slice(0, 250));
       }
     });
-    await signInWithFakeGoogle(pageC, { email: `daemok.e2e.c.${STAMP}@example.com`, name: 'TestC' });
+    await signInWithFakeGoogle(pageC, ACCOUNTS.c);
 
     await pageA.getByRole('button', { name: '새 게임 방 만들기' }).click();
     await pageA.fill('#roomName', `${ROOM_NAME}-3p`);
@@ -243,7 +345,7 @@ async function setupMap(page) {
     await pageA.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
     ok('3인 방 생성');
 
-    step('17: B, C 참가 + 전원 맵 제작 -> 방장 시작');
+    step('18: B, C 참가 + 전원 맵 제작 -> 방장 시작');
     for (const pg of [pageB, pageC]) {
       const card3 = pg.locator('[data-room-card]', { hasText: `${ROOM_NAME}-3p` }).first();
       await card3.waitFor({ timeout: 20000 });
@@ -256,40 +358,99 @@ async function setupMap(page) {
     await expectText(pageA, '참가자 (3/3)');
     await expectText(pageA, '모두 준비되었습니다');
     await pageA.getByRole('button', { name: '게임 시작' }).click();
-    await expectText(pageA, '이동: 0');
-    await expectText(pageB, '이동: 0');
-    await expectText(pageC, '이동: 0');
-    ok('3인 게임 시작 (순환 릴레이 배정)');
+    await expectMyBoardTurns(pageA, 0);
+    await expectMyBoardTurns(pageB, 0);
+    await expectMyBoardTurns(pageC, 0);
+    await expectPlayerBoardCount(pageA, 3);
+    await expectPlayerBoardCount(pageB, 3);
+    await expectPlayerBoardCount(pageC, 3);
+    await expectNoLegacyMinimap(pageA);
+    await expectNoLegacyMinimap(pageB);
+    await expectNoLegacyMinimap(pageC);
+    await expectText(pageA, '내 턴');
+    ok('3인 게임 시작 (순환 릴레이 배정 + 동시 보드 3개)');
 
-    step('18: A 2턴 완주 / B 헛걸음 후 4턴 완주 / C에게 목표 안내');
+    step('19: A/B/C 1라운드 엄격 교대');
     await pageA.keyboard.press('ArrowRight');
-    await expectText(pageA, '이동: 1');
+    await expectMyBoardTurns(pageA, 1);
+    await expectText(pageB, '내 턴');
+    await pageB.keyboard.press('ArrowDown');
+    await expectMyBoardTurns(pageB, 1);
+    await expectText(pageC, '내 턴');
+    await pageC.keyboard.press('ArrowDown');
+    await expectMyBoardTurns(pageC, 1);
+    await expectText(pageA, '내 턴');
+
+    step('20: A 2턴 완주 -> B 행동 -> C 현재 턴 포기');
     await pageA.keyboard.press('ArrowRight');
     await expectText(pageA, '턴으로 완주했습니다');
-    await pageB.keyboard.press('ArrowDown');
-    await expectText(pageB, '이동: 1');
+    await expectMyBoardTurns(pageA, 2);
+    await expectText(pageB, '내 턴');
     await pageB.keyboard.press('ArrowUp');
-    await expectText(pageB, '이동: 2');
+    await expectMyBoardTurns(pageB, 2);
+    await expectText(pageC, '내 턴');
+    await expectText(pageC, '상대방이 2턴으로 완주했습니다');
+    await pageC.getByRole('button', { name: '포기하기' }).click();
+    await expectText(pageB, '내 턴');
+    await pageC.locator('[data-player-board][data-my-player="true"]')
+      .getByText('포기', { exact: true }).waitFor({ state: 'visible', timeout: 20000 });
+    ok('A 완주와 C 포기 상태를 모두 건너뛰어 B에게 턴 유지');
+
+    step('21: B만 남아 연속 2행동 후 4턴 완주 -> 최소 턴 A 승리');
     await pageB.keyboard.press('ArrowRight');
-    await expectText(pageB, '이동: 3');
+    await expectMyBoardTurns(pageB, 3);
+    await expectText(pageB, '내 턴');
     await pageB.keyboard.press('ArrowRight'); // 4턴 완주
     await expectText(pageB, '턴으로 완주했습니다');
-    await expectText(pageC, '상대방이 2턴으로 완주했습니다');
-    ok('완주 순서와 무관하게 최소 턴 목표(2턴)가 안내됨');
-
-    step('19: C 포기 -> 정산: A 승리(2턴) / B 패배(4턴) / C 포기 패배');
-    await pageC.getByRole('button', { name: '포기하기' }).click();
     await expectText(pageA, '승리했습니다');
     await expectText(pageB, '패배했습니다');
     await expectText(pageC, '포기하여 패배했습니다');
     await pageA.screenshot({ path: `${OUT}/mp-3p-result-A.png` });
-    ok('3인 정산 정상 (최소 턴 우승)');
+    ok('3인 정산 정상 (완주/포기 skip + 최소 턴 우승)');
 
-    step('20: A(방장) 나가기 -> 방 삭제 -> B, C 자동 리디렉션');
+    step('22: A(방장) 나가기 -> 방 삭제 -> B, C 자동 리디렉션');
     await pageA.getByRole('button', { name: '나가기' }).first().click();
     await pageA.waitForURL(/\/rooms$/, { timeout: 20000 });
     await pageB.waitForURL(/\/rooms$/, { timeout: 25000 });
     await pageC.waitForURL(/\/rooms$/, { timeout: 25000 });
+
+    step('23: [4인 화면] D 로그인 + 4인 방 생성/참가');
+    const ctxD = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const pageD = await ctxD.newPage();
+    await signInWithFakeGoogle(pageD, ACCOUNTS.d);
+    await pageA.getByRole('button', { name: '새 게임 방 만들기' }).click();
+    await pageA.fill('#roomName', `${ROOM_NAME}-4p`);
+    await pageA.getByRole('button', { name: '4명', exact: true }).click();
+    await pageA.getByRole('button', { name: '방 만들기' }).click();
+    await pageA.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
+
+    for (const pg of [pageB, pageC, pageD]) {
+      const card4 = pg.locator('[data-room-card]', { hasText: `${ROOM_NAME}-4p` }).first();
+      await card4.waitFor({ timeout: 20000 });
+      await card4.getByRole('button', { name: '참가하기' }).click();
+      await pg.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
+    }
+    for (const pg of [pageA, pageB, pageC, pageD]) await setupMap(pg);
+    await expectText(pageA, '참가자 (4/4)');
+    await expectText(pageA, '모두 준비되었습니다');
+    await pageA.getByRole('button', { name: '게임 시작' }).click();
+    await expectMyBoardTurns(pageA, 0);
+    await expectPlayerBoardCount(pageA, 4);
+    await expectPlayerBoardCount(pageD, 4);
+    const canvasCount = await pageA.locator('[data-player-board] canvas').count();
+    if (canvasCount !== 4) throw new Error(`4인 3D 캔버스 수 불일치: ${canvasCount}`);
+    await expectNonBlankCanvases(pageA, 4);
+    await pageA.screenshot({ path: `${OUT}/mp-4p-desktop.png` });
+    await pageA.setViewportSize({ width: 390, height: 844 });
+    await expectPlayerBoardCount(pageA, 4);
+    await expectNonBlankCanvases(pageA, 4);
+    await pageA.screenshot({ path: `${OUT}/mp-4p-mobile.png` });
+    ok('4인 2x2 동시 보드 및 데스크톱/모바일 렌더링');
+
+    step('24: 4인 방 삭제');
+    pageA.once('dialog', (dialog) => dialog.accept());
+    await pageA.getByRole('button', { name: '나가기' }).first().click();
+    await pageA.waitForURL(/\/rooms$/, { timeout: 20000 });
 
     console.log('ALL MP STEPS PASSED');
   } catch (e) {

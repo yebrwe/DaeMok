@@ -125,14 +125,16 @@ export function useRoomPresence(userId: string, roomId: string) {
         
         // 복원된 사용자가 이미 방에 속해 있는지 확인
         const playerExists = roomData.players && roomData.players.includes(userId);
+        const gamePlayerExists = !!roomData.gameState?.players?.[userId];
+        const isSpectator = roomData.gameState?.phase !== 'setup' && !gamePlayerExists;
         let rejoined = false;
         
-        if (!playerExists) {
+        if (!playerExists && !isSpectator) {
           console.log('방 참여자 목록에 추가:', userId);
           const updatedPlayers = roomData.players ? [...roomData.players, userId] : [userId];
           await update(roomRef, { players: updatedPlayers });
           rejoined = true;
-        } else {
+        } else if (gamePlayerExists) {
           console.log('사용자가 이미 방에 속해 있음:', userId);
           // 존재하는 플레이어의 상태 업데이트
           if (roomData.gameState?.players && roomData.gameState.players[userId]) {
@@ -177,11 +179,13 @@ export function useRoomPresence(userId: string, roomId: string) {
             });
             
             // 재연결 시 자동으로 방 참여 상태 유지
-            onDisconnect(roomJoinRef).update({
-              joined: true,
-              offline: true,  // 오프라인 표시
-              lastSeen: serverTimestamp()
-            });
+            if (!isSpectator) {
+              onDisconnect(roomJoinRef).update({
+                joined: true,
+                offline: true,
+                lastSeen: serverTimestamp()
+              });
+            }
             
             // 게임 상태의 플레이어 상태도 업데이트
             if (roomData.gameState?.players && roomData.gameState.players[userId]) {
@@ -236,4 +240,4 @@ export function useRoomPresence(userId: string, roomId: string) {
   }, [userId, roomId]);
 
   return { isConnected, error };
-} 
+}

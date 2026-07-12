@@ -3,9 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import RoomList from '@/components/RoomList';
 import CreateRoomForm from '@/components/CreateRoomForm';
-import LobbyChat from '@/components/LobbyChat';
 import { useAuth } from '@/hooks/useAuth';
 import { restoreRoomSession, signOutUser, cleanupGhostRooms } from '@/lib/firebase';
 
@@ -88,7 +88,7 @@ export default function RoomsPage() {
   }
 
   return (
-    <div className="container mx-auto p-3 sm:p-4 max-w-6xl">
+    <div className="container mx-auto p-3 sm:p-4 max-w-4xl">
       {/* 상단 헤더 - 게임 로고 + 사용자 메뉴 */}
       <header className="game-panel !rounded-xl px-4 py-3 mb-4 flex justify-between items-center">
         <div className="flex items-center gap-2">
@@ -100,15 +100,15 @@ export default function RoomsPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Link href="/dungeon" className="btn-game px-3 py-1.5 text-xs">
-            🗡️ 던전 모드
+          <Link href="/adventure" className="btn-game px-3 py-1.5 text-xs">
+            🗡️ 모험가 길드
           </Link>
           <Link href="/practice" className="btn-sub px-3 py-1.5 text-xs">
             🎯 연습 모드
           </Link>
           <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-800/60 border border-slate-700/60">
             {user.photoURL ? (
-              <img src={user.photoURL} alt="프로필" className="w-6 h-6 rounded-full ring-1 ring-amber-400/60" />
+              <Image src={user.photoURL} alt="프로필" width={24} height={24} className="w-6 h-6 rounded-full ring-1 ring-amber-400/60" />
             ) : (
               <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center text-[10px] font-bold text-white">
                 {user.displayName?.[0] || 'P'}
@@ -124,22 +124,12 @@ export default function RoomsPage() {
         </div>
       </header>
 
-      {/* 모바일에서는 상하 배치, 데스크탑에서는 좌우 배치 */}
-      <div className="flex flex-col md:flex-row md:space-x-4 gap-4 md:gap-0">
-        {/* 방 생성 및 목록 */}
-        <div className="flex-1 md:w-1/2 min-h-[420px]">
-          <CreateRoomForm userId={user.uid} />
-
-          <div className="mt-4">
-            <RoomList userId={user.uid} />
-          </div>
+      <section className="min-h-[420px]">
+        <CreateRoomForm userId={user.uid} />
+        <div className="mt-4">
+          <RoomList userId={user.uid} />
         </div>
-
-        {/* 채팅과 유저 목록 */}
-        <div className="flex-1 md:w-1/2">
-          <LobbyChat currentUserId={user.uid} />
-        </div>
-      </div>
+      </section>
     </div>
   );
 }

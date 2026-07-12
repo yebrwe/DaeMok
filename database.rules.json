@@ -50,29 +50,42 @@
         },
 
         "gameState": {
-          ".write": "auth != null && data.child('players').child(auth.uid).exists()",
+          ".write": "auth != null && ((data.child('phase').val() !== 'play' && root.child('rooms').child($roomId).child('createdBy').val() === auth.uid) || (data.child('phase').val() === 'play' && data.child('players').child(auth.uid).exists() && (data.child('currentTurn').val() === auth.uid || !data.child('currentTurn').exists() || !data.child('players').child(data.child('currentTurn').val()).exists() || data.child('players').child(data.child('currentTurn').val()).child('finished').val() === true || data.child('players').child(data.child('currentTurn').val()).child('forfeited').val() === true || (newData.child('players').child(auth.uid).child('forfeited').val() === true && data.child('players').child(auth.uid).child('forfeited').val() !== true) || (data.child('players').child(auth.uid).child('finished').val() === true && newData.child('phase').val() === 'end'))))",
+
+          "maps": {
+            "$ownerId": {
+              ".write": "auth != null && $ownerId === auth.uid && root.child('rooms').child($roomId).child('gameState').child('phase').val() === 'setup'"
+            }
+          },
+
+          "turnOrder": {
+            ".write": "auth != null && data.parent().child('phase').val() === 'setup' && data.parent().child('players').child(auth.uid).exists()"
+          },
 
           "players": {
             "$playerId": {
-              ".write": "auth != null && $playerId === auth.uid"
+              ".write": "auth != null && $playerId === auth.uid && (data.parent().parent().child('phase').val() !== 'play' || data.parent().parent().child('currentTurn').val() === auth.uid || (newData.child('forfeited').val() === true && data.child('forfeited').val() !== true))",
+              "id": {
+                ".write": "auth != null && $playerId === auth.uid"
+              },
+              "displayName": {
+                ".write": "auth != null && $playerId === auth.uid"
+              },
+              "photoURL": {
+                ".write": "auth != null && $playerId === auth.uid"
+              },
+              "isOnline": {
+                ".write": "auth != null && $playerId === auth.uid"
+              },
+              "hasLeft": {
+                ".write": "auth != null && $playerId === auth.uid"
+              },
+              "lastSeen": {
+                ".write": "auth != null && $playerId === auth.uid"
+              }
             }
           }
         }
-      }
-    },
-
-    "lobbyChat": {
-      ".read": "auth != null",
-      "$messageId": {
-        ".write": "auth != null && !data.exists() && newData.child('userId').val() === auth.uid",
-        ".validate": "newData.hasChildren(['userId', 'userName', 'text', 'timestamp']) && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 500"
-      }
-    },
-
-    "lobbyOnline": {
-      ".read": "auth != null",
-      "$uid": {
-        ".write": "auth != null && $uid === auth.uid"
       }
     },
 
@@ -85,8 +98,180 @@
 
     "users": {
       "$uid": {
-        ".read": "auth != null",
-        ".write": "auth != null && $uid === auth.uid"
+        ".read": "auth != null && $uid === auth.uid",
+        ".write": "auth != null && $uid === auth.uid && (!newData.parent().parent().child('adventureRankings').child($uid).exists() || newData.child('adventure').child('v1').exists())",
+        "adventure": {
+          "v1": {
+            ".validate": "newData.hasChildren(['version', 'name', 'classId', 'level', 'exp', 'mastery', 'gold', 'hp', 'baseStats', 'statPoints', 'skillPoints', 'skillRanks', 'potions', 'currentRegionId', 'killCounts', 'bossKills', 'statistics', 'createdAt', 'updatedAt', 'lastActiveAt', 'rankingPower', 'rankingCollectionCount']) && (!newData.parent().parent().parent().parent().child('adventureRankings').child($uid).exists() || (newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('uid').val() === $uid && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('classId').val() === newData.child('classId').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('level').val() === newData.child('level').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('masteryLevel').val() === newData.child('mastery').child('level').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('power').val() === newData.child('rankingPower').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('totalKills').val() === newData.child('statistics').child('totalKills').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('bossesKilled').val() === newData.child('statistics').child('bossesKilled').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('collectionCount').val() === newData.child('rankingCollectionCount').val()))",
+            "version": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "name": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 16"
+            },
+            "classId": {
+              ".validate": "newData.isString() && (newData.val() === 'vanguard' || newData.val() === 'ranger' || newData.val() === 'mystic')"
+            },
+            "level": {
+              ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 99 && newData.val() % 1 === 0"
+            },
+            "exp": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0"
+            },
+            "mastery": {
+              ".validate": "newData.hasChildren(['level', 'exp'])",
+              "level": {
+                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 50 && newData.val() % 1 === 0"
+              },
+              "exp": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0"
+              },
+              "$other": {
+                ".validate": false
+              }
+            },
+            "gold": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9007199254740991 && newData.val() % 1 === 0"
+            },
+            "hp": {
+              ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 1000000 && newData.val() % 1 === 0"
+            },
+            "baseStats": {
+              ".validate": "newData.hasChildren(['strength', 'vitality', 'defense', 'agility'])",
+              "$stat": {
+                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 500 && newData.val() % 1 === 0"
+              }
+            },
+            "statPoints": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
+            },
+            "skillPoints": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
+            },
+            "skillRanks": {
+              ".validate": "newData.hasChildren(['skill1', 'skill2'])",
+              "skill1": {
+                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 10 && newData.val() % 1 === 0"
+              },
+              "skill2": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
+              },
+              "$other": {
+                ".validate": false
+              }
+            },
+            "potions": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
+            },
+            "currentRegionId": {
+              ".validate": "newData.isString() && (newData.val() === 'sunnyField' || newData.val() === 'mistForest' || newData.val() === 'ancientRuins' || newData.val() === 'dragonCrater')"
+            },
+            "killCounts": {
+              ".validate": "newData.hasChildren(['field_slime', 'field_boar', 'field_bandit', 'field_boss', 'forest_wolf', 'forest_spider', 'forest_treant', 'forest_boss', 'ruins_sentinel', 'ruins_gargoyle', 'ruins_mage', 'ruins_boss', 'crater_drake', 'crater_golem', 'crater_cultist', 'crater_boss'])",
+              "$enemyId": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9007199254740991 && newData.val() % 1 === 0"
+              }
+            },
+            "bossKills": {
+              ".validate": "newData.hasChildren(['sunnyField', 'mistForest', 'ancientRuins', 'dragonCrater'])",
+              "$regionId": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
+              }
+            },
+            "statistics": {
+              ".validate": "newData.hasChildren(['battlesWon', 'battlesLost', 'totalKills', 'bossesKilled', 'damageDealt', 'damageTaken', 'goldEarned', 'goldSpent', 'potionsUsed', 'equipmentFound', 'equipmentSold', 'enhancements', 'skillUpgrades', 'offlineKills'])",
+              "$statistic": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9007199254740991 && newData.val() % 1 === 0"
+              }
+            },
+            "createdAt": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000"
+            },
+            "updatedAt": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000 && (!data.exists() || newData.val() >= data.val())"
+            },
+            "lastActiveAt": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000"
+            },
+            "rankingPower": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 20000 && newData.val() % 1 === 0"
+            },
+            "rankingCollectionCount": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 66240 && newData.val() % 1 === 0"
+            }
+          }
+        }
+      }
+    },
+
+    "adventureRankings": {
+      ".read": "auth != null",
+      ".indexOn": ["power"],
+      "$uid": {
+        ".write": "auth != null && $uid === auth.uid",
+        ".validate": "newData.hasChildren(['uid', 'displayName', 'classId', 'level', 'masteryLevel', 'power', 'totalKills', 'bossesKilled', 'collectionCount', 'updatedAt']) && newData.parent().parent().child('users').child($uid).child('adventure').child('v1').exists() && newData.child('classId').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('classId').val() && newData.child('level').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('level').val() && newData.child('masteryLevel').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('mastery').child('level').val() && newData.child('power').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('rankingPower').val() && newData.child('totalKills').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('statistics').child('totalKills').val() && newData.child('bossesKilled').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('statistics').child('bossesKilled').val() && newData.child('collectionCount').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('rankingCollectionCount').val()",
+        "uid": {
+          ".validate": "newData.isString() && newData.val() === auth.uid"
+        },
+        "displayName": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
+        },
+        "photoURL": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2048"
+        },
+        "classId": {
+          ".validate": "newData.isString() && (newData.val() === 'vanguard' || newData.val() === 'ranger' || newData.val() === 'mystic')"
+        },
+        "level": {
+          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 99 && newData.val() % 1 === 0"
+        },
+        "masteryLevel": {
+          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 50 && newData.val() % 1 === 0"
+        },
+        "power": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 20000 && newData.val() % 1 === 0"
+        },
+        "totalKills": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9007199254740991 && newData.val() % 1 === 0"
+        },
+        "bossesKilled": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
+        },
+        "collectionCount": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 66240 && newData.val() % 1 === 0"
+        },
+        "updatedAt": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000 && (!data.exists() || newData.val() >= data.val())"
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+
+    "adventurePresence": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && $uid === auth.uid",
+        ".validate": "newData.hasChildren(['uid', 'displayName', 'connectedAt', 'lastSeen'])",
+        "uid": {
+          ".validate": "newData.isString() && newData.val() === auth.uid"
+        },
+        "displayName": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
+        },
+        "photoURL": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2048"
+        },
+        "connectedAt": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000"
+        },
+        "lastSeen": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000"
+        },
+        "$other": {
+          ".validate": false
+        }
       }
     },
 

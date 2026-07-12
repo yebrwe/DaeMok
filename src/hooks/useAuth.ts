@@ -12,6 +12,7 @@ export function useAuth() {
 
   useEffect(() => {
     let unsubscribe: Unsubscribe;
+    let tokenUnsubscribe: Unsubscribe;
     let tokenRefreshInterval: NodeJS.Timeout;
     
     const initAuth = async () => {
@@ -58,7 +59,7 @@ export function useAuth() {
         });
         
         // 토큰 변경 감지 (ID 토큰 변경 시마다 호출)
-        const tokenUnsubscribe = onIdTokenChanged(auth, async (user) => {
+        tokenUnsubscribe = onIdTokenChanged(auth, async (user) => {
           if (user) {
             // 토큰이 변경되었을 때 처리
             console.log('ID 토큰 변경 감지');
@@ -86,6 +87,9 @@ export function useAuth() {
       if (unsubscribe) {
         unsubscribe();
       }
+      if (tokenUnsubscribe) {
+        tokenUnsubscribe();
+      }
       if (tokenRefreshInterval) {
         clearInterval(tokenRefreshInterval);
       }
@@ -93,4 +97,4 @@ export function useAuth() {
   }, []);
 
   return { user, loading, authError };
-} 
+}
