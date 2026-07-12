@@ -13,7 +13,14 @@ import {
 } from 'firebase/auth';
 import { getAnalytics, isSupported } from 'firebase/analytics';
 import { Room, GameState, GamePhase, GameMap, UserProfile } from '@/types/game';
-import { GAME_RULES_VERSION, getFirstTurnPlayerId, getTurnOrder, isValidMap } from '@/lib/gameUtils';
+import { GAME_RULES_VERSION, getFirstTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
+import {
+  createCanonicalGameRuleSnapshot,
+  isValidGameRuleSnapshot,
+  isValidMapForRuleSnapshot,
+} from '@/lib/gameRules';
+import { createMazeSkillState } from '@/lib/mazeSkills';
+import { shouldPreserveGamePlayerOnLeave } from '@/lib/roomLifecycle';
 
 // Firebase 인스턴스를 저장할 변수들  
 export let auth;
@@ -130,7 +137,6 @@ export const getRooms = (callback: (rooms: Room[]) => void) => {
   const roomsRef = ref(database, 'rooms');
   
   return onValue(roomsRef, (snapshot) => {
-    console.log('방 목록 데이터 수신:', snapshot.val());
     const data = snapshot.val();
     let roomsList: Room[] = [];
     
@@ -138,13 +144,18 @@ export const getRooms = (callback: (rooms: Room[]) => void) => {
       // 객체를 배열로 변환하고 id 속성이 없으면 키를 id로 추가
       roomsList = Object.entries(data).map(([key, room]) => {
         const typedRoom = room as Room;
+        const roomSummary = { ...typedRoom };
+        roomSummary.players = Object.values(typedRoom.players || {})
+          .filter((playerId): playerId is string => typeof playerId === 'string');
+        delete roomSummary.maps;
         if (!typedRoom.id) {
-          return { ...typedRoom, id: key };
+          return { ...roomSummary, id: key };
         }
-        return typedRoom;
+        return roomSummary as Room;
       });
     }
     
+    console.log(`방 목록 ${roomsList.length}개 동기화`);
     callback(roomsList);
   }, (error) => {
     console.error('방 목록 조회 오류:', error);
@@ -244,8 +255,12 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
     // 방 생성 시간
     const now = serverTimestamp();
 
+    const ruleSnapshot = createCanonicalGameRuleSnapshot();
+
     // 초기 게임 상태 설정
     const initialGameState = {
+      rulesVersion: GAME_RULES_VERSION,
+      matchNumber: 0,
       phase: 'setup', // setup, play, end
       currentTurn: creatorId, // 첫 게임 선턴은 방장
       turnOrder: [creatorId],
@@ -270,6 +285,7 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
       players: [creatorId],
       maxPlayers: maxPlayers,
       rulesVersion: GAME_RULES_VERSION,
+      ruleSnapshot,
       gameState: initialGameState,
       status: 'waiting', // waiting, playing, ended
       lastActivity: now
@@ -295,6 +311,7 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
     
     // 사용자 상태 업데이트 - 현재 방 정보만 저장
     await update(ref(database, `userStatus/${creatorId}`), {
+      online: true,
       currentRoom: roomId,
       lastActivity: now
     });
@@ -349,6 +366,9 @@ export const joinRoom = async (roomId: string, userId: string): Promise<boolean>
     return false;
   }
 
+  let claimedSlot: number | null = null;
+  let playerCreated = false;
+
   try {
     console.log('방 참여 시도:', roomId);
     
@@ -363,14 +383,13 @@ export const joinRoom = async (roomId: string, userId: string): Promise<boolean>
     
     const roomData = snapshot.val();
 
-    // 진행 중인 게임의 관전자는 참가자 배열이나 gameState.players에 넣지 않는다.
+    // 진행 중인 게임의 관전자는 gameState.players에 넣지 않는다.
     if (roomData.gameState?.phase !== GamePhase.SETUP && !roomData.gameState?.players?.[userId]) {
       return registerSpectator(roomId, userId);
     }
 
-    // 이미 참여 중인 사용자는 인원 제한과 무관하게 재입장 허용
-    const currentPlayers: string[] = roomData.players ? [...roomData.players] : [];
-    const alreadyJoined = currentPlayers.includes(userId);
+    // gameState.players가 정원과 참가 여부의 유일한 기준이다.
+    const alreadyJoined = !!roomData.gameState?.players?.[userId];
 
     // 이미 게임이 시작된 방: 관전자로 입장 (게임 로직에는 일절 개입하지 않음)
     if (!alreadyJoined && roomData.gameState?.phase && roomData.gameState.phase !== 'setup') {
@@ -379,20 +398,32 @@ export const joinRoom = async (roomId: string, userId: string): Promise<boolean>
       return true;
     }
 
-    // 동시 입장도 정원을 넘거나 서로를 덮어쓰지 않도록 참가자 배열을 원자 갱신한다.
     if (!alreadyJoined) {
-      const playersResult = await runTransaction(ref(database, `rooms/${roomId}/players`), (players: string[] | null) => {
-        const nextPlayers = Array.isArray(players) ? players.filter((id): id is string => typeof id === 'string') : [];
-        if (nextPlayers.includes(userId)) return nextPlayers;
-        if (nextPlayers.length >= roomData.maxPlayers) return;
-        return [...nextPlayers, userId];
-      }, { applyLocally: false });
-      if (!playersResult.committed) {
-        console.error('방 인원이 가득 참:', roomId);
-        return false;
+      const maxPlayers = Math.min(4, Math.max(2, Number(roomData.maxPlayers) || 2));
+      const slotsSnapshot = await get(ref(database, `rooms/${roomId}/players`));
+      const slots = slotsSnapshot.val() || {};
+      const existingSlot = Object.entries(slots).find(([, uid]) => uid === userId)?.[0];
+
+      if (existingSlot == null) {
+        for (let slot = 0; slot < maxPlayers; slot += 1) {
+          if (slots[slot] != null) continue;
+          const result = await runTransaction(
+            ref(database, `rooms/${roomId}/players/${slot}`),
+            (current: string | null) => current == null ? userId : undefined,
+            { applyLocally: false }
+          );
+          if (result.committed && result.snapshot.val() === userId) {
+            claimedSlot = slot;
+            break;
+          }
+        }
+        if (claimedSlot == null) {
+          console.error('방 인원이 가득 참:', roomId);
+          return false;
+        }
       }
     }
-    
+
     // 게임 상태에 플레이어 추가 (위치 정보 포함)
     const playerPath = `rooms/${roomId}/gameState/players/${userId}`;
     const playerRef = ref(database, playerPath);
@@ -407,6 +438,7 @@ export const joinRoom = async (roomId: string, userId: string): Promise<boolean>
         isOnline: true,
         lastSeen: serverTimestamp()
       });
+      playerCreated = true;
     } else {
       await update(playerRef, {
         hasLeft: null,
@@ -440,6 +472,9 @@ export const joinRoom = async (roomId: string, userId: string): Promise<boolean>
 
     return true;
   } catch (error) {
+    if (claimedSlot != null && !playerCreated) {
+      await remove(ref(database, `rooms/${roomId}/players/${claimedSlot}`)).catch(() => {});
+    }
     console.error('방 참여 중 오류:', error);
     return false;
   }
@@ -456,10 +491,17 @@ export const startGame = async (roomId: string): Promise<boolean> => {
   const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
 
   try {
-    const rulesVersionSnapshot = await get(ref(database, `rooms/${roomId}/rulesVersion`));
-    const expectedRulesVersion = rulesVersionSnapshot.exists()
-      ? Number(rulesVersionSnapshot.val())
-      : undefined;
+    const roomRulesSnapshot = await get(ref(database, `rooms/${roomId}`));
+    const roomRules = roomRulesSnapshot.val() as Partial<Room> | null;
+    if (
+      !roomRules ||
+      roomRules.rulesVersion !== GAME_RULES_VERSION ||
+      !isValidGameRuleSnapshot(roomRules.ruleSnapshot)
+    ) {
+      return false;
+    }
+    const ruleSnapshot = roomRules.ruleSnapshot;
+    const maps = roomRules.maps || {};
     const result = await runTransaction(gameStateRef, (state: GameState | null) => {
       // 로컬 캐시가 비어 있으면 그대로 반환 -> 서버 데이터로 재시도됨
       if (!state) return state;
@@ -468,14 +510,13 @@ export const startGame = async (roomId: string): Promise<boolean> => {
       if (state.phase !== GamePhase.SETUP) return;
 
       const players = state.players || {};
-      const maps = state.maps || {};
       const playerIds = getTurnOrder(players, state.turnOrder);
 
       const enoughPlayers = playerIds.length >= 2;
       const allReady = playerIds.every((id) => players[id]?.isReady);
       const allMapsReady = playerIds.every((id) => maps[id]);
       const allMapsValid = playerIds.every(
-        (id) => maps[id] && isValidMap(maps[id], expectedRulesVersion)
+        (id) => maps[id] && isValidMapForRuleSnapshot(maps[id], ruleSnapshot)
       );
 
       // 시작 조건 미충족 -> 중단
@@ -498,15 +539,26 @@ export const startGame = async (roomId: string): Promise<boolean> => {
       const turnOrder = getTurnOrder(players, playerIds);
       const preferredFirst = state.currentTurn && players[state.currentTurn] ? state.currentTurn : null;
       const currentTurn = preferredFirst || getFirstTurnPlayerId(players, turnOrder);
+      const itemState = Object.fromEntries(playerIds.map((id) => [id, {
+        consumed: {},
+        mazeSkill: createMazeSkillState(maps[id].skillLoadout),
+      }]));
 
+      const persistentState = { ...state };
+      delete persistentState.maps;
       return {
-        ...state,
+        ...persistentState,
+        rulesVersion: ruleSnapshot.version,
+        matchNumber: (state.matchNumber || 0) + 1,
         phase: GamePhase.PLAY,
         assignments,
         players,
         currentTurn,
         turnOrder,
         turnNumber: 1,
+        itemState,
+        collisionWalls: {},
+        revealedWallsByPlayer: {},
         visionEffectsByPlayer: {},
         turnMessage: currentTurn ? `${players[currentTurn]?.displayName || '플레이어'}의 턴` : undefined,
         turnMessageTimestamp: Date.now(),
@@ -539,22 +591,23 @@ export const placeObstacles = async (roomId: string, userId: string, map: GameMa
     return;
   }
 
-  const rulesVersionSnapshot = await get(ref(database, `rooms/${roomId}/rulesVersion`));
-  const expectedRulesVersion = rulesVersionSnapshot.exists()
-    ? Number(rulesVersionSnapshot.val())
-    : undefined;
-  if (!isValidMap(map, expectedRulesVersion)) {
+  const roomSnapshot = await get(ref(database, `rooms/${roomId}`));
+  const room = roomSnapshot.val() as Partial<Room> | null;
+  if (
+    !room ||
+    room.rulesVersion !== GAME_RULES_VERSION ||
+    !isValidGameRuleSnapshot(room.ruleSnapshot) ||
+    !isValidMapForRuleSnapshot(map, room.ruleSnapshot)
+  ) {
     throw new Error('유효하지 않은 맵은 저장할 수 없습니다.');
   }
 
   try {
     console.log('맵 설정 중...', { roomId, userId });
-    const mapRef = ref(database, `rooms/${roomId}/gameState/maps/${userId}`);
-    await set(mapRef, map);
-
-    // 맵 설정 후 자동으로 준비 상태로 설정
-    const playerRef = ref(database, `rooms/${roomId}/gameState/players/${userId}`);
-    await update(playerRef, { isReady: true });
+    await update(ref(database, `rooms/${roomId}`), {
+      [`maps/${userId}`]: map,
+      [`gameState/players/${userId}/isReady`]: true,
+    });
 
     // 방 활동 시각 갱신
     await touchRoomActivity(roomId);
@@ -572,7 +625,10 @@ export const resetPlayerMap = async (roomId: string, userId: string): Promise<vo
     throw new Error('맵 제작 단계에서만 다시 편집할 수 있습니다.');
   }
 
-  await update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), { isReady: false });
+  await update(ref(database, `rooms/${roomId}`), {
+    [`gameState/players/${userId}/isReady`]: false,
+    [`maps/${userId}`]: null,
+  });
   await touchRoomActivity(roomId);
 };
 
@@ -592,26 +648,29 @@ export const leaveRoom = async (roomId: string, userId: string): Promise<boolean
       return false;
     }
     
-    // 방에서 플레이어 제거
     const roomData = roomSnapshot.val();
-    const players = roomData.players || [];
-    const updatedPlayers = players.filter((id: string) => id !== userId);
-    
-    // 플레이어 목록 업데이트
-    await update(roomRef, { players: updatedPlayers });
-    
+
     // 방 참여 정보 제거
     await remove(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`));
     
     const gamePlayer = roomData.gameState?.players?.[userId];
+    if (roomData.gameState?.phase === GamePhase.SETUP) {
+      await update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), { isReady: false });
+      await remove(ref(database, `rooms/${roomId}/maps/${userId}`));
+      const playerSlots = roomData.players || {};
+      const slot = Object.entries(playerSlots).find(([, uid]) => uid === userId)?.[0];
+      if (slot != null) await remove(ref(database, `rooms/${roomId}/players/${slot}`));
+    }
     if (gamePlayer) {
       const gamePlayerRef = ref(database, `rooms/${roomId}/gameState/players/${userId}`);
       if (roomData.gameState?.phase === GamePhase.PLAY) {
         // 진행 중에는 정산 기록을 보존하고 턴 순환에서만 제외한다.
         await update(gamePlayerRef, { hasLeft: true, isOnline: false });
-      } else {
+      } else if (!shouldPreserveGamePlayerOnLeave(roomData.gameState?.phase)) {
         await remove(gamePlayerRef);
       }
+      // END 참가자 기록은 멱등 전적 트랜잭션과 재시작 로스터가
+      // 모두 확정될 때까지 보존한다. 재시작은 오프라인/퇴장자를 제외한다.
     }
 
     // 관전자 흔적 제거
@@ -693,13 +752,13 @@ export const cleanupNullKeys = async (roomId: string) => {
     console.log('방 데이터 정리 시작:', roomId);
     
     // 맵 데이터에서 null 키 제거
-    const mapsRef = ref(database, `rooms/${roomId}/gameState/maps`);
+    const mapsRef = ref(database, `rooms/${roomId}/maps`);
     const mapsSnapshot = await get(mapsRef);
     const maps = mapsSnapshot.val();
     
     if (maps && maps.null) {
       console.log('맵 데이터에서 null 키 제거');
-      await remove(ref(database, `rooms/${roomId}/gameState/maps/null`));
+      await remove(ref(database, `rooms/${roomId}/maps/null`));
     }
     
     // 플레이어 데이터에서 null 키 제거
@@ -710,19 +769,6 @@ export const cleanupNullKeys = async (roomId: string) => {
     if (players && players.null) {
       console.log('플레이어 데이터에서 null 키 제거');
       await remove(ref(database, `rooms/${roomId}/gameState/players/null`));
-    }
-    
-    // 플레이어 목록에서 null 값 제거
-    const roomRef = ref(database, `rooms/${roomId}`);
-    const roomSnapshot = await get(roomRef);
-    const room = roomSnapshot.val();
-    
-    if (room && room.players) {
-      const cleanedPlayers = room.players.filter(id => id !== null && id !== 'null');
-      if (cleanedPlayers.length !== room.players.length) {
-        console.log('플레이어 목록에서 null 값 제거');
-        await update(roomRef, { players: cleanedPlayers });
-      }
     }
     
     console.log('방 데이터 정리 완료');
@@ -808,14 +854,11 @@ export const checkRoomMembership = async (userId: string, roomId: string): Promi
     
     const roomData = roomSnapshot.val();
     
-    // 2. 플레이어 목록에 사용자가 포함되어 있는지 확인
-    const playerExists = roomData.players && roomData.players.includes(userId);
-    
-    // 3. 게임 상태에 사용자 정보가 있는지 확인
+    // 게임 상태 또는 관전자 목록에 사용자 정보가 있는지 확인
     const playerStateExists = roomData.gameState?.players && roomData.gameState.players[userId];
     const spectatorExists = roomData.spectators && roomData.spectators[userId];
     
-    if (playerExists || playerStateExists || spectatorExists) {
+    if (playerStateExists || spectatorExists) {
       console.log('사용자가 방의 멤버임:', roomId);
       return true;
     }
@@ -876,13 +919,6 @@ export const rejoinRoom = async (userId: string, roomId: string): Promise<boolea
         isOnline: true,
         lastSeen: serverTimestamp(),
       });
-    }
-    
-    // 플레이어 목록에 사용자가 없으면 추가
-    if (!roomData.players || !roomData.players.includes(userId)) {
-      console.log('방 참여자 목록에 추가:', userId);
-      const updatedPlayers = roomData.players ? [...roomData.players, userId] : [userId];
-      await update(roomRef, { players: updatedPlayers });
     }
     
     // 방 참여 상태 업데이트

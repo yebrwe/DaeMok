@@ -27,7 +27,7 @@ const SIZE = 6;
 const CELL_COUNT = SIZE * SIZE;
 const MIN_BUDGET = 10;
 // The live validator only preserves a start-to-goal path; it does not require
-// every cell to stay connected. Sample well beyond the 20-wall live baseline.
+// every cell to stay connected. Sample well beyond the 24-wall live baseline.
 const MAX_BUDGET = 35;
 const BUDGETS = Array.from(
   { length: MAX_BUDGET - MIN_BUDGET + 1 },
@@ -41,7 +41,7 @@ const AGGRESSIVENESS = ['casual', 'adversarial'];
 const POLICIES = ['believer', 'adaptive', 'skeptic'];
 const PLACEMENT_MODES = ['strong', 'optimized'];
 const ITEM_DEFS = [
-  { id: 'fake', label: 'fake-wall', cost: 5 },
+  { id: 'fake', label: 'fake-wall', cost: 7 },
   { id: 'mine', label: 'mine', cost: 1 },
   { id: 'wormhole', label: 'wormhole', cost: 7 },
 ];

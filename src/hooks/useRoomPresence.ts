@@ -132,17 +132,10 @@ export function useRoomPresence(userId: string, roomId: string) {
         await cleanupNullKeys(roomId);
         
         // 복원된 사용자가 이미 방에 속해 있는지 확인
-        const playerExists = roomData.players && roomData.players.includes(userId);
         const gamePlayerExists = !!roomData.gameState?.players?.[userId];
-        const isSpectator = roomData.gameState?.phase !== 'setup' && !gamePlayerExists;
         let rejoined = false;
         
-        if (!playerExists && !isSpectator) {
-          console.log('방 참여자 목록에 추가:', userId);
-          const updatedPlayers = roomData.players ? [...roomData.players, userId] : [userId];
-          await update(roomRef, { players: updatedPlayers });
-          rejoined = true;
-        } else if (gamePlayerExists) {
+        if (gamePlayerExists) {
           console.log('사용자가 이미 방에 속해 있음:', userId);
           // 존재하는 플레이어의 상태 업데이트
           if (roomData.gameState?.players && roomData.gameState.players[userId]) {

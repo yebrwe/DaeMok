@@ -1,20 +1,48 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Direction, GameMap, GamePhase, ItemType, MapItem, Obstacle, Position } from '@/types/game';
+import { Direction, GameMap, GamePhase, ItemType, MapItem, MazeSkillId, Obstacle, Position } from '@/types/game';
+import {
+  Anchor,
+  Aperture,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  Bomb,
+  BrickWall,
+  CloudFog,
+  Copy,
+  Flame,
+  FlaskConical,
+  FastForward,
+  Gem,
+  LucideIcon,
+  PanelTopClose,
+  ScanSearch,
+  Shield,
+  ShieldAlert,
+  Snowflake,
+  Waves,
+  Wind,
+  X,
+} from 'lucide-react';
 import GameBoard from './GameBoard';
 import {
   isValidMap,
   BOARD_SIZE,
+  DEFAULT_MAZE_SKILL,
   GAME_RULES_VERSION,
   MAX_OBSTACLES,
   ITEM_COSTS,
   ITEM_LIMITS,
   ITEM_LABELS,
   getWormholeExitSafetyError,
+  isWallItemType,
   isSameWallSegment,
   isSamePosition,
 } from '@/lib/gameUtils';
+import { MAZE_SKILL_DEFINITIONS, MAZE_SKILL_IDS } from '@/lib/mazeSkills';
 
 interface GameSetupProps {
   onMapComplete: (map: GameMap) => void;
@@ -22,12 +50,68 @@ interface GameSetupProps {
 
 type PlaceMode = 'wall' | ItemType;
 
-const ITEM_ICONS: Record<ItemType, string> = {
-  oneTimeWall: '🧱',
-  mine: '💣',
-  wormhole: '🌀',
-  radar: '🔍',
-  smoke: '🌫️',
+const ITEM_ICONS: Record<ItemType, LucideIcon> = {
+  oneTimeWall: BrickWall,
+  mine: Bomb,
+  wormhole: Aperture,
+  radar: ScanSearch,
+  smoke: CloudFog,
+  steelWall: Shield,
+  fireWall: Flame,
+  poisonWall: FlaskConical,
+  iceWall: Snowflake,
+  windWall: Wind,
+  collapseWall: PanelTopClose,
+  phaseWall: Waves,
+  mirrorWall: Copy,
+  thornWall: ShieldAlert,
+  crystalWall: Gem,
+};
+
+const TRAP_ITEMS: ItemType[] = ['oneTimeWall', 'mine', 'wormhole', 'radar', 'smoke'];
+const SPECIAL_WALL_ITEMS: ItemType[] = [
+  'steelWall',
+  'fireWall',
+  'poisonWall',
+  'iceWall',
+  'windWall',
+  'collapseWall',
+  'phaseWall',
+  'mirrorWall',
+  'thornWall',
+  'crystalWall',
+];
+
+const ITEM_DESCRIPTIONS: Record<ItemType, string> = {
+  oneTimeWall: '처음 한 번만 막고 사라지는 위장벽',
+  mine: '밟으면 실제 2턴 전 위치로 되돌림',
+  wormhole: '안전한 출구로 한 번 순간이동',
+  radar: '1턴을 써서 주변의 진짜 벽을 탐지',
+  smoke: '상대의 다음 행동 동안 보드를 가림',
+  steelWall: '파괴 스킬로도 뚫을 수 없는 영구벽',
+  fireWall: '처음 막고 사라지며 행동에 총 2턴 소모',
+  poisonWall: '통과시킨 뒤 행동에 총 3턴 소모',
+  iceWall: '통과 후 진행 방향으로 한 칸 더 미끄러짐',
+  windWall: '첫 통과 후 가능하면 지정 방향으로 한 칸 밀고 소멸',
+  collapseWall: '처음 통과 뒤 탈출로가 있으면 영구 폐쇄',
+  phaseWall: '막힘과 통과 상태가 시도할 때마다 교대',
+  mirrorWall: '첫 통과 후 안전할 때 보드 반대편으로 반전하고 소멸',
+  thornWall: '처음 막고 실제 2턴 전 위치로 되돌림',
+  crystalWall: '처음 막고 주변의 진짜 벽을 노출',
+};
+
+const DIRECTIONS: Array<{ direction: Direction; label: string; Icon: LucideIcon }> = [
+  { direction: 'up', label: '위', Icon: ArrowUp },
+  { direction: 'right', label: '오른쪽', Icon: ArrowRight },
+  { direction: 'down', label: '아래', Icon: ArrowDown },
+  { direction: 'left', label: '왼쪽', Icon: ArrowLeft },
+];
+
+const SKILL_ICONS: Record<MazeSkillId, LucideIcon> = {
+  scoutPulse: ScanSearch,
+  breach: ShieldAlert,
+  anchor: Anchor,
+  dash: FastForward,
 };
 
 const findWormholeSafetyError = (map: GameMap): string | null => {
@@ -49,7 +133,9 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   const [placeMode, setPlaceMode] = useState<PlaceMode>('wall');
   const [items, setItems] = useState<MapItem[]>([]);
   const [wormholeEntrance, setWormholeEntrance] = useState<Position | null>(null);
-  const [lastPlaced, setLastPlaced] = useState<ItemType | null>(null);
+  const [paletteTab, setPaletteTab] = useState<'traps' | 'walls' | 'skills'>('traps');
+  const [windDirection, setWindDirection] = useState<Direction>('right');
+  const [skillLoadout, setSkillLoadout] = useState<MazeSkillId>(DEFAULT_MAZE_SKILL);
 
   const itemsCost = items.reduce((sum, it) => sum + ITEM_COSTS[it.type], 0);
 
@@ -72,8 +158,16 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
 
   const addItem = (newItem: MapItem) => {
     setItems((prev) => [...prev, newItem]);
-    setLastPlaced(newItem.type);
   };
+
+  const wallItemOverlaps = (position: Position, direction: Direction): boolean =>
+    items.some(
+      (item) =>
+        isWallItemType(item.type) &&
+        !!item.wallPosition &&
+        !!item.wallDirection &&
+        isSameWallSegment(position, direction, item.wallPosition, item.wallDirection)
+    );
   
   // 고유한 벽의 수 계산 함수
   const countUniqueObstacles = (obstacleList: Obstacle[]): number => {
@@ -267,22 +361,28 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       return;
     }
 
-    // 1회성 벽 배치 모드
-    if (placeMode === 'oneTimeWall') {
-      // 일반 벽 또는 다른 1회성 벽과 겹치면 배치 불가
+    // 셀 아이템 모드의 틈 클릭이 일반벽 배치로 이어지지 않게 막는다.
+    if (placeMode !== 'wall' && !isWallItemType(placeMode)) {
+      return;
+    }
+
+    // 가짜벽과 특수벽은 모두 칸 사이 선에 배치한다.
+    if (placeMode !== 'wall' && isWallItemType(placeMode)) {
+      const { adjacentPosition } = getAdjacentCellInfo(position, direction);
+      if (!adjacentPosition) return;
+
       const overlapsWall =
         obstacles.some((o) => isSameWallSegment(position, direction, o.position, o.direction)) ||
-        items.some(
-          (it) =>
-            it.type === 'oneTimeWall' &&
-            it.wallPosition &&
-            it.wallDirection &&
-            isSameWallSegment(position, direction, it.wallPosition, it.wallDirection)
-        );
+        wallItemOverlaps(position, direction);
       if (overlapsWall) return;
-      if (!canAffordItem('oneTimeWall')) return;
+      if (!canAffordItem(placeMode)) return;
 
-      const item: MapItem = { type: 'oneTimeWall', wallPosition: position, wallDirection: direction };
+      const item: MapItem = {
+        type: placeMode,
+        wallPosition: position,
+        wallDirection: direction,
+        ...(placeMode === 'windWall' ? { effectDirection: windDirection } : {}),
+      };
       if (startPosition && endPosition) {
         const safetyError = findWormholeSafetyError({
           startPosition,
@@ -301,16 +401,8 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       return;
     }
 
-    // 일반 벽이 1회성 벽 아이템과 겹치면 배치 불가
-    if (
-      items.some(
-        (it) =>
-          it.type === 'oneTimeWall' &&
-          it.wallPosition &&
-          it.wallDirection &&
-          isSameWallSegment(position, direction, it.wallPosition, it.wallDirection)
-      )
-    ) {
+    // 일반 벽도 모든 특수벽과 같은 선을 공유할 수 없다.
+    if (wallItemOverlaps(position, direction)) {
       return;
     }
 
@@ -428,7 +520,13 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
 
   const handleRemoveItem = (index: number) => {
     setItems((prev) => prev.filter((_, i) => i !== index));
-    setLastPlaced(null);
+  };
+
+  const handlePaletteTabChange = (tab: 'traps' | 'walls' | 'skills') => {
+    if (tab === paletteTab) return;
+    setPaletteTab(tab);
+    setPlaceMode('wall');
+    setWormholeEntrance(null);
   };
   
   // 맵 완성 및 제출
@@ -444,6 +542,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       endPosition,
       obstacles,
       items,
+      skillLoadout,
     };
 
     const safetyError = findWormholeSafetyError(map);
@@ -469,11 +568,12 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
         endPosition,
         obstacles,
         items,
+        skillLoadout,
       };
 
       setIsMapValid(isValidMap(map));
     }
-  }, [startPosition, endPosition, obstacles, items]);
+  }, [startPosition, endPosition, obstacles, items, skillLoadout]);
 
   // 사용한 벽 예산 (아이템 총비용 포함)
   const usedBudget = countUniqueObstacles(obstacles) + itemsCost;
@@ -488,11 +588,15 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
     { key: 'obstacles', label: '벽 배치' },
   ];
   const currentStepIndex = steps.findIndex((s) => s.key === setupPhase);
+  const paletteItems = paletteTab === 'traps' ? TRAP_ITEMS : SPECIAL_WALL_ITEMS;
+  const activeItem = placeMode === 'wall' ? null : placeMode;
+  const ActiveItemIcon = activeItem ? ITEM_ICONS[activeItem] : BrickWall;
+  const SelectedSkillIcon = SKILL_ICONS[skillLoadout];
 
   return (
     <div className="absolute inset-0 overflow-hidden">
       {/* 보드 스테이지 - 맵 제작은 정밀한 배치를 위해 2D 고정 */}
-      <div className="absolute inset-0 flex items-center justify-center overflow-auto py-24 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950">
+      <div className="absolute inset-0 flex items-center justify-center overflow-auto pb-64 pt-24 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950 sm:pb-52">
         <GameBoard
           gamePhase={GamePhase.SETUP}
           startPosition={startPosition}
@@ -533,8 +637,8 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
             </div>
             <div className="flex items-center gap-2">
               {setupPhase === 'obstacles' && (
-                <span className={`text-xs font-bold ${remainingObstacles <= 5 ? 'text-red-400' : 'text-amber-300'}`}>
-                  🧱 {usedBudget}/{MAX_OBSTACLES}
+                <span className={`inline-flex items-center gap-1 text-xs font-bold ${remainingObstacles <= 5 ? 'text-red-400' : 'text-amber-300'}`}>
+                  <BrickWall size={14} aria-hidden="true" /> {usedBudget}/{MAX_OBSTACLES}
                   {items.length > 0 && <span className="text-purple-300 ml-1">(아이템 -{itemsCost})</span>}
                 </span>
               )}
@@ -559,70 +663,151 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
           </p>
         )}
 
-        {/* 아이템 팔레트 - 공용 벽 예산과 종류별 제한 적용 */}
+        {/* 공용 벽 예산 안에서 함정과 특수벽을 고른다. */}
         {setupPhase === 'obstacles' && (
-          <div className="w-full game-panel !rounded-xl px-3 py-2">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-[11px] font-bold text-purple-300">🎁 아이템 (종류별 제한)</span>
-              <div className="flex gap-1.5 flex-wrap">
-                {(['oneTimeWall', 'mine', 'wormhole', 'radar', 'smoke'] as ItemType[]).map((type) => (
-                  <button
-                    key={type}
-                    className={`px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
-                      placeMode === type
-                        ? 'bg-amber-400 text-slate-900 border-amber-400'
-                        : 'bg-slate-800/80 text-slate-300 border-slate-600/60 hover:border-purple-400/50'
-                    } disabled:opacity-40 disabled:pointer-events-none`}
-                    onClick={() => handleSelectItemMode(type)}
-                    disabled={!canAffordItem(type) || !hasItemCapacity(type)}
-                  >
-                    {ITEM_ICONS[type]} {ITEM_LABELS[type]} -{ITEM_COSTS[type]}
-                  </button>
-                ))}
+          <div className="game-panel w-full !rounded-lg px-2.5 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex rounded-md border border-slate-600 bg-slate-900/70 p-0.5" role="tablist" aria-label="아이템 종류">
+                <button
+                  role="tab"
+                  aria-selected={paletteTab === 'traps'}
+                  className={`h-11 px-3 text-[11px] font-bold ${paletteTab === 'traps' ? 'rounded bg-slate-600 text-white' : 'text-slate-400'}`}
+                  onClick={() => handlePaletteTabChange('traps')}
+                >
+                  함정
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={paletteTab === 'walls'}
+                  className={`h-11 px-3 text-[11px] font-bold ${paletteTab === 'walls' ? 'rounded bg-slate-600 text-white' : 'text-slate-400'}`}
+                  onClick={() => handlePaletteTabChange('walls')}
+                >
+                  특수벽
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={paletteTab === 'skills'}
+                  className={`h-11 px-3 text-[11px] font-bold ${paletteTab === 'skills' ? 'rounded bg-slate-600 text-white' : 'text-slate-400'}`}
+                  onClick={() => handlePaletteTabChange('skills')}
+                >
+                  스킬
+                </button>
               </div>
+              <span className="shrink-0 text-[10px] font-bold text-slate-400">
+                {paletteTab === 'skills' ? '로드아웃 1개' : '각 종류 1개'}
+              </span>
             </div>
 
-            {/* 배치된 아이템 목록 (개별 제거 가능) */}
-            {items.length > 0 && (
-              <div className="flex gap-1.5 flex-wrap mt-1.5">
-                {items.map((it, idx) => (
-                  <span
-                    key={idx}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-400/15 text-purple-200 border border-purple-400/40"
+            <div className="mt-1.5 flex h-12 gap-1.5 overflow-x-auto overscroll-x-contain pb-1" role="tabpanel">
+              {paletteTab === 'skills' ? MAZE_SKILL_IDS.map((skillId) => {
+                const Icon = SKILL_ICONS[skillId];
+                const definition = MAZE_SKILL_DEFINITIONS[skillId];
+                return (
+                  <button
+                    key={skillId}
+                    className={`flex h-11 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-bold transition-colors ${
+                      skillLoadout === skillId
+                        ? 'border-emerald-300 bg-emerald-400 text-slate-950'
+                        : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-emerald-400/60'
+                    }`}
+                    onClick={() => {
+                      setSkillLoadout(skillId);
+                      setPlaceMode('wall');
+                      setWormholeEntrance(null);
+                    }}
+                    title={`${definition.label}: ${definition.description}`}
+                    aria-pressed={skillLoadout === skillId}
                   >
-                    {ITEM_ICONS[it.type]}{' '}
-                    {ITEM_LABELS[it.type]}
-                    <button
-                      className="text-red-300 hover:text-red-200 font-black ml-0.5"
-                      onClick={() => handleRemoveItem(idx)}
-                      title="제거"
-                    >
-                      ✕
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
+                    <Icon size={14} aria-hidden="true" />
+                    <span>{definition.label}</span>
+                    <span className={skillLoadout === skillId ? 'text-slate-700' : 'text-emerald-300'}>1회</span>
+                  </button>
+                );
+              }) : paletteItems.map((type) => {
+                const Icon = ITEM_ICONS[type];
+                const count = items.filter((item) => item.type === type).length;
+                return (
+                  <button
+                    key={type}
+                    className={`flex h-11 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-bold transition-colors ${
+                      placeMode === type
+                        ? 'border-amber-400 bg-amber-400 text-slate-950'
+                        : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-amber-400/60'
+                    } disabled:pointer-events-none disabled:opacity-35`}
+                    onClick={() => handleSelectItemMode(type)}
+                    disabled={!canAffordItem(type) || !hasItemCapacity(type)}
+                    title={`${ITEM_LABELS[type]}: ${ITEM_DESCRIPTIONS[type]}`}
+                  >
+                    <Icon size={14} aria-hidden="true" />
+                    <span>{ITEM_LABELS[type]}</span>
+                    <span className={placeMode === type ? 'text-slate-700' : 'text-amber-300'}>-{ITEM_COSTS[type]}</span>
+                    {count > 0 && <span className="text-[9px]">{count}</span>}
+                  </button>
+                );
+              })}
+            </div>
 
-            {placeMode !== 'wall' && (
-              <p className="text-[11px] text-amber-300 mt-1.5">
-                {placeMode === 'oneTimeWall' && '칸 사이 선을 클릭해 1회성 벽을 배치하세요. 상대에겐 일반 벽과 똑같이 한 번 막힌 뒤, 다음 시도부터 통과됩니다.'}
-                {placeMode === 'mine' && '칸을 클릭해 지뢰를 배치하세요. 밟으면 2턴 전 위치로 되돌아갑니다.'}
-                {placeMode === 'smoke' && '칸을 클릭해 연막 함정을 배치하세요. 밟은 상대는 다음 차례에 보드를 볼 수 없습니다.'}
-                {placeMode === 'wormhole' &&
-                  (wormholeEntrance
-                    ? `🌀 초록색 안전 출구 ${wormholeExitCandidates.length}칸 중 하나를 선택하세요.`
-                    : '🌀 입구가 될 칸을 클릭하세요.')}
-              </p>
-            )}
-            {placeMode === 'wall' && lastPlaced && (
-              <p className="text-[11px] text-purple-200 mt-1.5">
-                {lastPlaced === 'oneTimeWall' && '🧱 1회성 벽 배치됨 - 일반 벽처럼 한 번 막고, 다음 시도부터 조용히 통과됩니다.'}
-                {lastPlaced === 'mine' && '💣 지뢰 배치됨 - 상대가 밟으면 2턴 전 위치로 되돌아갑니다.'}
-                {lastPlaced === 'wormhole' && '🌀 웜홀 배치됨 - 입구를 밟으면 출구로 순간이동합니다. (1회성)'}
-                {lastPlaced === 'radar' && '🔍 탐지기 확보됨 - 한 개당 1턴을 사용해 주변 벽을 탐지합니다.'}
-                {lastPlaced === 'smoke' && '🌫️ 연막 함정 배치됨 - 상대의 다음 차례 동안 주행 보드를 가립니다.'}
-              </p>
+            <div className="flex min-h-8 items-center justify-between gap-2 border-t border-slate-700/80 pt-1.5">
+              {paletteTab === 'skills' ? (
+                <div className="flex min-w-0 items-center gap-1.5 text-[10px] text-slate-300">
+                  <SelectedSkillIcon className="shrink-0 text-emerald-300" size={14} aria-hidden="true" />
+                  <span className="truncate">
+                    {MAZE_SKILL_DEFINITIONS[skillLoadout].label}: {MAZE_SKILL_DEFINITIONS[skillLoadout].description}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex min-w-0 items-center gap-1.5 text-[10px] text-slate-300">
+                  <ActiveItemIcon className="shrink-0 text-amber-300" size={14} aria-hidden="true" />
+                  <span className="truncate">
+                    {activeItem ? `${ITEM_LABELS[activeItem]}: ${ITEM_DESCRIPTIONS[activeItem]}` : '일반벽 배치'}
+                  </span>
+                </div>
+              )}
+              {paletteTab !== 'skills' && placeMode === 'windWall' && (
+                <div className="flex shrink-0 rounded-md border border-slate-600 bg-slate-900 p-0.5" aria-label="바람 방향">
+                  {DIRECTIONS.map(({ direction, label, Icon }) => (
+                    <button
+                      key={direction}
+                      className={`flex size-11 items-center justify-center rounded ${windDirection === direction ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}
+                      onClick={() => setWindDirection(direction)}
+                      title={`바람 ${label}`}
+                      aria-label={`바람 ${label}`}
+                    >
+                      <Icon size={16} aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
+              )}
+              {paletteTab !== 'skills' && placeMode === 'wormhole' && wormholeEntrance && (
+                <span className="shrink-0 text-[10px] font-bold text-emerald-300">
+                  안전 출구 {wormholeExitCandidates.length}칸
+                </span>
+              )}
+            </div>
+
+            {items.length > 0 && (
+              <div className="mt-1 flex h-12 gap-1 overflow-x-auto" aria-label="배치된 아이템">
+                {items.map((item, index) => {
+                  const Icon = ITEM_ICONS[item.type];
+                  return (
+                    <span
+                      key={`${item.type}-${index}`}
+                      className="inline-flex h-11 shrink-0 items-center gap-1 rounded border border-slate-600 bg-slate-800 pl-2 text-[10px] font-bold text-slate-200"
+                    >
+                      <Icon size={12} aria-hidden="true" />
+                      {ITEM_LABELS[item.type]}
+                      <button
+                        className="flex size-11 items-center justify-center text-red-300 hover:text-red-200"
+                        onClick={() => handleRemoveItem(index)}
+                        title={`${ITEM_LABELS[item.type]} 제거`}
+                        aria-label={`${ITEM_LABELS[item.type]} 제거`}
+                      >
+                        <X size={15} />
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
             )}
           </div>
         )}
@@ -631,7 +816,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
         <div className="flex gap-2 justify-center">
           {setupPhase === 'start' && (
             <button
-              className="btn-game px-8 py-2 text-sm"
+              className="btn-game h-11 px-8 text-sm"
               onClick={() => {
                 if (startPosition) {
                   setSetupPhase('end');
@@ -645,11 +830,11 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
 
           {setupPhase === 'end' && (
             <>
-              <button className="btn-sub px-5 py-2 text-sm" onClick={() => setSetupPhase('start')}>
+              <button className="btn-sub h-11 px-5 text-sm" onClick={() => setSetupPhase('start')}>
                 이전
               </button>
               <button
-                className="btn-game px-8 py-2 text-sm"
+                className="btn-game h-11 px-8 text-sm"
                 onClick={() => {
                   if (endPosition) {
                     setSetupPhase('obstacles');
@@ -664,11 +849,11 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
 
           {setupPhase === 'obstacles' && (
             <>
-              <button className="btn-sub px-5 py-2 text-sm" onClick={() => setSetupPhase('end')}>
+              <button className="btn-sub h-11 px-5 text-sm" onClick={() => setSetupPhase('end')}>
                 이전
               </button>
               <button
-                className="btn-game px-10 py-2 text-sm"
+                className="btn-game h-11 px-10 text-sm"
                 onClick={handleSubmit}
                 disabled={!isMapValid}
               >

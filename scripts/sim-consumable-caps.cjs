@@ -1,12 +1,12 @@
 /**
- * Paired Monte Carlo for mine/smoke/radar caps at total budget 22.
+ * Paired Monte Carlo for mine/smoke/radar caps at total budget 24.
  *
  * Comparisons:
- *   pure22
- *   walls21 + mine1, walls20 + mine2
- *   walls21 + smoke1 cost-1 candidate
- *   walls20 + smoke1, walls18 + smoke2
- *   walls20 + radar1, walls18 + radar2
+ *   pure24
+ *   walls23 + mine1, walls22 + mine2
+ *   walls23 + smoke1 cost-1 candidate
+ *   walls22 + smoke1, walls20 + smoke2
+ *   walls22 + radar1, walls20 + radar2
  *
  * Smoke policies:
  *   memorizer   - keeps following its normal hidden-wall route
@@ -18,7 +18,7 @@
 'use strict';
 
 const SIZE = 6;
-const TOTAL_BUDGET = 22;
+const TOTAL_BUDGET = 24;
 const TRIALS = Math.max(100000, Number(process.argv[2]) || 100000);
 const SEED_LABEL = process.argv[3] || '20260714-caps';
 const DIRS = [
@@ -439,7 +439,7 @@ function trapPlacementIsSafe(cells, count, start, end, walls) {
 }
 
 const CONFIGS = {
-  pure22: { cap: 0 },
+  pure24: { cap: 0 },
   mine1: { cap: 1 },
   mine2: { cap: 2 },
   smoke1_cost1_memorizer: { cap: 1 },
@@ -464,6 +464,15 @@ const results = Object.fromEntries(
   }]),
 );
 
+const RADAR_COST_CANDIDATES = [1, 2, 3, 4, 5, 6, 7, 8];
+const radarCrossMap = Object.fromEntries(
+  RADAR_COST_CANDIDATES.map((cost) => [cost, {
+    selfDelta: [],
+    defenseDelta: [],
+    competitiveDelta: [],
+  }]),
+);
+
 function pushResult(key, run, noTrapTurns, pureTurns, cap, structuralHardlock) {
   const target = results[key];
   const activations = run.mineActivations + run.smokeActivations + run.radarActivations;
@@ -479,21 +488,48 @@ function pushResult(key, run, noTrapTurns, pureTurns, cap, structuralHardlock) {
 
 for (let trialIndex = 0; trialIndex < TRIALS; trialIndex += 1) {
   const generated = generateTrialMap(trialIndex);
+  const walls24 = generated.snapshots[24];
+  const walls23 = generated.snapshots[23];
   const walls22 = generated.snapshots[22];
-  const walls21 = generated.snapshots[21];
   const walls20 = generated.snapshots[20];
-  const walls18 = generated.snapshots[18];
 
   const pure = runMemorizer({
     start: generated.start,
     end: generated.end,
-    walls: walls22,
+    walls: walls24,
     trialIndex,
   });
-  const trace21 = runMemorizer({
+  const radarOnFullMap = runMemorizer({
     start: generated.start,
     end: generated.end,
-    walls: walls21,
+    walls: walls24,
+    radarUses: 1,
+    trialIndex,
+  });
+  const radarSelfDelta = radarOnFullMap.turns - pure.turns;
+  for (const cost of RADAR_COST_CANDIDATES) {
+    const defenseRun = runMemorizer({
+      start: generated.start,
+      end: generated.end,
+      walls: generated.snapshots[TOTAL_BUDGET - cost],
+      trialIndex,
+    });
+    const defenseDelta = defenseRun.turns - pure.turns;
+    radarCrossMap[cost].selfDelta.push(radarSelfDelta);
+    radarCrossMap[cost].defenseDelta.push(defenseDelta);
+    radarCrossMap[cost].competitiveDelta.push(radarSelfDelta - defenseDelta);
+  }
+  const trace23 = runMemorizer({
+    start: generated.start,
+    end: generated.end,
+    walls: walls23,
+    trialIndex,
+    collectTrace: true,
+  });
+  const trace22 = runMemorizer({
+    start: generated.start,
+    end: generated.end,
+    walls: walls22,
     trialIndex,
     collectTrace: true,
   });
@@ -504,75 +540,68 @@ for (let trialIndex = 0; trialIndex < TRIALS; trialIndex += 1) {
     trialIndex,
     collectTrace: true,
   });
-  const trace18 = runMemorizer({
-    start: generated.start,
-    end: generated.end,
-    walls: walls18,
-    trialIndex,
-    collectTrace: true,
-  });
 
-  const mine1Cells = selectMineCells(trace21, 1, generated.start, generated.end, walls21);
-  const mine2Cells = selectMineCells(trace20, 2, generated.start, generated.end, walls20);
-  const smoke1Cost1Cells = selectSmokeCells(trace21, 1, generated.start, generated.end, walls21);
-  const smoke1Cells = selectSmokeCells(trace20, 1, generated.start, generated.end, walls20);
-  const smoke2Cells = selectSmokeCells(trace18, 2, generated.start, generated.end, walls18);
+  const mine1Cells = selectMineCells(trace23, 1, generated.start, generated.end, walls23);
+  const mine2Cells = selectMineCells(trace22, 2, generated.start, generated.end, walls22);
+  const smoke1Cost1Cells = selectSmokeCells(trace23, 1, generated.start, generated.end, walls23);
+  const smoke1Cells = selectSmokeCells(trace22, 1, generated.start, generated.end, walls22);
+  const smoke2Cells = selectSmokeCells(trace20, 2, generated.start, generated.end, walls20);
 
-  const pureHardlock = !findPath(generated.start, generated.end, walls22);
+  const pureHardlock = !findPath(generated.start, generated.end, walls24);
   const mine1Hardlock = !trapPlacementIsSafe(
-    mine1Cells, 1, generated.start, generated.end, walls21,
+    mine1Cells, 1, generated.start, generated.end, walls23,
   );
   const mine2Hardlock = !trapPlacementIsSafe(
-    mine2Cells, 2, generated.start, generated.end, walls20,
+    mine2Cells, 2, generated.start, generated.end, walls22,
   );
   const smoke1Cost1Hardlock = !trapPlacementIsSafe(
-    smoke1Cost1Cells, 1, generated.start, generated.end, walls21,
+    smoke1Cost1Cells, 1, generated.start, generated.end, walls23,
   );
   const smoke1Hardlock = !trapPlacementIsSafe(
-    smoke1Cells, 1, generated.start, generated.end, walls20,
+    smoke1Cells, 1, generated.start, generated.end, walls22,
   );
   const smoke2Hardlock = !trapPlacementIsSafe(
-    smoke2Cells, 2, generated.start, generated.end, walls18,
+    smoke2Cells, 2, generated.start, generated.end, walls20,
   );
-  const radar1Hardlock = !findPath(generated.start, generated.end, walls20);
-  const radar2Hardlock = !findPath(generated.start, generated.end, walls18);
+  const radar1Hardlock = !findPath(generated.start, generated.end, walls22);
+  const radar2Hardlock = !findPath(generated.start, generated.end, walls20);
 
-  pushResult('pure22', pure, pure.turns, pure.turns, 0, pureHardlock);
+  pushResult('pure24', pure, pure.turns, pure.turns, 0, pureHardlock);
 
   const mine1 = runMemorizer({
     start: generated.start,
     end: generated.end,
-    walls: walls21,
+    walls: walls23,
     mineCells: mine1Cells,
     trialIndex,
   });
-  pushResult('mine1', mine1, trace21.turns, pure.turns, 1, mine1Hardlock);
+  pushResult('mine1', mine1, trace23.turns, pure.turns, 1, mine1Hardlock);
 
   const mine2 = runMemorizer({
     start: generated.start,
     end: generated.end,
-    walls: walls20,
+    walls: walls22,
     mineCells: mine2Cells,
     trialIndex,
   });
-  pushResult('mine2', mine2, trace20.turns, pure.turns, 2, mine2Hardlock);
+  pushResult('mine2', mine2, trace22.turns, pure.turns, 2, mine2Hardlock);
 
   for (const smokePolicy of ['memorizer', 'disoriented']) {
     const key = `smoke1_cost1_${smokePolicy}`;
     const run = runMemorizer({
       start: generated.start,
       end: generated.end,
-      walls: walls21,
+      walls: walls23,
       smokeCells: smoke1Cost1Cells,
       smokePolicy,
       trialIndex,
     });
-    pushResult(key, run, trace21.turns, pure.turns, 1, smoke1Cost1Hardlock);
+    pushResult(key, run, trace23.turns, pure.turns, 1, smoke1Cost1Hardlock);
   }
 
   for (const [cap, walls, traceResult, smokeCells] of [
-    [1, walls20, trace20, smoke1Cells],
-    [2, walls18, trace18, smoke2Cells],
+    [1, walls22, trace22, smoke1Cells],
+    [2, walls20, trace20, smoke2Cells],
   ]) {
     for (const smokePolicy of ['memorizer', 'disoriented']) {
       const key = `smoke${cap}_${smokePolicy}`;
@@ -598,20 +627,20 @@ for (let trialIndex = 0; trialIndex < TRIALS; trialIndex += 1) {
   const radar1 = runMemorizer({
     start: generated.start,
     end: generated.end,
-    walls: walls20,
+    walls: walls22,
     radarUses: 1,
     trialIndex,
   });
-  pushResult('radar1', radar1, trace20.turns, pure.turns, 1, radar1Hardlock);
+  pushResult('radar1', radar1, trace22.turns, pure.turns, 1, radar1Hardlock);
 
   const radar2 = runMemorizer({
     start: generated.start,
     end: generated.end,
-    walls: walls18,
+    walls: walls20,
     radarUses: 2,
     trialIndex,
   });
-  pushResult('radar2', radar2, trace18.turns, pure.turns, 2, radar2Hardlock);
+  pushResult('radar2', radar2, trace20.turns, pure.turns, 2, radar2Hardlock);
 
   if ((trialIndex + 1) % 10000 === 0) {
     process.stderr.write(`completed ${trialIndex + 1}/${TRIALS}\n`);
@@ -637,7 +666,7 @@ const fixed = (value) => value.toFixed(3);
 
 console.log('# Consumable cap analysis');
 console.log(`trials=${TRIALS}, seed=${SEED_LABEL}, pairedBudget=${TOTAL_BUDGET}, board=${SIZE}x${SIZE}`);
-console.log('budget=pure22; mine1/smoke1_cost1=walls21; mine2/smoke1/radar1=walls20; smoke2/radar2=walls18');
+console.log('budget=pure24; mine1/smoke1_cost1=walls23; mine2/smoke1/radar1=walls22; smoke2/radar2=walls20');
 console.log('placement=strong deterministic memorizer-trace cells, distinct, start/end excluded');
 console.log('history=every consumed action records its final position, including duplicate collision positions\n');
 console.log('radar=first use at start; second use on first exit from the initial 3x3; each use costs one stationary turn');
@@ -677,6 +706,18 @@ for (const [label, cap1Key, cap2Key] of [
     percentile(differences, 0.95),
   ].join('\t'));
 }
+
+console.log('\nradar_cost\tself_turn_delta\topponent_turn_delta\tcompetitive_delta+/-95ci');
+for (const cost of RADAR_COST_CANDIDATES) {
+  const record = radarCrossMap[cost];
+  console.log([
+    cost,
+    fixed(mean(record.selfDelta)),
+    fixed(mean(record.defenseDelta)),
+    `${fixed(mean(record.competitiveDelta))}+/-${fixed(ci95(record.competitiveDelta))}`,
+  ].join('\t'));
+}
+console.log('competitive_delta = own radar turn change - opponent turn change from sacrificed defense walls; zero is break-even.');
 
 console.log('\nSafety invariant: walls never change, every placed trap is on the start-goal component,');
 console.log('mine only returns to a previously reachable position, smoke only stays or crosses an open edge,');

@@ -51,20 +51,44 @@ export interface Player {
 }
 
 // 맵 아이템 타입 (벽 예산 안에서 여러 개 배치 가능)
-export type ItemType = 'oneTimeWall' | 'mine' | 'wormhole' | 'radar' | 'smoke';
+export type SpecialWallType =
+  | 'steelWall'
+  | 'fireWall'
+  | 'poisonWall'
+  | 'iceWall'
+  | 'windWall'
+  | 'collapseWall'
+  | 'phaseWall'
+  | 'mirrorWall'
+  | 'thornWall'
+  | 'crystalWall';
+
+export type WallItemType = 'oneTimeWall' | SpecialWallType;
+
+export type ItemType = WallItemType | 'mine' | 'wormhole' | 'radar' | 'smoke';
+
+export type MazeSkillId = 'scoutPulse' | 'breach' | 'anchor' | 'dash';
+
+export interface MazeSkillStateData {
+  version: 1;
+  loadout: MazeSkillId[];
+  consumed: Partial<Record<MazeSkillId, boolean>>;
+}
 
 export interface MapItem {
   type: ItemType;
-  // oneTimeWall: 일반 벽과 똑같이 한 번 막은 뒤, 다음 시도부터 통과되는 위장 벽 (벽 5개 소모)
+  // oneTimeWall: 일반 벽과 똑같이 한 번 막은 뒤, 다음 시도부터 통과되는 위장 벽 (벽 7개 소모)
   wallPosition?: Position;
   wallDirection?: Direction;
+  // windWall: 통과 뒤 밀려날 방향. 생략하면 벽을 통과한 이동 방향을 사용한다.
+  effectDirection?: Direction;
   // mine: 밟으면 2턴 전 위치로 되돌아감 (벽 1개 소모)
   // smoke: 밟으면 다음 유효 행동까지 주행 보드 시야가 가려짐 (벽 1개 소모)
   position?: Position;
   // wormhole: 입구를 밟으면 출구로 순간이동, 1회성 (벽 7개 소모)
   entrance?: Position;
   exit?: Position;
-  // radar: 한 개당 1턴을 사용해 내 주변 3x3의 벽을 탐지 (벽 2개 소모)
+  // radar: 한 개당 1턴을 사용해 내 주변 3x3의 벽을 탐지 (벽 4개 소모)
 }
 
 // 게임 맵 타입
@@ -75,6 +99,7 @@ export interface GameMap {
   obstacles: Obstacle[];
   items?: MapItem[] | null; // 설치된 아이템들 (공용 벽 예산 + 종류별 최대 수량)
   item?: MapItem | null; // 레거시 단일 아이템 (구버전 맵 하위호환 - getMapItems로 읽을 것)
+  skillLoadout?: MazeSkillId | null;
 }
 
 // 충돌된 벽 타입
@@ -90,6 +115,12 @@ export interface CollisionWall {
 // consumed는 items 배열 인덱스별 사용 여부 (레거시: boolean 단일 값)
 export interface ItemStateEntry {
   consumed?: Record<number, boolean> | boolean;
+  // collapseWall의 영구 활성 상태와 phaseWall의 다음 통과 상태를 인덱스별로 저장한다.
+  activeWalls?: Record<number, boolean>;
+  phaseOpen?: Record<number, boolean>;
+  // 향후 내구도/파괴 효과를 위한 하위호환 확장 지점. steelWall은 이 값을 무시한다.
+  durability?: Record<number, number> | number;
+  mazeSkill?: MazeSkillStateData;
   type?: ItemType;
   consumedAt?: unknown;
 }
@@ -101,8 +132,20 @@ export interface VisionEffect {
   expiresAtTargetMove: number;
 }
 
+export interface GameRuleSnapshot {
+  version: number;
+  wallBudget: number;
+  itemCosts: Record<ItemType, number>;
+  itemLimits: Record<ItemType, number>;
+  maxSkillLoadout: number;
+  skillIds: MazeSkillId[];
+}
+
 // 게임 상태 타입
 export interface GameState {
+  rulesVersion?: number;
+  // Room-local monotonic id used to make result/stat settlement idempotent.
+  matchNumber?: number;
   phase: GamePhase;
   players: Record<string, Player>;
   maps?: Record<string, GameMap>;
@@ -125,10 +168,14 @@ export interface GameState {
 export interface Room {
   id: string;
   name: string;
-  players: string[];
+  // Firebase의 0~3번 보안 슬롯. 방 목록에서는 빈 슬롯을 제거한 요약으로 사용한다.
+  players?: string[];
   gameState: GameState | null;
+  // Online maps live beside gameState so turn transactions cannot rewrite them.
+  maps?: Record<string, GameMap>;
   maxPlayers: number;
   rulesVersion?: number;
+  ruleSnapshot?: GameRuleSnapshot;
   createdAt?: number | null;
   createdBy?: string;
   status?: 'waiting' | 'playing' | 'ended';

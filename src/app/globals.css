@@ -31,6 +31,7 @@ body {
   touch-action: none; /* 브라우저 기본 터치 동작 비활성화 */
 }
 
+.cell-hit-target::before,
 .wall-hit-horizontal::before,
 .wall-hit-vertical::before {
   content: '';
@@ -38,12 +39,16 @@ body {
   touch-action: manipulation;
 }
 
+.cell-hit-target::before {
+  inset: -2px;
+}
+
 .wall-hit-horizontal::before {
-  inset: -8px 0;
+  inset: -18px -2px;
 }
 
 .wall-hit-vertical::before {
-  inset: 0 -8px;
+  inset: -2px -18px;
 }
 
 @layer components {
@@ -97,12 +102,6 @@ body {
 
   .game-direction-button:hover {
     transition-duration: 100ms;
-  }
-
-  /* 미니맵 스타일 (기존 유지) */
-  .minimap-container {
-    z-index: 10;
-    position: relative;
   }
 
   /* 모바일 최적화 스타일 (기존 유지) */

@@ -3,7 +3,7 @@
 import React from 'react';
 import { CloudFog, Eye } from 'lucide-react';
 import { CollisionWall, GameMap, GamePhase, Obstacle, Position } from '@/types/game';
-import { getMapItems } from '@/lib/gameUtils';
+import { getMapItems, getVisibleCollisionWalls } from '@/lib/gameUtils';
 import GameBoard from './GameBoard';
 import GameBoard3D, { BoardFx } from './three/GameBoard3D';
 
@@ -24,6 +24,8 @@ export interface LiveBoardEntry {
   forfeited?: boolean;
   collisions?: CollisionWall[];
   itemsConsumed?: Record<number, boolean> | null;
+  itemActiveWalls?: Record<number, boolean> | null;
+  itemPhaseOpen?: Record<number, boolean> | null;
   revealedWalls?: Obstacle[];
   fx?: BoardFx | null;
   via?: Position[] | null;
@@ -83,9 +85,14 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
         const isCurrentTurn = !gameEnded && currentTurnId === board.runnerId;
         const isMine = myPlayerId === board.runnerId;
         const isMapOwner = !!myPlayerId && myPlayerId === board.mapOwnerId && myPlayerId !== board.runnerId;
-        const showMapSecrets = isMapOwner;
+        const showMapSecrets = gameEnded || isMapOwner;
         const revealObstacles = gameEnded || isMapOwner || !!board.revealObstacles;
         const visibleItems = showMapSecrets ? getMapItems(board.map) : [];
+        const visibleCollisions = getVisibleCollisionWalls(
+          board.collisions || [],
+          board.map,
+          board.itemsConsumed || {}
+        );
         const status = boardStatus(board, isCurrentTurn, isMine);
 
         return (
@@ -115,7 +122,7 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
                 endPosition={board.map.endPosition}
                 playerPosition={board.position}
                 obstacles={board.map.obstacles}
-                collisionWalls={board.collisions || []}
+                collisionWalls={visibleCollisions}
                 readOnly
                 revealObstacles={revealObstacles}
                 revealItems={showMapSecrets}
@@ -123,6 +130,8 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
                 pawnColor={board.pawnColor}
                 items={visibleItems}
                 itemsConsumed={board.itemsConsumed || {}}
+                itemActiveWalls={board.itemActiveWalls || {}}
+                itemPhaseOpen={board.itemPhaseOpen || {}}
                 revealedWalls={board.revealedWalls || []}
                 fx={board.fx || null}
                 pawnVia={board.via || null}
@@ -139,7 +148,7 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
                     endPosition={board.map.endPosition}
                     playerPosition={board.position}
                     obstacles={board.map.obstacles}
-                    collisionWalls={board.collisions || []}
+                    collisionWalls={visibleCollisions}
                     readOnly
                     playerPhotoURL={board.runnerPhotoURL || undefined}
                     revealObstacles={revealObstacles}
@@ -147,6 +156,8 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
                     distinguishOneTimeWalls={showMapSecrets}
                     items={visibleItems}
                     itemsConsumed={board.itemsConsumed || {}}
+                    itemActiveWalls={board.itemActiveWalls || {}}
+                    itemPhaseOpen={board.itemPhaseOpen || {}}
                     revealedWalls={board.revealedWalls || []}
                   />
                 </div>

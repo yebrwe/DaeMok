@@ -17,10 +17,10 @@
  *   [1게임] 동시 보드 2개 확인 -> B의 대기 입력 무효 -> A/B 교대 -> A 선완주
  *           -> 완주자 턴 건너뜀 -> B 포기 -> A 승리
  *   [2게임] 재시작 -> A/B 교대 -> 양쪽 2턴 완주 -> 무승부
+ *   [재시작 회귀] B가 진행 중 퇴장 -> A 완주 -> 재시작 시 hasLeft 유령 제외
  *   [3인전] 동시 보드 3개 확인 -> A/B/C 교대 -> A/B 완주자 건너뜀 -> C 포기
  *   마지막: 방장 나가기 -> 방 즉시 삭제 -> 상대 자동 리디렉션
  */
-/* eslint-disable @typescript-eslint/no-require-imports */
 const { chromium } = require('playwright');
 const { PNG } = require('playwright-core/lib/utilsBundle');
 const fs = require('fs');
@@ -182,7 +182,7 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
   await items.nth(4).click();
   await expectText(page, '벽(장애물)을 배치하세요');
   if (verifyWormholeSafety) {
-    const mineButton = page.getByRole('button', { name: /지뢰/ });
+    const mineButton = page.getByRole('button', { name: /지뢰/ }).first();
     await mineButton.click();
     await page.locator('[data-cell="5,4"]').click();
     await page.getByRole('button', { name: '이전' }).click();
@@ -193,7 +193,7 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     await page.locator('[data-cell="0,2"]').click();
 
     const cornerWall = page.getByRole('button', { name: '6행 5열 right 벽' });
-    const wormholeButton = page.getByRole('button', { name: /웜홀/ });
+    const wormholeButton = page.getByRole('button', { name: /웜홀/ }).first();
     await cornerWall.click();
     await wormholeButton.click();
     await page.locator('[data-cell="3,3"]').click();
@@ -222,18 +222,19 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
   }
   if (ownerSecrets) {
     await page.getByRole('button', { name: '4행 1열 right 벽' }).click();
-    await page.getByRole('button', { name: /1회성 벽/ }).click();
+    await page.getByRole('button', { name: /가짜벽/ }).first().click();
     await page.getByRole('button', { name: '3행 1열 right 벽' }).click();
-    await page.getByRole('button', { name: /지뢰/ }).click();
+    await page.getByRole('button', { name: /지뢰/ }).first().click();
     await page.locator('[data-cell="2,2"]').click();
-    await page.getByRole('button', { name: /웜홀/ }).click();
+    await page.getByRole('button', { name: /웜홀/ }).first().click();
     await page.locator('[data-cell="3,3"]').click();
     await page.locator('[data-cell="4,4"]').click();
   }
   if (smoke) {
-    await page.getByRole('button', { name: /연막 함정/ }).click();
+    await page.getByRole('button', { name: /연막 함정/ }).first().click();
     await page.locator('[data-cell="0,1"]').click();
-    await expectText(page, '연막 함정 배치됨');
+    const placedItems = await page.locator('[aria-label="배치된 아이템"]').innerText();
+    if (!placedItems.includes('연막 함정')) throw new Error('연막 함정 제작 상태가 표시되지 않음');
   }
   await page.getByRole('button', { name: '완료' }).click();
 }
@@ -297,7 +298,7 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     await expectMyBoardTurns(pageB, 0);
 
     step('6: 3인칭 기본 + 동시 보드 2개 + 레거시 미니맵 부재');
-    await pageA.getByRole('button', { name: '3인칭' }).waitFor({ timeout: 10000 });
+    await pageA.getByRole('button', { name: '3D 보드' }).waitFor({ timeout: 10000 });
     const fpCount = await pageA.getByRole('button', { name: '1인칭' }).count();
     if (fpCount > 0) throw new Error('1인칭 버튼이 아직 남아 있음');
     await expectPlayerBoardCount(pageA, 2);
@@ -310,8 +311,8 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     ok('3인칭 기본 + 동시 보드 + 턴 HUD 확인');
 
     step('6-1: 2D 제작자 시점만 숨은 아이템 공개 + 가짜벽 구분');
-    await pageA.getByRole('button', { name: '2D', exact: true }).click();
-    await pageB.getByRole('button', { name: '2D', exact: true }).click();
+    await pageA.getByRole('button', { name: '2D 보드', exact: true }).click();
+    await pageB.getByRole('button', { name: '2D 보드', exact: true }).click();
     const ownerBoard = pageB.locator('[data-player-board][data-map-owner-preview="true"]');
     await ownerBoard.waitFor({ timeout: 10000 });
     for (const itemType of ['oneTimeWall', 'mine', 'wormhole', 'smoke']) {
@@ -330,8 +331,8 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     }
     await pageA.screenshot({ path: `${OUT}/mp-runner-secrets-hidden-2d.png` });
     await pageB.screenshot({ path: `${OUT}/mp-owner-secrets-2d.png` });
-    await pageA.getByRole('button', { name: '3인칭', exact: true }).click();
-    await pageB.getByRole('button', { name: '3인칭', exact: true }).click();
+    await pageA.getByRole('button', { name: '3D 보드', exact: true }).click();
+    await pageB.getByRole('button', { name: '3D 보드', exact: true }).click();
     ok('온라인 제작자만 전체 함정 공개, 주자에게는 비공개');
 
     step('7: [1게임] B의 대기 입력 무효 -> A/B 한 행동씩 교대');
@@ -428,6 +429,40 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     await pageA.waitForURL(/\/rooms$/, { timeout: 20000 });
     await pageB.waitForURL(/\/rooms$/, { timeout: 25000 });
 
+    step('16-1: [재시작 회귀] 진행 중 퇴장한 B가 다음 경기 roster에 복원되지 않음');
+    const restartRoomName = `${ROOM_NAME}-restart-roster`;
+    await pageA.getByRole('button', { name: '새 게임 방 만들기' }).click();
+    await pageA.fill('#roomName', restartRoomName);
+    await pageA.getByRole('button', { name: '방 만들기' }).click();
+    await pageA.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
+
+    const restartCard = pageB.locator('[data-room-card]', { hasText: restartRoomName }).first();
+    await restartCard.waitFor({ timeout: 20000 });
+    await restartCard.getByRole('button', { name: '참가하기' }).click();
+    await pageB.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
+    await setupMap(pageA);
+    await setupMap(pageB);
+    await expectText(pageA, '모두 준비되었습니다');
+    await pageA.getByRole('button', { name: '게임 시작' }).click();
+    await expectText(pageA, '내 턴');
+
+    await pageB.getByRole('button', { name: '나가기' }).first().click();
+    await pageB.waitForURL(/\/rooms$/, { timeout: 20000 });
+    await pageA.keyboard.press('ArrowRight');
+    await expectMyBoardTurns(pageA, 1);
+    await expectText(pageA, '내 턴');
+    await pageA.keyboard.press('ArrowRight');
+    await expectText(pageA, '승리했습니다');
+
+    await pageA.getByRole('button', { name: '재시작' }).click();
+    await expectText(pageA, '시작점을 선택하세요');
+    await setupMap(pageA);
+    await expectText(pageA, '참가자 (1/2)');
+    ok('fresh room snapshot + !hasLeft roster excludes departed player on restart');
+
+    await pageA.getByRole('button', { name: '나가기' }).first().click();
+    await pageA.waitForURL(/\/rooms$/, { timeout: 20000 });
+
     // ============ 3인전 (순환 릴레이) ============
     step('17: [3인전] C 로그인 + A가 3인 방 생성');
     const ctxC = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -521,6 +556,14 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     await pageA.waitForURL(/\/rooms$/, { timeout: 20000 });
     await pageB.waitForURL(/\/rooms$/, { timeout: 25000 });
     await pageC.waitForURL(/\/rooms$/, { timeout: 25000 });
+    const rankingPanel = pageA.locator('[data-testid="maze-ranking"]');
+    await rankingPanel.waitFor({ state: 'visible', timeout: 20000 });
+    await rankingPanel.getByText('TestA', { exact: false }).first().waitFor({ state: 'visible', timeout: 20000 });
+    const rankingText = await rankingPanel.innerText();
+    if (!rankingText.includes('RP') || !/\d+승/.test(rankingText)) {
+      throw new Error(`Firebase 미로 랭킹 정산/표시 누락: ${JSON.stringify(rankingText)}`);
+    }
+    ok('persistent Firebase maze ranking settled before owner room deletion');
 
     step('23: [4인 화면] D 로그인 + 4인 방 생성/참가');
     const ctxD = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -552,11 +595,36 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     if (canvasCount !== 4) throw new Error(`4인 3D 캔버스 수 불일치: ${canvasCount}`);
     await expectNonBlankCanvases(pageA, 4);
     await pageA.screenshot({ path: `${OUT}/mp-4p-desktop.png` });
-    await pageA.setViewportSize({ width: 390, height: 844 });
+    await pageA.setViewportSize({ width: 360, height: 800 });
     await expectPlayerBoardCount(pageA, 4);
     await expectNonBlankCanvases(pageA, 4);
-    await pageA.screenshot({ path: `${OUT}/mp-4p-mobile.png` });
-    ok('4인 2x2 동시 보드 및 데스크톱/모바일 렌더링');
+    const mobileLayout = await pageA.evaluate(() => {
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      const selectors = ['[data-testid="online-hud"]', '[data-testid="online-controls"]'];
+      const containers = selectors.map((selector) => {
+        const element = document.querySelector(selector);
+        if (!element) return { selector, missing: true };
+        const rect = element.getBoundingClientRect();
+        return {
+          selector,
+          missing: false,
+          inside: rect.left >= -1 && rect.right <= viewport.width + 1 && rect.top >= -1 && rect.bottom <= viewport.height + 1,
+        };
+      });
+      const controlSizes = Array.from(document.querySelectorAll('[data-testid="online-controls"] button')).map((button) => {
+        const rect = button.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      });
+      return { viewport, containers, controlSizes };
+    });
+    if (mobileLayout.containers.some((entry) => entry.missing || !entry.inside)) {
+      throw new Error(`Galaxy S21 HUD/controls overflow: ${JSON.stringify(mobileLayout.containers)}`);
+    }
+    if (mobileLayout.controlSizes.some((size) => size.width < 44 || size.height < 44)) {
+      throw new Error(`Galaxy S21 control target below 44px: ${JSON.stringify(mobileLayout.controlSizes)}`);
+    }
+    await pageA.screenshot({ path: `${OUT}/mp-4p-galaxy-s21.png` });
+    ok('4인 2x2 동시 보드 및 데스크톱/Galaxy S21 렌더링');
 
     step('24: 4인 방 삭제');
     pageA.once('dialog', (dialog) => dialog.accept());

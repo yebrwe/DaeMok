@@ -19,11 +19,13 @@ import {
   isValidMap,
 } from '@/lib/gameUtils';
 import {
+  getPlayerMazeSkillState,
   isVisionObscuredForPlayer,
   mergeWallSegments,
   normalizeConsumed,
   TurnAction,
 } from '@/lib/gameTurn';
+import { createMazeSkillState } from '@/lib/mazeSkills';
 
 export const PRACTICE_USER_ID = 'practice-user';
 export const PRACTICE_AI_IDS = ['practice-ai-1', 'practice-ai-2', 'practice-ai-3'] as const;
@@ -57,6 +59,19 @@ const oneTimeWall = (row: number, col: number, direction: Direction): MapItem =>
   wallDirection: direction,
 });
 
+const specialWall = (
+  type: MapItem['type'],
+  row: number,
+  col: number,
+  direction: Direction,
+  effectDirection?: Direction
+): MapItem => ({
+  type,
+  wallPosition: { row, col },
+  wallDirection: direction,
+  ...(effectDirection ? { effectDirection } : {}),
+});
+
 const wormhole = (entrance: Position, exit: Position): MapItem => ({
   type: 'wormhole',
   entrance,
@@ -70,8 +85,9 @@ const smoke = (row: number, col: number): MapItem => ({
   position: { row, col },
 });
 
-const PRACTICE_MAP_TEMPLATES: GameMap[] = [
+export const PRACTICE_MAP_TEMPLATES: GameMap[] = [
   {
+    skillLoadout: 'scoutPulse',
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 5, col: 5 },
     obstacles: [
@@ -83,9 +99,17 @@ const PRACTICE_MAP_TEMPLATES: GameMap[] = [
       wall(4, 3, 'right'),
       wall(3, 4, 'down'),
     ],
-    items: [oneTimeWall(5, 2, 'right'), mine(3, 0), smoke(4, 0)],
+    items: [
+      oneTimeWall(5, 2, 'right'),
+      mine(3, 0),
+      smoke(4, 0),
+      specialWall('fireWall', 0, 1, 'down'),
+      specialWall('poisonWall', 2, 3, 'right'),
+      specialWall('iceWall', 4, 1, 'right'),
+    ],
   },
   {
+    skillLoadout: 'breach',
     startPosition: { row: 5, col: 0 },
     endPosition: { row: 0, col: 5 },
     obstacles: [
@@ -96,9 +120,16 @@ const PRACTICE_MAP_TEMPLATES: GameMap[] = [
       wall(2, 3, 'down'),
       wall(1, 4, 'left'),
     ],
-    items: [wormhole({ row: 2, col: 0 }, { row: 4, col: 1 }), radar()],
+    items: [
+      wormhole({ row: 2, col: 0 }, { row: 4, col: 1 }),
+      radar(),
+      specialWall('steelWall', 5, 1, 'up'),
+      specialWall('windWall', 4, 3, 'up', 'right'),
+      specialWall('collapseWall', 1, 2, 'right'),
+    ],
   },
   {
+    skillLoadout: 'dash',
     startPosition: { row: 0, col: 5 },
     endPosition: { row: 5, col: 0 },
     obstacles: [
@@ -108,11 +139,17 @@ const PRACTICE_MAP_TEMPLATES: GameMap[] = [
       wall(2, 3, 'left'),
       wall(3, 2, 'up'),
       wall(4, 2, 'left'),
-      wall(4, 1, 'up'),
     ],
-    items: [oneTimeWall(5, 3, 'left'), mine(3, 5), radar()],
+    items: [
+      oneTimeWall(5, 3, 'left'),
+      mine(3, 5),
+      radar(),
+      specialWall('phaseWall', 0, 4, 'down'),
+      specialWall('mirrorWall', 3, 3, 'down'),
+    ],
   },
   {
+    skillLoadout: 'anchor',
     startPosition: { row: 5, col: 5 },
     endPosition: { row: 0, col: 0 },
     obstacles: [
@@ -124,7 +161,13 @@ const PRACTICE_MAP_TEMPLATES: GameMap[] = [
       wall(1, 2, 'left'),
       wall(1, 1, 'down'),
     ],
-    items: [oneTimeWall(0, 3, 'left'), mine(3, 4), smoke(4, 5)],
+    items: [
+      oneTimeWall(0, 3, 'left'),
+      mine(3, 4),
+      smoke(4, 5),
+      specialWall('thornWall', 4, 4, 'up'),
+      specialWall('crystalWall', 2, 3, 'left'),
+    ],
   },
 ];
 
@@ -147,6 +190,7 @@ export function clonePracticeMap(map: GameMap): GameMap {
       entrance: item.entrance ? clonePosition(item.entrance) : undefined,
       exit: item.exit ? clonePosition(item.exit) : undefined,
     })),
+    skillLoadout: map.skillLoadout || null,
   };
 }
 
@@ -198,7 +242,10 @@ export function createPracticeGameState(playerMap: GameMap, requestedAiCount: nu
     };
   });
 
-  const itemState = Object.fromEntries(turnOrder.map((id) => [id, { consumed: {} }]));
+  const itemState = Object.fromEntries(turnOrder.map((id) => [id, {
+    consumed: {},
+    mazeSkill: createMazeSkillState(maps[id].skillLoadout),
+  }]));
 
   return {
     phase: GamePhase.PLAY,
@@ -323,6 +370,9 @@ export function choosePracticeAiAction(
 
   const ownItems = getMapItems(ownMap);
   const ownConsumed = normalizeConsumed(state.itemState?.[runnerId]?.consumed);
+  const mazeSkill = getPlayerMazeSkillState(state, runnerId, ownMap);
+  const equippedSkill = mazeSkill.loadout[0];
+  const skillAvailable = !!equippedSkill && !mazeSkill.consumed[equippedSkill];
   const radarIndex = ownItems.findIndex(
     (item, index) => item.type === 'radar' && !ownConsumed[index]
   );
@@ -343,13 +393,32 @@ export function choosePracticeAiAction(
   if ((player.moves || 0) === 0 && radarIndex >= 0) {
     return { type: 'radar', itemIndex: radarIndex };
   }
+  if ((player.moves || 0) === 0 && skillAvailable && equippedSkill === 'scoutPulse') {
+    return { type: 'skill', skillId: 'scoutPulse' };
+  }
 
   const knownWalls = knownWallsForRunner(state, runnerId);
   const path = findExplorationPath(player.position, playedMap.endPosition, knownWalls, probeCounts);
   if (!path || path.length < 2) return null;
 
   const direction = directionBetween(player.position, path[1]);
-  return direction ? { type: 'move', direction } : null;
+  if (!direction) return null;
+
+  if (skillAvailable && equippedSkill === 'breach') {
+    const knownWallKeys = new Set(knownWalls.map((wall) => practiceWallKey(wall.position, wall.direction)));
+    if (knownWallKeys.has(practiceWallKey(player.position, direction))) {
+      return { type: 'skill', skillId: 'breach', direction };
+    }
+  }
+
+  if (skillAvailable && equippedSkill === 'dash' && path.length >= 3) {
+    const secondDirection = directionBetween(path[1], path[2]);
+    if (secondDirection === direction) {
+      return { type: 'skill', skillId: 'dash', direction };
+    }
+  }
+
+  return { type: 'move', direction };
 }
 
 export interface PracticeStanding {

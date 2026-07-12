@@ -2,19 +2,23 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Anchor,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
   Box,
+  FastForward,
   Grid2X2,
   ScanSearch,
+  ShieldAlert,
 } from 'lucide-react';
 import LiveBoardGrid, { LiveBoardEntry, LiveBoardViewMode } from '@/components/LiveBoardGrid';
 import { BoardFx } from '@/components/three/GameBoard3D';
-import { Direction, GameMap, GamePhase, GameState } from '@/types/game';
+import { Direction, GameMap, GamePhase, GameState, MazeSkillId } from '@/types/game';
 import {
   MoveTurnOutcome,
+  getPlayerMazeSkillState,
   isVisionObscuredForPlayer,
   normalizeConsumed,
   resolveTurnAction,
@@ -22,6 +26,7 @@ import {
   TurnAction,
   TurnOutcome,
 } from '@/lib/gameTurn';
+import { MAZE_SKILL_DEFINITIONS } from '@/lib/mazeSkills';
 import {
   choosePracticeAiAction,
   createPracticeGameState,
@@ -36,6 +41,13 @@ import {
 import { getMapItems, getNextTurnPlayerId } from '@/lib/gameUtils';
 
 const MAX_AI_MOVES = 200;
+
+const SKILL_ICONS: Record<MazeSkillId, typeof ScanSearch> = {
+  scoutPulse: ScanSearch,
+  breach: ShieldAlert,
+  anchor: Anchor,
+  dash: FastForward,
+};
 
 interface RacerVisualState {
   fx: BoardFx | null;
@@ -60,6 +72,34 @@ function outcomeVisual(outcome: TurnOutcome, key: number): RacerVisualState {
       fx: { key, type: 'radar', at: outcome.position },
       via: null,
     };
+  }
+
+  if (outcome.type === 'skill') {
+    if (outcome.reachedGoal) {
+      return {
+        fx: { key, type: 'goal', at: outcome.position },
+        via: outcome.via || null,
+      };
+    }
+    if (outcome.landingEffect === 'mine') {
+      return {
+        fx: { key, type: 'mine', at: outcome.itemPosition, delay: 0.35 },
+        via: outcome.via || null,
+      };
+    }
+    if (outcome.landingEffect === 'wormhole') {
+      return {
+        fx: { key, type: 'wormhole', at: outcome.itemPosition, to: outcome.wormholeExit, delay: 0.35 },
+        via: outcome.via || null,
+      };
+    }
+    if (outcome.skillId === 'scoutPulse') {
+      return {
+        fx: { key, type: 'radar', at: outcome.position },
+        via: null,
+      };
+    }
+    return { fx: null, via: outcome.via || null };
   }
 
   if (outcome.reachedGoal) {
@@ -93,6 +133,8 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
   const [gameState, setGameState] = useState<GameState>(() => createPracticeGameState(playerMap, aiCount));
   const [viewMode, setViewMode] = useState<LiveBoardViewMode>('2d');
   const [visuals, setVisuals] = useState<Record<string, RacerVisualState>>({});
+  const [armedSkill, setArmedSkill] = useState<'breach' | 'dash' | null>(null);
+  const [skillNotice, setSkillNotice] = useState<string>('');
   const stateRef = useRef(gameState);
   const visualKeyRef = useRef(0);
   const completedRef = useRef(false);
@@ -194,7 +236,14 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
         currentTurnId,
         probeCountsRef.current[currentTurnId] || {}
       );
-      const outcome = action ? dispatchAction(currentTurnId, action, expectedTurn) : null;
+      let outcome = action ? dispatchAction(currentTurnId, action, expectedTurn) : null;
+      if (!outcome && action?.type === 'skill' && action.direction) {
+        outcome = dispatchAction(
+          currentTurnId,
+          { type: 'move', direction: action.direction },
+          expectedTurn
+        );
+      }
       if (outcome) {
         actedTurnRef.current = turnToken;
       } else if (retireAi(currentTurnId, expectedTurn)) {
@@ -208,10 +257,28 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
   const isHumanTurn = gameState.phase === GamePhase.PLAY && currentTurnId === PRACTICE_USER_ID;
   const humanFinished = !!gameState.players[PRACTICE_USER_ID]?.finished;
 
+  useEffect(() => {
+    if (!isHumanTurn) {
+      setArmedSkill(null);
+      setSkillNotice('');
+    }
+  }, [isHumanTurn]);
+
   const handleHumanMove = useCallback((direction: Direction) => {
     if (!isHumanTurn || humanFinished) return;
+    if (armedSkill) {
+      const outcome = dispatchAction(PRACTICE_USER_ID, {
+        type: 'skill',
+        skillId: armedSkill,
+        direction,
+      });
+      setArmedSkill(null);
+      setSkillNotice(outcome ? '' : '그 방향으로는 스킬을 사용할 수 없습니다.');
+      return;
+    }
+    setSkillNotice('');
     dispatchAction(PRACTICE_USER_ID, { type: 'move', direction });
-  }, [dispatchAction, humanFinished, isHumanTurn]);
+  }, [armedSkill, dispatchAction, humanFinished, isHumanTurn]);
 
   useEffect(() => {
     const keyDirections: Record<string, Direction> = {
@@ -243,10 +310,29 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
   const ownItems = getMapItems(ownMap);
   const ownConsumed = normalizeConsumed(gameState.itemState?.[PRACTICE_USER_ID]?.consumed);
   const radarIndex = ownItems.findIndex((item, index) => item.type === 'radar' && !ownConsumed[index]);
+  const mazeSkill = getPlayerMazeSkillState(gameState, PRACTICE_USER_ID, ownMap);
+  const equippedSkill = mazeSkill.loadout[0];
+  const skillConsumed = !equippedSkill || !!mazeSkill.consumed[equippedSkill];
+  const SkillIcon = equippedSkill ? SKILL_ICONS[equippedSkill] : ScanSearch;
 
   const handleRadar = () => {
     if (!isHumanTurn || humanFinished || radarIndex < 0) return;
     dispatchAction(PRACTICE_USER_ID, { type: 'radar', itemIndex: radarIndex });
+  };
+
+  const handleSkill = () => {
+    if (!isHumanTurn || humanFinished || !equippedSkill || skillConsumed) return;
+    if (equippedSkill === 'anchor') {
+      setSkillNotice('공간 닻은 첫 강제 이동에 자동 발동합니다.');
+      return;
+    }
+    if (equippedSkill === 'scoutPulse') {
+      const outcome = dispatchAction(PRACTICE_USER_ID, { type: 'skill', skillId: 'scoutPulse' });
+      setSkillNotice(outcome ? '' : '현재 정찰 파동을 사용할 수 없습니다.');
+      return;
+    }
+    setSkillNotice('방향을 선택하세요.');
+    setArmedSkill((current) => current === equippedSkill ? null : equippedSkill);
   };
 
   const boards = useMemo<LiveBoardEntry[]>(() => {
@@ -256,6 +342,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
       const ownerId = gameState.assignments?.[runnerId];
       const playedMap = ownerId ? gameState.maps?.[ownerId] : null;
       if (!player || !ownerId || !playedMap) return [];
+      const mapItemState = gameState.itemState?.[ownerId];
 
       return [{
         runnerId,
@@ -272,7 +359,9 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
         collisions: collisions.filter(
           (entry) => entry.playerId === runnerId && entry.mapOwnerId === ownerId
         ),
-        itemsConsumed: normalizeConsumed(gameState.itemState?.[ownerId]?.consumed),
+        itemsConsumed: normalizeConsumed(mapItemState?.consumed),
+        itemActiveWalls: normalizeConsumed(mapItemState?.activeWalls),
+        itemPhaseOpen: normalizeConsumed(mapItemState?.phaseOpen),
         revealedWalls: gameState.revealedWallsByPlayer?.[runnerId] || [],
         fx: visuals[runnerId]?.fx || null,
         via: visuals[runnerId]?.via || null,
@@ -320,7 +409,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
       data-ai-count={aiCount}
       data-ai-thinking={aiThinking ? 'true' : 'false'}
     >
-      <div className="absolute inset-x-1 top-1 z-20 h-10 sm:inset-x-2">
+      <div className="absolute inset-x-1 top-1 z-20 h-12 sm:inset-x-2">
         <div className="game-panel flex h-full min-w-0 items-center justify-between gap-2 !rounded-lg px-2 sm:px-3">
           <div className="flex min-w-0 items-center gap-2">
             <span className="shrink-0 text-[10px] font-black text-slate-500" data-testid="turn-number">
@@ -341,7 +430,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
           <div className="flex shrink-0 items-center gap-1" aria-label="보드 시점">
             <button
               type="button"
-              className={`flex h-10 w-10 items-center justify-center rounded-md border ${
+              className={`flex size-11 items-center justify-center rounded-md border ${
                 viewMode === '2d' ? 'border-amber-400 bg-amber-400 text-slate-950' : 'border-slate-600 bg-slate-800 text-slate-300'
               }`}
               onClick={() => setViewMode('2d')}
@@ -353,7 +442,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
             </button>
             <button
               type="button"
-              className={`flex h-10 w-10 items-center justify-center rounded-md border ${
+              className={`flex size-11 items-center justify-center rounded-md border ${
                 viewMode === 'third' ? 'border-amber-400 bg-amber-400 text-slate-950' : 'border-slate-600 bg-slate-800 text-slate-300'
               }`}
               onClick={() => setViewMode('third')}
@@ -368,7 +457,17 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
       </div>
 
       <div
-        className="absolute inset-x-1 top-[46px] min-h-0 sm:inset-x-2"
+        className="pointer-events-none absolute inset-x-2 top-[54px] z-30 flex h-5 items-center justify-center min-[430px]:hidden"
+        aria-live="polite"
+        data-testid="mobile-turn-message"
+      >
+        <span className="max-w-full truncate rounded border border-slate-700 bg-slate-950/90 px-2 py-0.5 text-[10px] text-slate-300">
+          {gameState.turnMessage || '행동 결과 대기 중'}
+        </span>
+      </div>
+
+      <div
+        className="absolute inset-x-1 top-[76px] min-h-0 min-[430px]:top-[54px] sm:inset-x-2"
         style={{ bottom: 'calc(60px + env(safe-area-inset-bottom))' }}
       >
         <LiveBoardGrid
@@ -381,6 +480,17 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
         />
       </div>
 
+      {skillNotice && (
+        <div
+          className="pointer-events-none absolute inset-x-2 bottom-[64px] z-40 flex justify-center"
+          aria-live="polite"
+        >
+          <span className="rounded border border-emerald-400/50 bg-slate-950/95 px-2 py-1 text-[10px] font-bold text-emerald-200">
+            {skillNotice}
+          </span>
+        </div>
+      )}
+
       <div
         className="absolute inset-x-0 bottom-0 z-30 flex h-[58px] items-center justify-center gap-1.5 border-t border-slate-800 bg-slate-950/95 px-2 backdrop-blur-sm"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(58px + env(safe-area-inset-bottom))' }}
@@ -390,6 +500,26 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
         {moveButton('up', '위로 이동', ArrowUp)}
         {moveButton('down', '아래로 이동', ArrowDown)}
         {moveButton('right', '오른쪽으로 이동', ArrowRight)}
+        <button
+          type="button"
+          className={`ml-1 flex h-11 min-w-11 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-bold sm:h-12 ${
+            armedSkill
+              ? 'border-emerald-300 bg-emerald-400 text-slate-950'
+              : equippedSkill === 'anchor' && !skillConsumed
+                ? 'border-cyan-400 bg-cyan-500/15 text-cyan-200'
+                : 'border-emerald-500/60 bg-slate-900 text-emerald-200'
+          } disabled:opacity-35`}
+          onClick={handleSkill}
+          disabled={controlDisabled || skillConsumed}
+          title={equippedSkill ? `${MAZE_SKILL_DEFINITIONS[equippedSkill].label}${equippedSkill === 'anchor' ? ' · 자동 발동' : ''}` : '스킬 없음'}
+          aria-label={equippedSkill ? `${MAZE_SKILL_DEFINITIONS[equippedSkill].label}${equippedSkill === 'anchor' ? ' 자동 발동' : ' 사용'}` : '스킬 없음'}
+          aria-pressed={!!armedSkill}
+        >
+          <SkillIcon size={17} aria-hidden="true" />
+          <span className="hidden min-[430px]:inline">
+            {equippedSkill ? MAZE_SKILL_DEFINITIONS[equippedSkill].label : '스킬'}
+          </span>
+        </button>
         <button
           type="button"
           className="btn-game ml-1 flex h-11 min-w-11 items-center justify-center gap-1 !rounded-lg px-2 text-[10px] sm:h-12"

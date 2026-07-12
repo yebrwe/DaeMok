@@ -194,9 +194,7 @@ async function waitForRoomAbsent(roomId, monitorToken) {
 }
 
 function playerIds(room) {
-  if (Array.isArray(room.players)) return room.players.filter(Boolean);
-  if (room.players && typeof room.players === 'object') return Object.values(room.players);
-  return [];
+  return Object.keys(room.gameState?.players || {});
 }
 
 async function createJoinedRoom(hostPage, guestPage, roomName, monitorToken) {

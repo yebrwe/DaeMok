@@ -1,0 +1,370 @@
+.page {
+  width: 100%;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.headerActions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.headerActions > a,
+.headerActions > button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.mobileActionLabel {
+  display: none;
+}
+
+.profileBadge {
+  display: flex;
+  min-height: 36px;
+  min-width: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid rgb(51 65 85 / 60%);
+  border-radius: 8px;
+  background: rgb(30 41 59 / 60%);
+}
+
+.lobbyGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+.roomColumn {
+  min-width: 0;
+  min-height: 420px;
+}
+
+.rankingPanel {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 8px !important;
+}
+
+.rankingHeading {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.rankingTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: rgb(252 211 77);
+}
+
+.rankingTitleRow h2 {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.betaBadge {
+  flex: none;
+  padding: 3px 6px;
+  border: 1px solid rgb(251 191 36 / 38%);
+  border-radius: 999px;
+  background: rgb(251 191 36 / 10%);
+  color: rgb(253 230 138);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ownRankingBand {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px 12px;
+  align-items: end;
+  padding: 9px 12px;
+  border-top: 1px solid rgb(51 65 85 / 70%);
+  border-bottom: 1px solid rgb(51 65 85 / 70%);
+}
+
+.ownRankingLabel {
+  display: block;
+  margin-bottom: 1px;
+  color: rgb(100 116 139);
+  font-size: 10px;
+}
+
+.ownRankingPosition {
+  display: block;
+  overflow: hidden;
+  color: rgb(226 232 240);
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ownRating {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 3px;
+  color: rgb(251 191 36);
+}
+
+.ownRating strong {
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ownRating span {
+  color: rgb(148 163 184);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ownRecord {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: rgb(148 163 184);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ownRecord b {
+  color: rgb(226 232 240);
+}
+
+.rankingStatus {
+  display: flex;
+  min-height: 250px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  color: rgb(100 116 139);
+  font-size: 11px;
+  text-align: center;
+}
+
+.smallSpinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgb(251 191 36 / 28%);
+  border-top-color: rgb(251 191 36);
+  border-radius: 50%;
+  animation: ranking-spin 0.8s linear infinite;
+}
+
+.rankingTableScroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.rankingTable {
+  width: 100%;
+  min-width: 286px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rankingTable th {
+  height: 27px;
+  padding: 4px 3px;
+  color: rgb(100 116 139);
+  font-size: 9px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.rankingTable th:first-child,
+.rankingTable td:first-child {
+  width: 27px;
+  text-align: center;
+}
+
+.rankingTable th:nth-child(3),
+.rankingTable td:nth-child(3) {
+  width: 43px;
+  text-align: right;
+}
+
+.rankingTable th:nth-child(4),
+.rankingTable td:nth-child(4) {
+  width: 50px;
+  text-align: right;
+}
+
+.rankingTable th:nth-child(5),
+.rankingTable td:nth-child(5) {
+  width: 37px;
+  text-align: right;
+}
+
+.rankingTable td {
+  height: 34px;
+  padding: 4px 3px;
+  border-top: 1px solid rgb(51 65 85 / 48%);
+  color: rgb(203 213 225);
+  vertical-align: middle;
+}
+
+.rankingTable tr:first-child .rankNumber {
+  color: rgb(252 211 77);
+}
+
+.rankingTable tr:nth-child(2) .rankNumber {
+  color: rgb(203 213 225);
+}
+
+.rankingTable tr:nth-child(3) .rankNumber {
+  color: rgb(251 146 60);
+}
+
+.myRankingRow {
+  background: rgb(251 191 36 / 8%);
+}
+
+.rankNumber,
+.ratingCell {
+  font-weight: 800;
+}
+
+.ratingCell {
+  color: rgb(252 211 77) !important;
+}
+
+.recordCell,
+.bestMovesCell {
+  color: rgb(148 163 184) !important;
+}
+
+.rankingPlayer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.rankingPlayer > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rankingAvatar,
+.rankingAvatarFallback {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 50%;
+}
+
+.rankingAvatar {
+  object-fit: cover;
+}
+
+.rankingAvatarFallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(37 99 235);
+  color: white;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.betaNote {
+  padding: 8px 12px 9px;
+  border-top: 1px solid rgb(51 65 85 / 48%);
+  color: rgb(100 116 139);
+  font-size: 9px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+@keyframes ranking-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (min-width: 901px) {
+  .rankingPanel {
+    position: sticky;
+    top: 16px;
+  }
+}
+
+@media (max-width: 900px) {
+  .lobbyGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 639px) {
+  .header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .headerActions {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .headerActions > a,
+  .headerActions > button,
+  .profileBadge {
+    min-width: 0;
+    min-height: 44px;
+    padding-right: 4px;
+    padding-left: 4px;
+  }
+
+  .desktopActionLabel {
+    display: none;
+  }
+
+  .mobileActionLabel {
+    display: inline;
+  }
+
+  .roomColumn {
+    min-height: 0;
+  }
+
+  .rankingPanel {
+    width: 100%;
+  }
+}

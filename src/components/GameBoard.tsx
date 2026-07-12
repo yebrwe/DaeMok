@@ -1,8 +1,23 @@
 'use client';
 
 import React, { useState, useRef, useCallback } from 'react';
-import { CellType, CollisionWall, Direction, GamePhase, ItemType, MapItem, Obstacle, Position } from '@/types/game';
-import { BOARD_SIZE, isSamePosition, isSameWallSegment } from '@/lib/gameUtils';
+import Image from 'next/image';
+import { CellType, CollisionWall, Direction, GamePhase, ItemType, MapItem, Obstacle, Position, WallItemType } from '@/types/game';
+import { BOARD_SIZE, ITEM_LABELS, isSamePosition, isSameWallSegment, isWallItemType } from '@/lib/gameUtils';
+
+const ITEM_WALL_STYLES: Record<WallItemType, string> = {
+  oneTimeWall: 'bg-cyan-400 ring-cyan-100',
+  steelWall: 'bg-zinc-300 ring-zinc-50',
+  fireWall: 'bg-red-500 ring-orange-200',
+  poisonWall: 'bg-lime-500 ring-lime-100',
+  iceWall: 'bg-cyan-200 ring-sky-50',
+  windWall: 'bg-sky-500 ring-white',
+  collapseWall: 'bg-stone-500 ring-stone-200',
+  phaseWall: 'bg-violet-500 ring-fuchsia-200',
+  mirrorWall: 'bg-slate-50 ring-cyan-200',
+  thornWall: 'bg-rose-600 ring-rose-200',
+  crystalWall: 'bg-fuchsia-500 ring-pink-100',
+};
 
 interface GameBoardProps {
   gamePhase: GamePhase;
@@ -21,6 +36,8 @@ interface GameBoardProps {
   distinguishOneTimeWalls?: boolean; // 제작자 시점에서 가짜벽을 일반 벽과 구분
   items?: MapItem[] | null; // 맵 아이템들
   itemsConsumed?: Record<number, boolean> | null; // 인덱스별 사용 여부
+  itemActiveWalls?: Record<number, boolean> | null; // 붕괴벽이 닫힌 상태
+  itemPhaseOpen?: Record<number, boolean> | null; // 위상벽이 다음 시도에 열리는 상태
   pendingCell?: Position | null; // 배치 중 임시 표시 (웜홀 입구)
   validTargetCells?: Position[]; // 아이템 배치 시 안전하게 선택 가능한 셀
   revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들 (일반 벽처럼 노란색으로 표시)
@@ -44,6 +61,8 @@ const GameBoard: React.FC<GameBoardProps> = ({
   distinguishOneTimeWalls = false,
   items = null,
   itemsConsumed = null,
+  itemActiveWalls = null,
+  itemPhaseOpen = null,
   pendingCell = null,
   validTargetCells = [],
   revealedWalls = [],
@@ -58,15 +77,94 @@ const GameBoard: React.FC<GameBoardProps> = ({
 
   const itemList = items || [];
 
-  // 해당 벽 자리에 있는 1회성 벽 아이템의 인덱스 (-1이면 없음)
+  // 해당 선을 점유한 벽형 아이템의 인덱스 (-1이면 없음)
   const findItemWallIndex = (position: Position, direction: Direction): number =>
     itemList.findIndex(
       (it) =>
-        it.type === 'oneTimeWall' &&
+        isWallItemType(it.type) &&
         !!it.wallPosition &&
         !!it.wallDirection &&
         isSameWallSegment(position, direction, it.wallPosition, it.wallDirection)
     );
+
+  const renderItemWall = (
+    position: Position,
+    direction: Direction,
+    orientation: 'horizontal' | 'vertical'
+  ) => {
+    const itemWallIndex = findItemWallIndex(position, direction);
+    if (itemWallIndex < 0 || !showItemsFully) return null;
+
+    const item = itemList[itemWallIndex];
+    if (!isWallItemType(item.type)) return null;
+    const consumed = !!itemsConsumed?.[itemWallIndex];
+    const horizontal = orientation === 'horizontal';
+
+    if (item.type === 'oneTimeWall' && !showFakeWallIdentity) {
+      if (consumed) return null;
+      return (
+        <div
+          data-map-item={item.type}
+          data-wall-state="armed"
+          className="absolute inset-0 flex items-center justify-center"
+        >
+          <div className={horizontal ? 'h-1/2 w-3/4 bg-amber-400' : 'h-3/4 w-1/2 bg-amber-400'} />
+        </div>
+      );
+    }
+
+    if (item.type === 'oneTimeWall') {
+      return (
+        <div
+          data-map-item={item.type}
+          data-wall-state={consumed ? 'consumed' : 'armed'}
+          title={`${ITEM_LABELS[item.type]} · ${consumed ? '소모됨' : '미사용'}`}
+          className={`absolute inset-0 flex items-center justify-center ${consumed ? 'opacity-35' : ''}`}
+        >
+          <div className={horizontal ? 'flex h-1/2 w-3/4 justify-between' : 'flex h-3/4 w-1/2 flex-col justify-between'}>
+            {[0, 1, 2].map((segment) => (
+              <span
+                key={segment}
+                className={`${horizontal ? 'h-full w-[28%]' : 'h-[28%] w-full'} ${ITEM_WALL_STYLES[item.type]} ring-1`}
+              />
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    const active = !!itemActiveWalls?.[itemWallIndex];
+    const phaseOpen = !!itemPhaseOpen?.[itemWallIndex];
+    const dimensions = horizontal ? 'h-1/2 w-3/4' : 'h-3/4 w-1/2';
+    let wallState = consumed ? 'consumed' : 'armed';
+    let stateLabel = consumed ? '소모됨' : '활성';
+    let wallClasses = `${dimensions} ${horizontal ? 'border-x-2' : 'border-y-2'} ${ITEM_WALL_STYLES[item.type]} border-slate-950/50 ring-1`;
+
+    if (item.type === 'collapseWall' && !consumed) {
+      wallState = active ? 'closed' : 'armed';
+      stateLabel = active ? '폐쇄됨' : '대기 · 통과 후 폐쇄';
+      wallClasses = active
+        ? `${dimensions} border-2 border-stone-950 bg-stone-500 ring-2 ring-stone-200`
+        : `${dimensions} border-2 border-dashed border-stone-200 bg-stone-500/30 ring-1 ring-stone-300`;
+    } else if (item.type === 'phaseWall' && !consumed) {
+      wallState = phaseOpen ? 'open' : 'closed';
+      stateLabel = phaseOpen ? '열림 · 다음 시도 통과' : '닫힘 · 다음 시도 차단';
+      wallClasses = phaseOpen
+        ? `${dimensions} border-2 border-dashed border-violet-300 bg-violet-500/20 ring-1 ring-fuchsia-200/70`
+        : `${dimensions} border-2 border-violet-200 bg-violet-500 ring-2 ring-fuchsia-200`;
+    }
+
+    return (
+      <div
+        data-map-item={item.type}
+        data-wall-state={wallState}
+        title={`${ITEM_LABELS[item.type]} · ${stateLabel}`}
+        className={`absolute inset-0 flex items-center justify-center ${consumed ? 'opacity-35' : ''}`}
+      >
+        <div className={wallClasses} />
+      </div>
+    );
+  };
 
   // 셀 위 아이템 마커 (지뢰/웜홀)
   const renderItemCellMarker = (position: Position) => {
@@ -169,13 +267,10 @@ const GameBoard: React.FC<GameBoardProps> = ({
   
   // 특정 방향에 장애물이 있는지 확인
   const hasObstacle = (position: Position, direction: Direction): boolean => {
-    // obstacles이 undefined인 경우 방어 코드 추가
     if (!obstacles) return false;
-    
-    return obstacles.some(
-      (o) => o.position.row === position.row && 
-             o.position.col === position.col && 
-             o.direction === direction
+
+    return obstacles.some((obstacle) =>
+      isSameWallSegment(position, direction, obstacle.position, obstacle.direction)
     );
   };
 
@@ -197,7 +292,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
       relative w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14
       ${cellType === 'empty' || cellType === 'player' ? 'bg-white' : ''}
       ${isValidTarget ? 'ring-2 ring-inset ring-emerald-400 bg-emerald-50' : ''}
-      ${!readOnly && (gamePhase === GamePhase.SETUP || gamePhase === GamePhase.PLAY) ? 'cursor-pointer' : ''}
+      ${isInteractive ? 'cell-hit-target cursor-pointer' : ''}
       touch-action-none transition-colors duration-300 ease-in-out
     `;
 
@@ -211,7 +306,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 선택` : undefined}
         className={cellClasses}
         onClick={() => {
-          if (!readOnly && onCellClick) {
+          if (isInteractive && onCellClick) {
             onCellClick(position);
           }
         }}
@@ -259,9 +354,11 @@ const GameBoard: React.FC<GameBoardProps> = ({
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center z-20 overflow-hidden border-2 border-white">
               {playerPhotoURL ? (
-                <img 
-                  src={playerPhotoURL} 
-                  alt="Player" 
+                <Image
+                  src={playerPhotoURL}
+                  alt="Player"
+                  width={24}
+                  height={24}
                   className="w-full h-full object-cover rounded-full"
                 />
               ) : (
@@ -339,11 +436,15 @@ const GameBoard: React.FC<GameBoardProps> = ({
       );
     }
     
+    const isWallPlacementMode = placeMode === 'wall' || isWallItemType(placeMode);
     const isInteractive = gamePhase === GamePhase.SETUP && !readOnly && !!onDirectionClick &&
-      selectionMode === 'none' && (placeMode === 'wall' || placeMode === 'oneTimeWall');
+      selectionMode === 'none' && isWallPlacementMode;
+    const yieldsToCellPlacement = gamePhase === GamePhase.SETUP && !readOnly &&
+      (selectionMode !== 'none' || !isWallPlacementMode);
     const containerClasses = `w-full h-2 z-10 relative
-      ${isInteractive ? 'cursor-pointer wall-hit-horizontal' : ''}
-      transition-all duration-150 ease-in-out bg-transparent hover:bg-yellow-200`;
+      ${isInteractive ? 'cursor-pointer wall-hit-horizontal hover:bg-yellow-200' : ''}
+      ${yieldsToCellPlacement ? 'pointer-events-none' : ''}
+      transition-all duration-150 ease-in-out bg-transparent`;
     
     return (
       <div
@@ -354,13 +455,13 @@ const GameBoard: React.FC<GameBoardProps> = ({
         aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽` : undefined}
         onClick={(e) => {
           e.stopPropagation();
-          if (gamePhase === GamePhase.SETUP && !readOnly && onDirectionClick) {
+          if (isInteractive && onDirectionClick) {
             onDirectionClick(position, direction);
           }
         }}
         onMouseEnter={(e) => {
           e.stopPropagation();
-          if (!isMouseDownRef.current && gamePhase === GamePhase.SETUP && !readOnly) {
+          if (!isMouseDownRef.current && isInteractive) {
             setHoveredWall({ position, direction });
           }
         }}
@@ -402,33 +503,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
             <div className="w-3/4 h-1/2 bg-amber-400" />
           </div>
         )}
-        {/* 1회성 벽 아이템: 어디서든 일반 벽과 완전히 동일하게 위장 (제작 중엔 노란 벽, 공개 시엔 공개 벽) */}
-        {(() => {
-          const itemWallIdx = findItemWallIndex(position, direction);
-          if (itemWallIdx < 0 || !showItemsFully) return null;
-          const consumed = !!itemsConsumed?.[itemWallIdx];
-          if (showFakeWallIdentity) {
-            return (
-              <div
-                data-map-item="oneTimeWall"
-                title={`1회성 가짜벽 · ${consumed ? '소모됨' : '미사용'}`}
-                className={`absolute inset-0 flex items-center justify-center ${consumed ? 'opacity-35' : ''}`}
-              >
-                <div className="flex h-1/2 w-3/4 justify-between">
-                  <span className="h-full w-[28%] bg-cyan-400 ring-1 ring-cyan-100" />
-                  <span className="h-full w-[28%] bg-cyan-400 ring-1 ring-cyan-100" />
-                  <span className="h-full w-[28%] bg-cyan-400 ring-1 ring-cyan-100" />
-                </div>
-              </div>
-            );
-          }
-          if (consumed) return null;
-          return (
-            <div data-map-item="oneTimeWall" className="absolute inset-0 flex items-center justify-center">
-              <div className="w-3/4 h-1/2 bg-amber-400" />
-            </div>
-          );
-        })()}
+        {renderItemWall(position, direction, 'horizontal')}
         {/* 탐지기로 밝혀낸 벽 (1회성 벽도 일반 벽으로 위장) */}
         {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
           isRadarRevealed(position, direction) && (
@@ -482,11 +557,15 @@ const GameBoard: React.FC<GameBoardProps> = ({
       );
     }
     
+    const isWallPlacementMode = placeMode === 'wall' || isWallItemType(placeMode);
     const isInteractive = gamePhase === GamePhase.SETUP && !readOnly && !!onDirectionClick &&
-      selectionMode === 'none' && (placeMode === 'wall' || placeMode === 'oneTimeWall');
+      selectionMode === 'none' && isWallPlacementMode;
+    const yieldsToCellPlacement = gamePhase === GamePhase.SETUP && !readOnly &&
+      (selectionMode !== 'none' || !isWallPlacementMode);
     const containerClasses = `h-full w-2 z-10 relative 
-      ${isInteractive ? 'cursor-pointer wall-hit-vertical' : ''}
-      transition-all duration-150 ease-in-out bg-transparent hover:bg-yellow-200`;
+      ${isInteractive ? 'cursor-pointer wall-hit-vertical hover:bg-yellow-200' : ''}
+      ${yieldsToCellPlacement ? 'pointer-events-none' : ''}
+      transition-all duration-150 ease-in-out bg-transparent`;
     
     return (
       <div
@@ -497,13 +576,13 @@ const GameBoard: React.FC<GameBoardProps> = ({
         aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽` : undefined}
         onClick={(e) => {
           e.stopPropagation();
-          if (gamePhase === GamePhase.SETUP && !readOnly && onDirectionClick) {
+          if (isInteractive && onDirectionClick) {
             onDirectionClick(position, direction);
           }
         }}
         onMouseEnter={(e) => {
           e.stopPropagation();
-          if (!isMouseDownRef.current && gamePhase === GamePhase.SETUP && !readOnly) {
+          if (!isMouseDownRef.current && isInteractive) {
             setHoveredWall({ position, direction });
           }
         }}
@@ -545,33 +624,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
             <div className="w-1/2 h-3/4 bg-amber-400" />
           </div>
         )}
-        {/* 1회성 벽 아이템: 어디서든 일반 벽과 완전히 동일하게 위장 (제작 중엔 노란 벽, 공개 시엔 공개 벽) */}
-        {(() => {
-          const itemWallIdx = findItemWallIndex(position, direction);
-          if (itemWallIdx < 0 || !showItemsFully) return null;
-          const consumed = !!itemsConsumed?.[itemWallIdx];
-          if (showFakeWallIdentity) {
-            return (
-              <div
-                data-map-item="oneTimeWall"
-                title={`1회성 가짜벽 · ${consumed ? '소모됨' : '미사용'}`}
-                className={`absolute inset-0 flex items-center justify-center ${consumed ? 'opacity-35' : ''}`}
-              >
-                <div className="flex h-3/4 w-1/2 flex-col justify-between">
-                  <span className="h-[28%] w-full bg-cyan-400 ring-1 ring-cyan-100" />
-                  <span className="h-[28%] w-full bg-cyan-400 ring-1 ring-cyan-100" />
-                  <span className="h-[28%] w-full bg-cyan-400 ring-1 ring-cyan-100" />
-                </div>
-              </div>
-            );
-          }
-          if (consumed) return null;
-          return (
-            <div data-map-item="oneTimeWall" className="absolute inset-0 flex items-center justify-center">
-              <div className="w-1/2 h-3/4 bg-amber-400" />
-            </div>
-          );
-        })()}
+        {renderItemWall(position, direction, 'vertical')}
         {/* 탐지기로 밝혀낸 벽 (1회성 벽도 일반 벽으로 위장) */}
         {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
           isRadarRevealed(position, direction) && (

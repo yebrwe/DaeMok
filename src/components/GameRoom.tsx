@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { CollisionWall, GameMap, GamePhase, GameState, Player, Room } from '@/types/game';
+import Image from 'next/image';
+import { CollisionWall, GameMap, GamePhase, GameState, Room } from '@/types/game';
 import GameSetup from './GameSetup';
 import GamePlay from './GamePlay';
 import LiveBoardGrid, { LiveBoardEntry } from './LiveBoardGrid';
@@ -18,8 +19,15 @@ import {
   getRoomOnlineUsers,
   clearRoomPresence
 } from '@/lib/firebase';
-import { getFirstTurnPlayerId, getNextTurnPlayerId, getTurnOrder, isValidMap } from '@/lib/gameUtils';
-import { isVisionObscuredForPlayer } from '@/lib/gameTurn';
+import { getFirstTurnPlayerId, getNextTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
+import { isValidMapForRuleSnapshot } from '@/lib/gameRules';
+import { isVisionObscuredForPlayer, settleCompletedGameState } from '@/lib/gameTurn';
+import { settleMazeRankingParticipant, type MazeMatchResult } from '@/lib/mazeRankingFirebase';
+import {
+  applyOfflineTurnForfeit,
+  getOfflineTurnForfeitCandidate,
+} from '@/lib/offlineTurn';
+import { shouldIncludeGamePlayerOnRestart } from '@/lib/roomLifecycle';
 import { useRouter } from 'next/navigation';
 import { getDatabase, ref, update, get, remove, onValue, serverTimestamp, runTransaction } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
@@ -104,13 +112,6 @@ interface GameRoomProps {
   roomId: string;
 }
 
-interface RoomStat {
-  wins: number;
-  losses: number;
-  draws?: number;
-  displayName?: string;
-}
-
 const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 사용자 상태 확인
   const { verified, error: verifyError } = useVerifyUser(userId);
@@ -123,6 +124,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   const [message, setMessage] = useState<string>('');
   const playersStatus = usePlayersActivity(roomId);
   const [roomData, setRoomData] = useState<Room | null>(null);
+  const [ownerOnline, setOwnerOnline] = useState<boolean | null>(null);
   const [specViewMode, setSpecViewMode] = useState<'third' | '2d'>('third');
   const promotingRef = useRef(false);
   const roomRedirectingRef = useRef(false);
@@ -130,7 +132,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 관전자 여부: 게임 상태에 플레이어로 등록되어 있지 않으면 관전자
   const amPlayer = !!gameState?.players?.[userId];
   const isSpectator = !!gameState && !amPlayer;
-  const [roomStats, setRoomStats] = useState<Record<string, RoomStat>>({});
 
   const redirectFromClosedRoom = useCallback(() => {
     if (roomRedirectingRef.current) return;
@@ -170,25 +171,26 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     
     fetchRoomData();
   }, [roomId]);
-  
-  // 전적 정보 가져오기
+
+  // 방 내부 삭제와 독립적인 전역 접속 상태를 구독한다. END 정산 때문에
+  // 방장의 onDisconnect 삭제가 거절돼도 이 값은 반드시 false로 전환된다.
   useEffect(() => {
-    if (!roomId) return;
-    
-    const database = getDatabase();
-    const statsRef = ref(database, `rooms/${roomId}/stats`);
-    
-    const unsubscribe = onValue(statsRef, (snapshot) => {
-      if (snapshot.exists()) {
-        setRoomStats(snapshot.val());
-      } else {
-        // 전적 정보가 없으면 초기화
-        setRoomStats({});
+    const ownerId = roomData?.createdBy;
+    if (!ownerId) {
+      setOwnerOnline(null);
+      return;
+    }
+
+    const ownerOnlineRef = ref(getDatabase(), `userStatus/${ownerId}/online`);
+    return onValue(
+      ownerOnlineRef,
+      (snapshot) => setOwnerOnline(snapshot.exists() ? snapshot.val() === true : null),
+      (error) => {
+        console.error('방장 접속 상태 구독 오류:', error);
+        setOwnerOnline(null);
       }
-    });
-    
-    return () => unsubscribe();
-  }, [roomId]);
+    );
+  }, [roomData?.createdBy]);
   
   // 승자 메시지 함수를 useCallback으로 메모이제이션 (다인전 인식)
   const getWinnerMessage = useCallback(() => {
@@ -214,14 +216,16 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       return `${w?.displayName?.substring(0, 8) || '플레이어'} 승리! (${w?.finishMoves ?? '?'}턴)`;
     }
 
-    // 최소 턴 동률 -> 공동 우승(무승부). 동률에 못 낀 사람은 패배
+    // 최소 턴 동률은 경기 전체 무승부로 정산한다.
     if (gameState.draw) {
       const finishers = Object.values(players).filter((p) => p.finished && !p.forfeited);
       if (finishers.length === 0) return '무승부입니다! (전원 포기)';
       const minMoves = Math.min(...finishers.map((p) => p.finishMoves ?? Number.MAX_SAFE_INTEGER));
-      const iAmTied = !!me?.finished && !me?.forfeited && me?.finishMoves === minMoves;
-      if (iAmTied) return `무승부입니다! (공동 우승 · ${minMoves}턴)`;
-      return me?.forfeited ? '포기하여 패배했습니다.' : '패배했습니다.';
+      const names = finishers
+        .filter((player) => player.finishMoves === minMoves)
+        .map((player) => player.displayName?.substring(0, 6) || '플레이어')
+        .join(', ');
+      return `무승부입니다! (${names} 최소 ${minMoves}턴)`;
     }
 
     if (!gameState.winner) return '';
@@ -277,6 +281,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     const database = getDatabase();
     runTransaction(ref(database, `rooms/${roomId}/gameState`), (state: GameState | null) => {
       if (!state || state.phase !== GamePhase.PLAY) return;
+      const settled = settleCompletedGameState(state);
+      if (settled.phase === GamePhase.END) return settled;
       const activeCurrent = state.currentTurn ? state.players?.[state.currentTurn] : null;
       if (activeCurrent && !activeCurrent.finished && !activeCurrent.forfeited && !activeCurrent.hasLeft) return;
 
@@ -324,27 +330,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
   
-  // 정산: 전원이 완주 또는 포기했으면 "완주자 중 최소 턴"이 우승 (동률 -> 공동 우승 = 무승부)
-  // 트랜잭션 내부에서 호출되므로 순수 함수로 유지
-  const settleResult = (players: Record<string, Player>): { winner: string | null; draw: boolean | null } | null => {
-    const ids = Object.keys(players);
-    const allDone = ids.every((id) => players[id]?.finished || players[id]?.forfeited);
-    if (!allDone) return null;
-
-    const finishers: Array<[string, number]> = ids
-      .filter((id) => players[id]?.finished && !players[id]?.forfeited)
-      .map((id) => [
-        id,
-        typeof players[id]?.finishMoves === 'number' ? players[id].finishMoves : Number.MAX_SAFE_INTEGER,
-      ]);
-
-    if (finishers.length === 0) return { winner: null, draw: true }; // 전원 포기
-
-    const minMoves = Math.min(...finishers.map(([, count]) => count));
-    const best = finishers.filter(([, count]) => count === minMoves).map(([id]) => id);
-    return best.length === 1 ? { winner: best[0], draw: null } : { winner: null, draw: true };
-  };
-
   // 완주 처리 - 마지막 이동 트랜잭션에서 기록된 완주 상태를 정산한다.
   const handleGameComplete = async (moves: number) => {
     console.log(`완주! 총 ${moves}턴 소모.`);
@@ -372,12 +357,11 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           state.currentTurn = getNextTurnPlayerId(players, userId, state.turnOrder);
         }
 
-        const settled = settleResult(players);
-        if (settled) {
-          state.phase = GamePhase.END;
-          state.winner = settled.winner;
-          state.draw = settled.draw;
-        } else if (alreadyFinished) {
+        const settled = settleCompletedGameState(state);
+        if (settled.phase === GamePhase.END) {
+          return settled;
+        }
+        if (alreadyFinished) {
           // 이동 트랜잭션이 이미 완주를 기록했으며 아직 정산 시점이 아니므로 추가 PUT을 만들지 않는다.
           return;
         }
@@ -385,10 +369,10 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         return state;
       }, { applyLocally: false });
 
-      // 게임을 END로 전환시킨 클라이언트만 전적 기록 (정확히 한 번)
-      const committedState = result.committed ? result.snapshot.val() : null;
-      if (committedState?.phase === GamePhase.END) {
-        await updateGameStats(committedState);
+      // 마지막 이동이 이미 END를 원자 커밋했어도 transaction snapshot에는 최종 상태가 들어온다.
+      const finalState = result.snapshot.val() as GameState | null;
+      if (finalState?.phase === GamePhase.END) {
+        await settleFinalGame(finalState);
       }
     } catch (error) {
       console.error('완주 처리 중 오류:', error);
@@ -421,19 +405,12 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           state.turnMessageTimestamp = Date.now();
         }
 
-        const settled = settleResult(players);
-        if (settled) {
-          state.phase = GamePhase.END;
-          state.winner = settled.winner;
-          state.draw = settled.draw;
-        }
-
-        return state;
+        return settleCompletedGameState(state);
       }, { applyLocally: false });
 
-      const committedState = result.committed ? result.snapshot.val() : null;
-      if (committedState?.phase === GamePhase.END) {
-        await updateGameStats(committedState);
+      const finalState = result.snapshot.val() as GameState | null;
+      if (finalState?.phase === GamePhase.END) {
+        await settleFinalGame(finalState);
       }
       console.log('포기 처리 완료');
     } catch (error) {
@@ -442,72 +419,161 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     }
   };
 
-  // 전적 업데이트 (정산된 최종 상태 기준)
-  // 승자 1명: 승자 wins+, 나머지 losses+ / 공동 우승: 동률자 draws+, 나머지 losses+
-  const updateGameStats = async (finalState: GameState) => {
-    if (!roomId || !finalState?.players) return;
-
-    const database = getDatabase();
-    const statsRef = ref(database, `rooms/${roomId}/stats`);
-
-    try {
-      const players = finalState.players;
-      const statsSnapshot = await get(statsRef);
-      const currentStats = statsSnapshot.exists() ? statsSnapshot.val() as Record<string, RoomStat> : {};
-      const updatedStats: Record<string, RoomStat> = { ...currentStats };
-
-      // 공동 우승자 집합 계산 (draw인 경우)
-      let tiedWinners = new Set<string>();
-      if (finalState.draw) {
-        const finishers = Object.entries(players).filter(([, player]) => player.finished && !player.forfeited);
-        if (finishers.length > 0) {
-          const minMoves = Math.min(
-            ...finishers.map(([, player]) =>
-              typeof player.finishMoves === 'number' ? player.finishMoves : Number.MAX_SAFE_INTEGER
-            )
-          );
-          finishers.forEach(([id, player]) => {
-            if (player.finishMoves === minMoves) tiedWinners.add(id);
-          });
-        } else {
-          // 전원 포기 - 모두 무승부 처리
-          tiedWinners = new Set(Object.keys(players));
-        }
-      }
-
-      Object.keys(players).forEach((playerId) => {
-        const player = players[playerId];
-
-        if (!updatedStats[playerId]) {
-          updatedStats[playerId] = {
-            wins: 0,
-            losses: 0,
-            draws: 0,
-            displayName: player.displayName || '알 수 없음'
-          };
-        }
-
-        if (finalState.draw) {
-          if (tiedWinners.has(playerId)) {
-            updatedStats[playerId].draws = (updatedStats[playerId].draws || 0) + 1;
-          } else {
-            updatedStats[playerId].losses = (updatedStats[playerId].losses || 0) + 1;
-          }
-        } else if (playerId === finalState.winner) {
-          updatedStats[playerId].wins = (updatedStats[playerId].wins || 0) + 1;
-        } else {
-          updatedStats[playerId].losses = (updatedStats[playerId].losses || 0) + 1;
-        }
-
-        updatedStats[playerId].displayName = player.displayName || updatedStats[playerId].displayName;
-      });
-
-      await update(statsRef, updatedStats);
-      console.log('전적 업데이트 완료:', updatedStats);
-    } catch (error) {
-      console.error('전적 업데이트 중 오류:', error);
+  // END 상태를 여러 클라이언트가 동시에 관측해도 matchNumber별 마커와
+  const updateMazeRanking = useCallback(async (finalState: GameState) => {
+    const authUser = getAuth().currentUser;
+    const matchNumber = finalState.matchNumber;
+    if (
+      !authUser ||
+      authUser.uid !== userId ||
+      finalState.phase !== GamePhase.END ||
+      !finalState.players?.[userId] ||
+      !Number.isSafeInteger(matchNumber) ||
+      Number(matchNumber) <= 0
+    ) {
+      return false;
     }
-  };
+
+    const participantIds = (finalState.turnOrder?.length
+      ? finalState.turnOrder
+      : Object.keys(finalState.players)
+    ).filter((id, index, ids) => !!finalState.players[id] && ids.indexOf(id) === index);
+    try {
+      const settlements = await Promise.all(participantIds.map((participantId) => {
+        const participant = finalState.players[participantId];
+        let result: MazeMatchResult = 'loss';
+        if (finalState.draw) {
+          result = 'draw';
+        } else if (finalState.winner === participantId) {
+          result = 'win';
+        }
+
+        return settleMazeRankingParticipant({
+          uid: participantId,
+          displayName: participant.displayName || null,
+          photoURL: participant.photoURL || null,
+        }, {
+          roomId,
+          matchNumber: Number(matchNumber),
+          result,
+          moves: participant.finished && !participant.forfeited ? participant.finishMoves : null,
+        });
+      }));
+      settlements.forEach((settlement) => {
+        if (settlement.applied) console.log('미로 랭킹 정산 완료:', settlement.key);
+      });
+      return settlements.length === participantIds.length && settlements.every(
+        (settlement) => settlement.applied || !!settlement.entry
+      );
+    } catch (error) {
+      console.error('미로 랭킹 업데이트 중 오류:', error);
+      return false;
+    }
+  }, [roomId, userId]);
+
+  const settleFinalGame = useCallback(async (finalState: GameState) => {
+    return updateMazeRanking(finalState);
+  }, [updateMazeRanking]);
+
+  // 마지막 이동 직후 탭이 닫혀 완료 콜백이 실행되지 않아도, 남은 참가자의
+  // END 구독이 같은 멱등 정산을 재시도한다.
+  useEffect(() => {
+    if (gameState?.phase !== GamePhase.END || !gameState.players?.[userId]) return;
+    void settleFinalGame(gameState);
+  }, [gameState, settleFinalGame, userId]);
+
+  // 방장의 onDisconnect 삭제가 END 랭킹 정산보다 먼저 실행되어 거절된 경우,
+  // 남은 참가자가 전원 정산 뒤 방장 오프라인을 재확인하고 방을 정리한다.
+  useEffect(() => {
+    const ownerId = roomData?.createdBy;
+    if (
+      !ownerId
+      || ownerId === userId
+      || gameState?.phase !== GamePhase.END
+      || !gameState.players?.[userId]
+      || ownerOnline !== false
+    ) return;
+
+    let active = true;
+
+    const cleanupOfflineOwnerRoom = async () => {
+      try {
+        if (!(await settleFinalGame(gameState)) || !active) return;
+
+        const roomRef = ref(getDatabase(), `rooms/${roomId}`);
+        const [snapshot, ownerOnlineSnapshot] = await Promise.all([
+          get(roomRef),
+          get(ref(getDatabase(), `userStatus/${ownerId}/online`)),
+        ]);
+        if (!active || !snapshot.exists() || ownerOnlineSnapshot.val() !== false) return;
+
+        const latestRoom = snapshot.val() as Room;
+        if (
+          latestRoom.createdBy !== ownerId
+          || latestRoom.gameState?.phase !== GamePhase.END
+          || !latestRoom.gameState.players?.[userId]
+        ) return;
+
+        await remove(roomRef);
+        console.log('오프라인 방장의 종료 방을 정리했습니다:', roomId);
+      } catch (error) {
+        // 여러 참가자가 동시에 정리하면 먼저 성공한 삭제 이후 요청은 무시해도 된다.
+        if (active) console.error('오프라인 방장 종료 방 정리 오류:', error);
+      }
+    };
+
+    void cleanupOfflineOwnerRoom();
+    return () => {
+      active = false;
+    };
+  }, [gameState, ownerOnline, roomData?.createdBy, roomId, settleFinalGame, userId]);
+
+  // 현재 턴 참가자의 연결이 오래 끊겼을 때만 남은 온라인 참가자가 턴을 회수한다.
+  // 여러 클라이언트가 동시에 시도해도 currentTurn을 재검증하는 단일 transaction만 커밋된다.
+  useEffect(() => {
+    const candidate = getOfflineTurnForfeitCandidate(gameState, userId);
+    if (!candidate) return;
+
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const recoverOfflineTurn = async () => {
+      if (!active) return;
+
+      try {
+        const result = await runTransaction(
+          ref(getDatabase(), `rooms/${roomId}/gameState`),
+          (state: GameState | null) => {
+            const forfeited = applyOfflineTurnForfeit(
+              state,
+              candidate.playerId,
+              userId,
+              Date.now()
+            );
+            return forfeited ? settleCompletedGameState(forfeited) : undefined;
+          },
+          { applyLocally: false }
+        );
+
+        const finalState = result.snapshot.val() as GameState | null;
+        if (result.committed && finalState?.phase === GamePhase.END) {
+          await settleFinalGame(finalState);
+        }
+      } catch (error) {
+        // 클라이언트 시계가 서버보다 빠르면 규칙의 45초 검증이 먼저 거절할 수 있다.
+        // 동일한 최신 상태를 다시 검증하며 짧게 재시도한다.
+        console.error('오프라인 턴 회수 오류:', error);
+        if (active) retryTimer = setTimeout(recoverOfflineTurn, 5_000);
+      }
+    };
+
+    const initialTimer = setTimeout(recoverOfflineTurn, candidate.delayMs + 250);
+    return () => {
+      active = false;
+      clearTimeout(initialTimer);
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [gameState, roomId, settleFinalGame, userId]);
   
   // 게임 재시작 함수 수정
   const handleRestartGame = async () => {
@@ -524,11 +590,19 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       });
       
       const database = getDatabase();
-      
-      // 게임 상태 확인
-      const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
-      const gameStateSnapshot = await get(gameStateRef);
-      const currentGameState = gameStateSnapshot.exists() ? gameStateSnapshot.val() : null;
+      const roomRef = ref(database, `rooms/${roomId}`);
+      const freshRoomSnapshot = await get(roomRef);
+      if (!freshRoomSnapshot.exists()) {
+        setMessage('방이 이미 종료되었습니다.');
+        return;
+      }
+
+      const freshRoom = freshRoomSnapshot.val() as Room;
+      if (freshRoom.createdBy !== userId) {
+        setMessage('방장만 게임을 재시작할 수 있습니다.');
+        return;
+      }
+      const currentGameState = freshRoom.gameState;
       
       // 이미 재시작 중인지 확인
       if (currentGameState && currentGameState.phase === GamePhase.SETUP) {
@@ -541,77 +615,77 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         setOpponentMap(null);
         return;
       }
+
+      if (!currentGameState || currentGameState.phase !== GamePhase.END) {
+        setMessage('게임 종료 후에만 재시작할 수 있습니다.');
+        return;
+      }
+
+      if (!(await settleFinalGame(currentGameState))) {
+        setMessage('참가자 랭킹 정산을 완료한 뒤 다시 시도해주세요.');
+        return;
+      }
       
-      const allPlayers = (currentGameState?.players || {}) as Record<string, Player>;
-      const roomPlayerIds = Array.isArray(roomData?.players)
-        ? roomData.players.filter((id: string) => !!allPlayers[id])
-        : Object.keys(allPlayers).filter((id) => !allPlayers[id]?.hasLeft);
-      const currentPlayers = Object.fromEntries(roomPlayerIds.map((id: string) => [id, allPlayers[id]]));
-      const turnOrder = getTurnOrder(currentPlayers, roomPlayerIds);
-      const preferredStarter = roomData?.createdBy && currentPlayers[roomData.createdBy]
-        ? roomData.createdBy
+      const allPlayers = currentGameState.players || {};
+      const currentPlayers = Object.fromEntries(
+        Object.keys(allPlayers)
+          .filter((id) => shouldIncludeGamePlayerOnRestart(allPlayers[id]))
+          .map((id) => [id, allPlayers[id]])
+      );
+      const turnOrder = getTurnOrder(currentPlayers, currentGameState.turnOrder);
+      const preferredStarter = freshRoom.createdBy && currentPlayers[freshRoom.createdBy]
+        ? freshRoom.createdBy
         : getFirstTurnPlayerId(currentPlayers, turnOrder);
 
-      // 재시작 정보 기록. 다음 게임도 같은 순서를 유지하고 방장에게 선턴을 준다.
-      const restartData = {
+      const resetPlayers = Object.fromEntries(turnOrder.map((playerId) => {
+        const resetPlayer = {
+          ...currentPlayers[playerId],
+          isReady: false,
+          finished: false,
+          forfeited: false,
+          hasLeft: false,
+          moves: 0,
+        };
+        delete resetPlayer.finishMoves;
+        delete resetPlayer.positionHistory;
+        delete resetPlayer.lastPosition;
+        return [playerId, resetPlayer];
+      }));
+
+      // 맵 제거와 상태 전환을 같은 원자 업데이트에 넣어 중간 SETUP 상태가
+      // 이전 경기 맵이나 퇴장자를 다시 구독하지 않도록 한다.
+      const restartState: GameState & { restartedBy?: string; restartedAt?: unknown } = {
+        ...currentGameState,
         phase: GamePhase.SETUP,
-        winner: null,
-        draw: null,
+        players: resetPlayers,
         currentTurn: preferredStarter,
         turnOrder,
-        turnNumber: null,
-        maps: null,
-        assignments: null,
-        collisionWalls: null,
-        itemState: null,
-        revealedWallsByPlayer: null,
-        visionEffectsByPlayer: null,
-        turnMessage: null,
-        turnMessageTimestamp: null,
         restartedBy: userId,
         restartedAt: serverTimestamp()
       };
+      delete restartState.maps;
+      delete restartState.winner;
+      delete restartState.draw;
+      delete restartState.turnNumber;
+      delete restartState.assignments;
+      delete restartState.collisionWalls;
+      delete restartState.itemState;
+      delete restartState.revealedWallsByPlayer;
+      delete restartState.visionEffectsByPlayer;
+      delete restartState.turnMessage;
+      delete restartState.turnMessageTimestamp;
 
-      // Firebase에 업데이트
-      await update(gameStateRef, restartData);
-      await update(ref(database, `rooms/${roomId}`), {
+      const rosterSlotCount = Math.min(4, Math.max(2, freshRoom.maxPlayers || 2));
+      const rosterUpdates = Object.fromEntries(
+        Array.from({ length: rosterSlotCount }, (_, slot) => [`players/${slot}`, turnOrder[slot] || null])
+      );
+      await update(roomRef, {
+        maps: null,
+        ...rosterUpdates,
+        gameState: restartState,
         status: 'waiting',
         lastActivity: serverTimestamp(),
       });
-      
-      // 맵 데이터를 완전히 제거하기 위한 추가 조치
-      const mapsRef = ref(database, `rooms/${roomId}/gameState/maps`);
-      await remove(mapsRef);
-      
-      // 충돌 벽 데이터도 완전히 제거
-      const wallsRef = ref(database, `rooms/${roomId}/gameState/collisionWalls`);
-      await remove(wallsRef);
-      
-      // 플레이어 상태 초기화
-      const playersRef = ref(database, `rooms/${roomId}/gameState/players`);
-      const playersSnapshot = await get(playersRef);
-      const players = playersSnapshot.val();
-      
-      if (players) {
-        const updatedPlayers: Record<string, unknown> = {};
-
-        Object.keys(players).forEach(playerId => {
-          updatedPlayers[playerId] = roomPlayerIds.includes(playerId)
-            ? {
-                ...players[playerId],
-                isReady: false,
-                finished: null,
-                finishMoves: null,
-                forfeited: null,
-                hasLeft: null,
-                moves: null,
-                positionHistory: null,
-              }
-            : null;
-        });
-
-        await update(playersRef, updatedPlayers);
-      }
       
       // 내 상태 초기화
       setIsReady(false);
@@ -669,6 +743,12 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
 
       const database = getDatabase();
       const roomRef = ref(database, `rooms/${roomId}`);
+
+      // END 구독에서 시작한 비동기 정산보다 퇴장 정리가 먼저 실행되지 않게 한다.
+      // matchNumber 마커가 있어 중복 호출도 한 번만 반영된다.
+      if (gameState?.phase === GamePhase.END && gameState.players?.[userId]) {
+        await settleFinalGame(gameState);
+      }
 
       // 서버에 등록된 onDisconnect 작업 취소 (삭제된 방 경로에 잔여물이 재생성되는 것 방지)
       await clearRoomPresence(roomId, userId);
@@ -793,13 +873,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             });
           }
           
-          // 플레이어 목록에 사용자가 없으면 추가
-          if (!roomData.players || !roomData.players.includes(userId)) {
-            console.log('방 참여자 목록에 추가:', userId);
-            const updatedPlayers = roomData.players ? [...roomData.players, userId] : [userId];
-            await update(roomRef, { players: updatedPlayers });
-          }
-          
           // 참여 상태 업데이트
           await update(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`), {
             joined: true,
@@ -896,13 +969,11 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     };
   }, [roomId, userId]);
   
-  // 방 헤더 - 방 이름 / 단계 / 전적 / 플레이어 정보
+  // 방 헤더 - 방 이름 / 단계 / 플레이어 정보
   const renderGameHeader = () => {
     if (!gameState) return null;
 
     const me = gameState.players?.[userId];
-    const stats = roomStats[userId];
-
     return (
       <div className="w-full max-w-2xl mx-auto game-panel !rounded-xl px-3 py-2 mb-2">
         <div className="flex justify-between items-center gap-2">
@@ -922,19 +993,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             </span>
           </div>
 
-          {/* 전적 + 나가기 (어느 단계에서든 나갈 수 있음) */}
+          {/* 어느 단계에서든 나갈 수 있음 */}
           <div className="flex items-center gap-2 shrink-0">
-            {!isSpectator && (
-            <div className="text-[11px] text-slate-400">
-              <span className="text-green-400 font-bold">{stats?.wins ?? 0}</span>승{' '}
-              <span className="text-red-400 font-bold">{stats?.losses ?? 0}</span>패
-              {(stats?.draws || 0) > 0 && (
-                <>
-                  {' '}<span className="text-slate-300 font-bold">{stats?.draws}</span>무
-                </>
-              )}
-            </div>
-            )}
             <button
               className="btn-sub px-2.5 py-1 text-[11px] !rounded-lg"
               onClick={handleLeaveWithConfirm}
@@ -955,7 +1015,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           ) : (
           <div className="flex items-center gap-1.5">
             {me?.photoURL ? (
-              <img src={me.photoURL} alt="내 프로필" className="w-5 h-5 rounded-full ring-1 ring-blue-400" />
+              <Image src={me.photoURL} alt="내 프로필" width={20} height={20} className="w-5 h-5 rounded-full ring-1 ring-blue-400" />
             ) : (
               <div className="w-5 h-5 rounded-full bg-blue-500 ring-1 ring-blue-400 flex items-center justify-center">
                 <span className="text-white text-[7px] font-bold">나</span>
@@ -1009,7 +1069,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                     {o.isReady && <span className="text-green-400 text-[10px]">✓</span>}
                     <span className="text-red-300 font-medium text-[11px]">{o.displayName?.substring(0, 5) || '상대'}</span>
                     {o.photoURL ? (
-                      <img src={o.photoURL} alt="상대" className="w-5 h-5 rounded-full ring-1 ring-red-400" />
+                      <Image src={o.photoURL} alt="상대" width={20} height={20} className="w-5 h-5 rounded-full ring-1 ring-red-400" />
                     ) : (
                       <div className="w-5 h-5 rounded-full bg-red-500 ring-1 ring-red-400" />
                     )}
@@ -1201,13 +1261,13 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                   {Object.entries(gameState.players || {}).map(([pid, p]) => {
                     const playerMap = gameState.maps?.[pid];
                     const needsMapUpdate = !!p.isReady && (
-                      !playerMap || !isValidMap(playerMap, roomData?.rulesVersion)
+                      !playerMap || !isValidMapForRuleSnapshot(playerMap, roomData?.ruleSnapshot)
                     );
                     return (
                       <div key={pid} className="flex items-center justify-between gap-3 px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50">
                         <div className="flex items-center gap-2">
                           {p.photoURL ? (
-                            <img src={p.photoURL} alt="" className="w-5 h-5 rounded-full" />
+                            <Image src={p.photoURL} alt="" width={20} height={20} className="w-5 h-5 rounded-full" />
                           ) : (
                             <div className={`w-5 h-5 rounded-full ${pid === userId ? 'bg-blue-500' : 'bg-red-500'}`} />
                           )}
@@ -1235,7 +1295,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                   const hasInvalidMaps = playerEntries.some(
                     ([pid, p]) =>
                       !!p.isReady &&
-                      (!mapsReady[pid] || !isValidMap(mapsReady[pid], roomData?.rulesVersion))
+                      (!mapsReady[pid] || !isValidMapForRuleSnapshot(mapsReady[pid], roomData?.ruleSnapshot))
                   );
                   const allReady =
                     playerEntries.length >= 2 &&
@@ -1243,7 +1303,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                       ([pid, p]) =>
                         !!p.isReady &&
                         !!mapsReady[pid] &&
-                        isValidMap(mapsReady[pid], roomData?.rulesVersion)
+                        isValidMapForRuleSnapshot(mapsReady[pid], roomData?.ruleSnapshot)
                     );
                   const isOwner = roomData?.createdBy === userId;
 

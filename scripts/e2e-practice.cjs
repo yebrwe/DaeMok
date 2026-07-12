@@ -2,7 +2,6 @@
  * 로컬 AI 연습 대전 E2E.
  * 실행: npm run dev 후 node scripts/e2e-practice.cjs
  */
-/* eslint-disable @typescript-eslint/no-require-imports */
 const { chromium } = require('playwright');
 const { PNG } = require('playwright-core/lib/utilsBundle');
 const fs = require('fs');
@@ -123,7 +122,7 @@ async function expectNonBlankCanvases(page, expected) {
     if (kinds.join(',') !== 'human,ai,ai,ai') throw new Error(`사람/AI 보드 순서 오류: ${kinds}`);
     const ownerPreview = page.locator('[data-player-board][data-map-owner-preview="true"]');
     if (await ownerPreview.count() !== 1) throw new Error('내가 만든 맵의 제작자 시점 보드가 하나가 아님');
-    for (const itemType of ['oneTimeWall', 'mine', 'smoke']) {
+    for (const itemType of ['oneTimeWall', 'mine', 'smoke', 'thornWall', 'crystalWall']) {
       if (await ownerPreview.locator(`[data-map-item="${itemType}"]`).count() === 0) {
         throw new Error(`제작자 시점에서 ${itemType} 아이템이 보이지 않음`);
       }
@@ -174,12 +173,12 @@ async function expectNonBlankCanvases(page, expected) {
 
     console.log('STEP 5: 경기 완료와 순위 정산');
     const humanRoute = [
-      'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown',
+      'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown',
       'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowRight',
     ];
     for (const [index, key] of humanRoute.entries()) {
       await waitForHumanTurn(page);
-      if (index === 6) {
+      if (index === 4) {
         const obscuredBoard = page.locator(
           '[data-player-board="practice-user"][data-vision-effect="smoke"][data-vision-obscured="true"]'
         );
@@ -223,7 +222,7 @@ async function expectNonBlankCanvases(page, expected) {
         const position = await page.locator('[data-player-board="practice-user"]').getAttribute('data-player-position');
         throw new Error(`사람 경로 ${index + 1}/${humanRoute.length} ${key} 처리 실패 (position=${position}, moves=${beforeMoves}): ${error.message}`);
       }
-      if (index === 6 && await page.locator('[data-vision-obscured="true"]').count() > 0) {
+      if (index === 4 && await page.locator('[data-vision-obscured="true"]').count() > 0) {
         throw new Error('유효 행동 후 연막 시야 차단이 해제되지 않음');
       }
     }
@@ -247,10 +246,124 @@ async function expectNonBlankCanvases(page, expected) {
     await page.getByRole('button', { name: '맵 만들기' }).click();
     await page.locator('[data-cell="0,0"]').click();
     await page.locator('[data-cell="0,2"]').click();
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.waitForTimeout(100);
+
+    const readSetupBudget = async () => {
+      const match = (await page.locator('body').innerText()).match(/(\d+)\/(\d+)/);
+      if (!match) throw new Error('맵 제작 벽 예산을 찾지 못함');
+      return Number(match[1]);
+    };
+    const pseudoTargetSize = (locator) => locator.evaluate((element) => {
+      const style = getComputedStyle(element, '::before');
+      return { width: Number.parseFloat(style.width), height: Number.parseFloat(style.height) };
+    });
+
+    // 셀 아이템 모드에서는 벽 틈 클릭이 일반벽 배치로 새지 않아야 한다.
+    await page.getByRole('button', { name: /지뢰/ }).first().click();
+    const cellTouchSize = await pseudoTargetSize(page.locator('[data-cell="1,1"]'));
+    const budgetBeforeInactiveWall = await readSetupBudget();
+    await page.locator('div.grid').first().locator(':scope > div.h-full.w-2').first().dispatchEvent('click');
+    const budgetAfterInactiveWall = await readSetupBudget();
+    if (budgetAfterInactiveWall !== budgetBeforeInactiveWall) {
+      throw new Error(`셀 아이템 모드에서 일반벽이 배치됨: ${budgetBeforeInactiveWall} -> ${budgetAfterInactiveWall}`);
+    }
+
+    await page.getByRole('tab', { name: '스킬' }).click();
+    const dashSkill = page.getByRole('button', { name: /질주/ }).first();
+    await dashSkill.click();
+    if ((await dashSkill.getAttribute('aria-pressed')) !== 'true') throw new Error('질주 스킬 로드아웃 선택 실패');
+    await page.getByRole('tab', { name: '함정' }).click();
     await page.getByRole('button', { name: /연막 함정/ }).click();
     await page.locator('[data-cell="0,1"]').click();
-    const setupText = await page.locator('body').innerText();
-    if (!setupText.includes('연막 함정 배치됨')) throw new Error('연막 함정 제작 상태가 표시되지 않음');
+
+    // 탭을 바꾸면 화면에서 사라진 특수벽 배치 모드도 함께 해제되어야 한다.
+    await page.getByRole('tab', { name: '특수벽' }).click();
+    await page.getByRole('button', { name: /화염벽/ }).click();
+    await page.getByRole('tab', { name: '스킬' }).click();
+    const resetWallSlot = page.getByRole('button', { name: '2행 1열 right 벽' });
+    await resetWallSlot.click();
+    const itemsAfterTabReset = await page.locator('[aria-label="배치된 아이템"]').innerText();
+    if (itemsAfterTabReset.includes('화염벽')) {
+      throw new Error('탭 전환 후 숨겨진 화염벽 배치 모드가 유지됨');
+    }
+    await resetWallSlot.click();
+
+    await page.getByRole('tab', { name: '특수벽' }).click();
+    await page.getByRole('button', { name: /화염벽/ }).click();
+    await page.getByRole('button', { name: /1행 1열 right 벽/ }).click();
+    const placedItems = await page.locator('[aria-label="배치된 아이템"]').innerText();
+    if (!placedItems.includes('연막 함정') || !placedItems.includes('화염벽')) {
+      throw new Error(`함정/특수벽 제작 상태 오류: ${placedItems}`);
+    }
+
+    const windButton = page.getByRole('button', { name: /바람벽/ }).first();
+    await windButton.click();
+    const wallTouchSize = await pseudoTargetSize(page.getByRole('button', { name: '2행 1열 right 벽' }));
+    const windTouchSizes = await page.locator('[aria-label="바람 방향"] button').evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      })
+    );
+    const windLayout = await page.evaluate(() => {
+      const controls = document.querySelector('[aria-label="바람 방향"]');
+      const palette = controls?.closest('.game-panel');
+      const board = document.querySelector('div.grid');
+      if (!controls || !palette || !board) return null;
+      const controlsRect = controls.getBoundingClientRect();
+      const paletteRect = palette.getBoundingClientRect();
+      const boardRect = board.getBoundingClientRect();
+      return {
+        controls: { left: controlsRect.left, right: controlsRect.right },
+        paletteTop: paletteRect.top,
+        boardBottom: boardRect.bottom,
+      };
+    });
+    if (
+      [cellTouchSize, wallTouchSize, ...windTouchSizes]
+        .some((size) =>
+          !Number.isFinite(size.width) ||
+          !Number.isFinite(size.height) ||
+          size.width < 44 ||
+          size.height < 44
+        ) ||
+      !windLayout ||
+      windLayout.controls.left < 0 ||
+      windLayout.controls.right > 360 ||
+      windLayout.boardBottom > windLayout.paletteTop
+    ) {
+      throw new Error(`맵 제작 터치/바람 방향 레이아웃 오류: ${JSON.stringify({ cellTouchSize, wallTouchSize, windTouchSizes, windLayout })}`);
+    }
+    await windButton.click();
+
+    await page.waitForTimeout(150);
+    const setupBounds = await page.evaluate(() => {
+      const palette = document.querySelector('[role="tablist"]')?.closest('.game-panel');
+      const board = document.querySelector('div.grid');
+      if (!palette || !board) return null;
+      const paletteRect = palette.getBoundingClientRect();
+      const boardRect = board.getBoundingClientRect();
+      return {
+        palette: { left: paletteRect.left, right: paletteRect.right, top: paletteRect.top, bottom: paletteRect.bottom },
+        board: { left: boardRect.left, right: boardRect.right, top: boardRect.top, bottom: boardRect.bottom },
+        scrollWidth: document.documentElement.scrollWidth,
+      };
+    });
+    if (
+      !setupBounds ||
+      setupBounds.scrollWidth !== 360 ||
+      setupBounds.palette.left < 0 ||
+      setupBounds.palette.right > 360 ||
+      setupBounds.palette.bottom > 800 ||
+      setupBounds.board.left < 0 ||
+      setupBounds.board.right > 360 ||
+      setupBounds.board.bottom > setupBounds.palette.top
+    ) {
+      throw new Error(`Galaxy S21 맵 제작 레이아웃 오류: ${JSON.stringify(setupBounds)}`);
+    }
+    await page.screenshot({ path: path.join(OUT, 'practice-setup-galaxy-s21.png') });
+    ok('Galaxy S21 맵 제작 팔레트/보드 비겹침');
     await page.getByRole('button', { name: '완료' }).click();
     await expectBoardCount(page, 3);
     ok('직접 만든 맵 + AI 2명');

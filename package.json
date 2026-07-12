@@ -6,8 +6,14 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "test:game-rules": "node scripts/test-game-rules.cjs"
+    "lint": "eslint .",
+    "test:game-rules": "node scripts/test-game-rules.cjs && node scripts/test-maze-skills.cjs && node scripts/test-game-rule-snapshot.cjs",
+    "test:offline-turn": "node scripts/test-offline-turn.cjs",
+    "test:database-rules": "npm_config_cache=/tmp/daemok-npm-cache npx firebase-tools emulators:exec --only auth,database --project daemok-155c1 \"node scripts/test-database-rules.cjs\"",
+    "sim:wall-budget": "node scripts/sim-wall-balance.cjs",
+    "sim:consumables": "node scripts/sim-consumable-caps.cjs",
+    "sim:special-walls": "node scripts/sim-special-walls.cjs",
+    "sim:wall-combos": "node scripts/sim-wall-combos.cjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",

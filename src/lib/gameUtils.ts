@@ -1,20 +1,64 @@
-import { Direction, GameMap, ItemType, MapItem, Obstacle, Player, Position } from '@/types/game';
+import {
+  CollisionWall,
+  Direction,
+  GameMap,
+  ItemType,
+  MazeSkillId,
+  MapItem,
+  Obstacle,
+  Player,
+  Position,
+  SpecialWallType,
+  WallItemType,
+} from '@/types/game';
 
 // 보드 크기 상수
 export const BOARD_SIZE = 6;
 export const CARDINAL_DIRECTIONS: Direction[] = ['up', 'down', 'left', 'right'];
-export const GAME_RULES_VERSION = 2;
+export const GAME_RULES_VERSION = 3;
+
+export const MAZE_SKILL_IDS: MazeSkillId[] = ['scoutPulse', 'breach', 'anchor', 'dash'];
+export const DEFAULT_MAZE_SKILL: MazeSkillId = 'scoutPulse';
+
+export function isMazeSkillId(value: unknown): value is MazeSkillId {
+  return typeof value === 'string' && MAZE_SKILL_IDS.includes(value as MazeSkillId);
+}
 
 // 벽 예산 (아이템 비용 포함)
-export const MAX_OBSTACLES = 22;
+export const MAX_OBSTACLES = 24;
+
+export const SPECIAL_WALL_TYPES: SpecialWallType[] = [
+  'steelWall',
+  'fireWall',
+  'poisonWall',
+  'iceWall',
+  'windWall',
+  'collapseWall',
+  'phaseWall',
+  'mirrorWall',
+  'thornWall',
+  'crystalWall',
+];
+
+export const WALL_ITEM_TYPES: WallItemType[] = ['oneTimeWall', ...SPECIAL_WALL_TYPES];
 
 // 아이템 비용 (벽 개수 기준)
 export const ITEM_COSTS: Record<ItemType, number> = {
-  oneTimeWall: 5,
+  oneTimeWall: 7,
   mine: 1,
   wormhole: 7,
-  radar: 2,
+  radar: 4,
   smoke: 1,
+  steelWall: 1,
+  fireWall: 1,
+  poisonWall: 1,
+  iceWall: 1,
+  windWall: 1,
+  collapseWall: 1,
+  phaseWall: 1,
+  mirrorWall: 5,
+  thornWall: 1,
+  crystalWall: 1,
 };
 
 export const ITEM_LIMITS: Record<ItemType, number> = {
@@ -23,15 +67,39 @@ export const ITEM_LIMITS: Record<ItemType, number> = {
   wormhole: 1,
   radar: 1,
   smoke: 1,
+  steelWall: 1,
+  fireWall: 1,
+  poisonWall: 1,
+  iceWall: 1,
+  windWall: 1,
+  collapseWall: 1,
+  phaseWall: 1,
+  mirrorWall: 1,
+  thornWall: 1,
+  crystalWall: 1,
 };
 
 export const ITEM_LABELS: Record<ItemType, string> = {
-  oneTimeWall: '1회성 벽',
+  oneTimeWall: '가짜벽',
   mine: '지뢰',
   wormhole: '웜홀',
   radar: '탐지기',
   smoke: '연막 함정',
+  steelWall: '강철벽',
+  fireWall: '화염벽',
+  poisonWall: '독벽',
+  iceWall: '빙결벽',
+  windWall: '바람벽',
+  collapseWall: '붕괴벽',
+  phaseWall: '위상벽',
+  mirrorWall: '거울벽',
+  thornWall: '가시벽',
+  crystalWall: '수정벽',
 };
+
+export function isWallItemType(type: ItemType): type is WallItemType {
+  return WALL_ITEM_TYPES.includes(type as WallItemType);
+}
 
 function isDirection(value: unknown): value is Direction {
   return typeof value === 'string' && CARDINAL_DIRECTIONS.includes(value as Direction);
@@ -116,26 +184,40 @@ export function getMapItems(map: { items?: MapItem[] | null; item?: MapItem | nu
   return isRecord(map.item) ? [map.item as unknown as MapItem] : [];
 }
 
-// 해당 벽 세그먼트를 막고 있는 "미사용" 1회성 벽의 인덱스 (-1이면 없음)
-export function findBlockingOneTimeWall(
-  position: Position,
-  direction: Direction,
-  items: MapItem[],
-  isConsumed: (index: number) => boolean
-): number {
-  return items.findIndex(
-    (it, idx) =>
-      it.type === 'oneTimeWall' &&
-      !!it.wallPosition &&
-      !!it.wallDirection &&
-      !isConsumed(idx) &&
-      isSameWallSegment(position, direction, it.wallPosition, it.wallDirection)
-  );
+export function getVisibleCollisionWalls(
+  collisionWalls: readonly CollisionWall[],
+  map: GameMap,
+  consumed: Readonly<Record<number, boolean>>
+): CollisionWall[] {
+  const items = getMapItems(map);
+
+  return collisionWalls.filter((collision) => {
+    const hasStaticWall = (map.obstacles || []).some((wall) =>
+      isSameWallSegment(collision.position, collision.direction, wall.position, wall.direction)
+    );
+    if (hasStaticWall) return true;
+
+    const consumedBlockingWall = items.some((item, index) =>
+      consumed[index] === true &&
+      item.type !== 'steelWall' &&
+      isWallItemType(item.type) &&
+      !!item.wallPosition &&
+      !!item.wallDirection &&
+      isSameWallSegment(
+        collision.position,
+        collision.direction,
+        item.wallPosition,
+        item.wallDirection
+      )
+    );
+
+    return !consumedBlockingWall;
+  });
 }
 
 function getGuaranteedBlockingWalls(map: GameMap): Obstacle[] {
   const itemWalls = getMapItems(map).flatMap((item) =>
-    item.type === 'oneTimeWall' && isPositionInBoard(item.wallPosition) && isDirection(item.wallDirection)
+    isWallItemType(item.type) && isPositionInBoard(item.wallPosition) && isDirection(item.wallDirection)
       ? [{ position: item.wallPosition, direction: item.wallDirection }]
       : []
   );
@@ -322,6 +404,7 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
   if (expectedRulesVersion != null && map.rulesVersion !== expectedRulesVersion) return false;
   if (!isPositionInBoard(map.startPosition) || !isPositionInBoard(map.endPosition)) return false;
   if (isSamePosition(map.startPosition, map.endPosition)) return false;
+  if (map.skillLoadout != null && !isMazeSkillId(map.skillLoadout)) return false;
 
   const rawObstacles = (map as unknown as { obstacles?: unknown }).obstacles;
   if (rawObstacles != null && !Array.isArray(rawObstacles)) return false;
@@ -357,6 +440,7 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
   const itemCounts: Partial<Record<ItemType, number>> = {};
   const occupiedCells = new Set<string>();
   const itemWalls: Obstacle[] = [];
+  const permanentItemWalls: Obstacle[] = [];
   let itemCost = 0;
 
   const reserveCell = (position: Position | null | undefined): boolean => {
@@ -376,14 +460,19 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
     if (itemCounts[item.type] > ITEM_LIMITS[item.type]) return false;
     itemCost += ITEM_COSTS[item.type];
 
-    if (item.type === 'oneTimeWall') {
+    if (isWallItemType(item.type)) {
       if (!isPositionInBoard(item.wallPosition) || !isDirection(item.wallDirection)) return false;
       if (!isPositionInBoard(getNewPosition(item.wallPosition, item.wallDirection))) return false;
+      if (item.type === 'windWall' && item.effectDirection != null && !isDirection(item.effectDirection)) {
+        return false;
+      }
       const overlapsWall = [...validObstacles, ...itemWalls].some((wall) =>
         isSameWallSegment(item.wallPosition!, item.wallDirection!, wall.position, wall.direction)
       );
       if (overlapsWall) return false;
-      itemWalls.push({ position: item.wallPosition, direction: item.wallDirection });
+      const wall = { position: item.wallPosition, direction: item.wallDirection };
+      itemWalls.push(wall);
+      if (item.type === 'steelWall') permanentItemWalls.push(wall);
     } else if (item.type === 'mine' || item.type === 'smoke') {
       if (!reserveCell(item.position)) return false;
     } else if (item.type === 'wormhole') {
@@ -396,7 +485,7 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
   const basePath = findShortestPath(
     map.startPosition,
     map.endPosition,
-    validObstacles
+    [...validObstacles, ...permanentItemWalls]
   );
   if (!basePath) return false;
 

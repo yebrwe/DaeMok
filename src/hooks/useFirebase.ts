@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { getRooms } from '@/lib/firebase';
-import { Room, GameState } from '@/types/game';
+import { Room, GameMap, GameState } from '@/types/game';
 import { getDatabase, ref, onValue } from 'firebase/database';
 
 // 방 목록 관리
@@ -41,24 +41,51 @@ export function useGameState(roomId: string) {
 
     const database = getDatabase();
     const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
+    const mapsRef = ref(database, `rooms/${roomId}/maps`);
+    let latestState: GameState | null = null;
+    let latestMaps: Record<string, GameMap> | null = null;
+    let stateLoaded = false;
+    let mapsLoaded = false;
 
-    // 게임 상태 변경 감지
-    const unsubscribe = onValue(gameStateRef, (snapshot) => {
+    const publish = () => {
+      if (!stateLoaded || !mapsLoaded) return;
       setIsLoading(false);
-
-      if (snapshot.exists()) {
-        setGameState(snapshot.val());
-      } else {
+      if (!latestState) {
         setGameState(null);
+        return;
       }
+
+      const persistentState = { ...latestState };
+      delete persistentState.maps;
+      setGameState({
+        ...persistentState,
+        ...(latestMaps && Object.keys(latestMaps).length > 0 ? { maps: latestMaps } : {}),
+      });
+    };
+
+    const unsubscribeState = onValue(gameStateRef, (snapshot) => {
+      stateLoaded = true;
+      latestState = snapshot.exists() ? snapshot.val() : null;
+      publish();
     }, (error) => {
       console.error('게임 상태 구독 오류:', error);
       setError('게임 상태를 불러올 수 없습니다.');
       setIsLoading(false);
     });
 
+    const unsubscribeMaps = onValue(mapsRef, (snapshot) => {
+      mapsLoaded = true;
+      latestMaps = snapshot.exists() ? snapshot.val() : null;
+      publish();
+    }, (error) => {
+      console.error('게임 맵 구독 오류:', error);
+      setError('게임 맵을 불러올 수 없습니다.');
+      setIsLoading(false);
+    });
+
     return () => {
-      unsubscribe();
+      unsubscribeState();
+      unsubscribeMaps();
     };
   }, [roomId]);
 

@@ -4,8 +4,17 @@ import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react'
 import { Canvas, useFrame, useThree, ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
-import { CollisionWall, Direction, GamePhase, ItemType, MapItem, Obstacle, Position } from '@/types/game';
-import { BOARD_SIZE, isSamePosition } from '@/lib/gameUtils';
+import {
+  CollisionWall,
+  Direction,
+  GamePhase,
+  ItemType,
+  MapItem,
+  Obstacle,
+  Position,
+  SpecialWallType,
+} from '@/types/game';
+import { BOARD_SIZE, isSamePosition, isWallItemType } from '@/lib/gameUtils';
 
 // ===== 보드 배치 상수 =====
 const TILE = 1; // 타일 한 변 크기
@@ -159,6 +168,174 @@ function FakeWallBox({ seg, consumed = false }: { seg: WallSegment; consumed?: b
             transparent={consumed}
             opacity={consumed ? 0.32 : 1}
             roughness={0.35}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+interface SpecialWallStyle {
+  color: string;
+  accent: string;
+  emissive: string;
+  emissiveIntensity: number;
+  metalness: number;
+  roughness: number;
+  opacity: number;
+  wireframe?: boolean;
+}
+
+const SPECIAL_WALL_STYLES: Record<SpecialWallType, SpecialWallStyle> = {
+  steelWall: {
+    color: '#94a3b8', accent: '#e2e8f0', emissive: '#000000', emissiveIntensity: 0,
+    metalness: 0.92, roughness: 0.2, opacity: 1,
+  },
+  fireWall: {
+    color: '#f97316', accent: '#facc15', emissive: '#ef4444', emissiveIntensity: 0.85,
+    metalness: 0.05, roughness: 0.48, opacity: 0.95,
+  },
+  poisonWall: {
+    color: '#65a30d', accent: '#bef264', emissive: '#84cc16', emissiveIntensity: 0.28,
+    metalness: 0, roughness: 0.72, opacity: 0.82,
+  },
+  iceWall: {
+    color: '#bae6fd', accent: '#ffffff', emissive: '#38bdf8', emissiveIntensity: 0.2,
+    metalness: 0.12, roughness: 0.08, opacity: 0.58,
+  },
+  windWall: {
+    color: '#7dd3fc', accent: '#e0f2fe', emissive: '#0ea5e9', emissiveIntensity: 0.32,
+    metalness: 0, roughness: 0.24, opacity: 0.48, wireframe: true,
+  },
+  collapseWall: {
+    color: '#44403c', accent: '#a8a29e', emissive: '#000000', emissiveIntensity: 0,
+    metalness: 0.08, roughness: 1, opacity: 1,
+  },
+  phaseWall: {
+    color: '#a78bfa', accent: '#f0abfc', emissive: '#8b5cf6', emissiveIntensity: 0.62,
+    metalness: 0.18, roughness: 0.22, opacity: 0.5,
+  },
+  mirrorWall: {
+    color: '#e2e8f0', accent: '#ffffff', emissive: '#cbd5e1', emissiveIntensity: 0.08,
+    metalness: 1, roughness: 0.03, opacity: 0.96,
+  },
+  thornWall: {
+    color: '#be123c', accent: '#fda4af', emissive: '#881337', emissiveIntensity: 0.16,
+    metalness: 0.1, roughness: 0.82, opacity: 1,
+  },
+  crystalWall: {
+    color: '#2dd4bf', accent: '#f0abfc', emissive: '#14b8a6', emissiveIntensity: 0.58,
+    metalness: 0.24, roughness: 0.16, opacity: 0.88,
+  },
+};
+
+function SpecialWallBox({
+  seg,
+  type,
+  consumed = false,
+  active = false,
+  phaseOpen = false,
+}: {
+  seg: WallSegment;
+  type: SpecialWallType;
+  consumed?: boolean;
+  active?: boolean;
+  phaseOpen?: boolean;
+}) {
+  const style = SPECIAL_WALL_STYLES[type];
+  const [x, , z] = segmentToWorld(seg);
+  const size = segmentSize(seg);
+  const inactiveCollapse = type === 'collapseWall' && !active && !consumed;
+  const openedPhase = type === 'phaseWall' && phaseOpen && !consumed;
+  const height = consumed
+    ? WALL_HEIGHT * 0.34
+    : inactiveCollapse
+      ? WALL_HEIGHT * 0.24
+      : WALL_HEIGHT;
+  const opacity = consumed
+    ? Math.min(style.opacity, 0.3)
+    : openedPhase
+      ? Math.min(style.opacity, 0.16)
+      : inactiveCollapse
+        ? Math.min(style.opacity, 0.58)
+        : style.opacity;
+  const length = seg.type === 'H' ? size[0] : size[2];
+  const detailOffsets = [-length * 0.31, 0, length * 0.31];
+  const detailedCrystals = type === 'iceWall' || type === 'crystalWall';
+  const detailedCones = type === 'fireWall' || type === 'thornWall';
+  const detailedRivets = type === 'steelWall' || type === 'poisonWall';
+
+  const detailPosition = (offset: number, y: number): [number, number, number] =>
+    seg.type === 'H' ? [x + offset, y, z] : [x, y, z + offset];
+
+  return (
+    <group name={`${type}:${consumed ? 'consumed' : inactiveCollapse ? 'armed' : openedPhase ? 'open' : 'closed'}`}>
+      <mesh position={[x, height / 2, z]} castShadow={!consumed}>
+        <boxGeometry args={[size[0], height, size[2]]} />
+        <meshPhysicalMaterial
+          color={style.color}
+          emissive={style.emissive}
+          emissiveIntensity={consumed ? 0 : style.emissiveIntensity}
+          metalness={style.metalness}
+          roughness={style.roughness}
+          clearcoat={type === 'mirrorWall' || type === 'iceWall' ? 1 : 0.15}
+          clearcoatRoughness={type === 'mirrorWall' ? 0.02 : 0.2}
+          transparent={opacity < 1}
+          opacity={opacity}
+          depthWrite={opacity >= 0.7}
+          wireframe={style.wireframe || openedPhase}
+        />
+      </mesh>
+
+      <mesh position={[x, height + 0.025, z]} castShadow={false}>
+        <boxGeometry args={seg.type === 'H'
+          ? [size[0] * 0.82, 0.05, WALL_THICKNESS * 0.55]
+          : [WALL_THICKNESS * 0.55, 0.05, size[2] * 0.82]}
+        />
+        <meshStandardMaterial
+          color={style.accent}
+          emissive={style.emissive}
+          emissiveIntensity={consumed ? 0 : style.emissiveIntensity * 0.55}
+          transparent={opacity < 1}
+          opacity={opacity}
+          roughness={style.roughness}
+          metalness={style.metalness}
+        />
+      </mesh>
+
+      {!consumed && detailedCrystals && detailOffsets.map((offset) => (
+        <mesh key={`crystal-${offset}`} position={detailPosition(offset, height + 0.11)}>
+          <octahedronGeometry args={[type === 'iceWall' ? 0.075 : 0.09, 0]} />
+          <meshStandardMaterial
+            color={style.accent}
+            emissive={style.emissive}
+            emissiveIntensity={style.emissiveIntensity}
+            roughness={style.roughness}
+          />
+        </mesh>
+      ))}
+
+      {!consumed && detailedCones && detailOffsets.map((offset) => (
+        <mesh key={`cone-${offset}`} position={detailPosition(offset, height + 0.1)}>
+          <coneGeometry args={[0.075, 0.2, type === 'thornWall' ? 5 : 8]} />
+          <meshStandardMaterial
+            color={style.accent}
+            emissive={style.emissive}
+            emissiveIntensity={style.emissiveIntensity}
+            roughness={style.roughness}
+          />
+        </mesh>
+      ))}
+
+      {!consumed && detailedRivets && detailOffsets.map((offset) => (
+        <mesh key={`rivet-${offset}`} position={detailPosition(offset, height + 0.075)}>
+          <sphereGeometry args={[type === 'steelWall' ? 0.055 : 0.07, 10, 8]} />
+          <meshStandardMaterial
+            color={style.accent}
+            emissive={style.emissive}
+            emissiveIntensity={style.emissiveIntensity}
+            roughness={style.roughness}
+            metalness={style.metalness}
           />
         </mesh>
       ))}
@@ -815,12 +992,16 @@ function FxLayer({ fx }: { fx?: BoardFx | null }) {
 function ItemVisuals({
   item,
   consumed,
+  active,
+  phaseOpen,
   visible,
   setup = false,
   distinguishOneTimeWalls = false,
 }: {
   item: MapItem;
   consumed: boolean;
+  active: boolean;
+  phaseOpen: boolean;
   visible: boolean;
   setup?: boolean;
   distinguishOneTimeWalls?: boolean;
@@ -835,6 +1016,24 @@ function ItemVisuals({
     if (consumed) return distinguishOneTimeWalls ? <FakeWallBox seg={seg} consumed /> : null;
     if (setup || distinguishOneTimeWalls) return <FakeWallBox seg={seg} />;
     return <WallBox seg={seg} color={COLORS.reveal} opacity={0.75} />;
+  }
+
+  if (
+    isWallItemType(item.type) &&
+    item.type !== 'oneTimeWall' &&
+    item.wallPosition &&
+    item.wallDirection
+  ) {
+    const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
+    return seg ? (
+      <SpecialWallBox
+        seg={seg}
+        type={item.type}
+        consumed={consumed}
+        active={active}
+        phaseOpen={phaseOpen}
+      />
+    ) : null;
   }
 
   if (item.type === 'mine' && item.position) {
@@ -968,6 +1167,8 @@ export interface GameBoard3DProps {
   pawnColor?: string; // 말 색상 (기본 파랑, 관전 시 상대 말은 빨강)
   items?: MapItem[] | null;
   itemsConsumed?: Record<number, boolean> | null; // 인덱스별 사용 여부
+  itemActiveWalls?: Record<number, boolean> | null;
+  itemPhaseOpen?: Record<number, boolean> | null;
   revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들
   placeMode?: 'wall' | ItemType;
   pendingCell?: Position | null;
@@ -1017,6 +1218,8 @@ const BoardContents: React.FC<GameBoard3DProps> = ({
   pawnColor,
   items = null,
   itemsConsumed = null,
+  itemActiveWalls = null,
+  itemPhaseOpen = null,
   revealedWalls = [],
   placeMode = 'wall',
   pendingCell = null,
@@ -1039,7 +1242,7 @@ const BoardContents: React.FC<GameBoard3DProps> = ({
   }
   const occupiedKeys = new Set(obstacleSegments.map(segmentKey));
   (items || []).forEach((item) => {
-    if (item.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
+    if (isWallItemType(item.type) && item.wallPosition && item.wallDirection) {
       const segment = obstacleToSegment(item.wallPosition, item.wallDirection);
       if (segment) occupiedKeys.add(segmentKey(segment));
     }
@@ -1128,6 +1331,8 @@ const BoardContents: React.FC<GameBoard3DProps> = ({
           key={`item-${idx}`}
           item={it}
           consumed={!!itemsConsumed?.[idx]}
+          active={!!itemActiveWalls?.[idx]}
+          phaseOpen={!!itemPhaseOpen?.[idx]}
           visible={isSetup || revealItems}
           setup={isSetup}
           distinguishOneTimeWalls={distinguishOneTimeWalls}
