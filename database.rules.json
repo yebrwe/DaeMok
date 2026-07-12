@@ -7,11 +7,12 @@
         ".write": "auth != null && ((!data.exists() && newData.child('createdBy').val() === auth.uid) || (data.exists() && !newData.exists() && (data.child('createdBy').val() === auth.uid || !data.child('lastActivity').exists() || data.child('lastActivity').val() < now - 7200000)))",
 
         "players": {
-          ".write": "auth != null"
+          ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
         },
 
         "lastActivity": {
-          ".write": "auth != null"
+          ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting' && (root.child('rooms').child($roomId).child('createdBy').val() === auth.uid || root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).exists())",
+          ".validate": "newData.isNumber() && (newData.val() === data.val() || (newData.val() >= now - 60000 && newData.val() <= now + 60000))"
         },
 
         "status": {
@@ -26,22 +27,22 @@
 
         "joinedPlayers": {
           "$uid": {
-            ".write": "auth != null && $uid === auth.uid"
+            ".write": "auth != null && $uid === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
           }
         },
         "members": {
           "$uid": {
-            ".write": "auth != null && $uid === auth.uid"
+            ".write": "auth != null && $uid === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
           }
         },
         "playerStatus": {
           "$uid": {
-            ".write": "auth != null && $uid === auth.uid"
+            ".write": "auth != null && $uid === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
           }
         },
         "spectators": {
           "$uid": {
-            ".write": "auth != null && $uid === auth.uid"
+            ".write": "auth != null && $uid === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
           }
         },
 
@@ -64,24 +65,24 @@
 
           "players": {
             "$playerId": {
-              ".write": "auth != null && $playerId === auth.uid && (data.parent().parent().child('phase').val() !== 'play' || data.parent().parent().child('currentTurn').val() === auth.uid || (newData.child('forfeited').val() === true && data.child('forfeited').val() !== true))",
+              ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting' && (data.parent().parent().child('phase').val() !== 'play' || data.parent().parent().child('currentTurn').val() === auth.uid || (newData.child('forfeited').val() === true && data.child('forfeited').val() !== true))",
               "id": {
-                ".write": "auth != null && $playerId === auth.uid"
+                ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
               },
               "displayName": {
-                ".write": "auth != null && $playerId === auth.uid"
+                ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
               },
               "photoURL": {
-                ".write": "auth != null && $playerId === auth.uid"
+                ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
               },
               "isOnline": {
-                ".write": "auth != null && $playerId === auth.uid"
+                ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
               },
               "hasLeft": {
-                ".write": "auth != null && $playerId === auth.uid"
+                ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
               },
               "lastSeen": {
-                ".write": "auth != null && $playerId === auth.uid"
+                ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
               }
             }
           }

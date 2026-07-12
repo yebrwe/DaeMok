@@ -124,11 +124,30 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   const [roomData, setRoomData] = useState<Room | null>(null);
   const [specViewMode, setSpecViewMode] = useState<'third' | '2d'>('third');
   const promotingRef = useRef(false);
+  const roomRedirectingRef = useRef(false);
 
   // 관전자 여부: 게임 상태에 플레이어로 등록되어 있지 않으면 관전자
   const amPlayer = !!gameState?.players?.[userId];
   const isSpectator = !!gameState && !amPlayer;
   const [roomStats, setRoomStats] = useState<Record<string, RoomStat>>({});
+
+  const redirectFromClosedRoom = useCallback(() => {
+    if (roomRedirectingRef.current) return;
+    roomRedirectingRef.current = true;
+    sessionStorage.setItem('skip_room_restore', 'true');
+
+    const database = getDatabase();
+    void Promise.allSettled([
+      clearRoomPresence(roomId, userId),
+      update(ref(database, `userStatus/${userId}`), {
+        currentRoom: null,
+        lastActivity: serverTimestamp()
+      }),
+      remove(ref(database, `userRooms/${userId}/${roomId}`))
+    ]).finally(() => {
+      router.replace('/rooms');
+    });
+  }, [roomId, router, userId]);
   
   // 방 정보 가져오기
   useEffect(() => {
@@ -630,6 +649,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     try {
       console.log('방 나가기 시도:', roomId);
       setError(null);
+      roomRedirectingRef.current = true;
 
       // 세션 복원 건너뛰기 플래그 설정
       sessionStorage.setItem('skip_room_restore', 'true');
@@ -818,65 +838,37 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 방 삭제 감지를 위한 useEffect 수정
   useEffect(() => {
     if (!roomId || !router) return;
-    
-    let isRedirecting = false;
-    
+
     const database = getDatabase();
     const roomRef = ref(database, `rooms/${roomId}`);
     
     // 방 삭제 감지 리스너
     const unsubscribe = onValue(roomRef, (snapshot) => {
-      // 이미 리디렉션 중이면 추가 처리 방지
-      if (isRedirecting) return;
-      
       if (!snapshot.exists()) {
         console.log('방이 삭제되었습니다. 로비로 이동합니다.');
-        // 세션 스토리지에 방 나가기 표시
-        // sessionStorage.setItem(`left_room_${roomId}`, 'true'); <- 이 줄 제거
-        // 로컬 스토리지에 방 삭제 표시
-        // localStorage.setItem(`deleted_room_${roomId}`, 'true'); <- 이 줄 제거
-        
-        // 리디렉션 상태 설정
-        isRedirecting = true;
-        
-        // 로비로 리디렉션
-        router.push('/rooms');
+        redirectFromClosedRoom();
       }
     });
     
     return () => unsubscribe();
-  }, [roomId, router]);
+  }, [redirectFromClosedRoom, roomId, router]);
   
   // 방 상태 변경 감지 useEffect 수정
   useEffect(() => {
     if (!roomId || !router) return;
-    
-    let isRedirecting = false;
-    
+
     const database = getDatabase();
     const roomStatusRef = ref(database, `rooms/${roomId}/status`);
     
     const unsubscribe = onValue(roomStatusRef, (snapshot) => {
-      // 이미 리디렉션 중이면 추가 처리 방지
-      if (isRedirecting) return;
-      
       if (snapshot.exists() && snapshot.val() === 'deleting') {
         console.log('방이 삭제 중입니다. 로비로 이동합니다.');
-        // 세션 스토리지에 방 나가기 표시를 제거 - 아예 기록하지 않음
-        // sessionStorage.setItem(`left_room_${roomId}`, 'true'); <- 이 줄 제거
-        // 로컬 스토리지에 방 삭제 표시를 제거 - 이 줄 제거
-        // localStorage.setItem(`deleted_room_${roomId}`, 'true'); <- 이 줄 제거
-        
-        // 리디렉션 상태 설정
-        isRedirecting = true;
-        
-        // 로비로 리디렉션
-        router.push('/rooms');
+        redirectFromClosedRoom();
       }
     });
     
     return () => unsubscribe();
-  }, [roomId, router]);
+  }, [redirectFromClosedRoom, roomId, router]);
   
   // 모든 조건부 렌더링 이전에 모든 useEffect 선언이 완료되어야 함
   useEffect(() => {

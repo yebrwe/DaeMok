@@ -155,6 +155,51 @@ export const getRooms = (callback: (rooms: Room[]) => void) => {
 // 방 생성에 디바운싱 추가
 let roomCreationInProgress = false;
 
+const roomPresencePaths = (roomId: string, userId: string) => [
+  `rooms/${roomId}/playerStatus/${userId}`,
+  `rooms/${roomId}/members/${userId}`,
+  `rooms/${roomId}/joinedPlayers/${userId}`,
+  `rooms/${roomId}/gameState/players/${userId}`,
+  `rooms/${roomId}/spectators/${userId}`,
+];
+
+// 방장 연결이 끊기면 Firebase 서버가 방 전체를 제거한다. 방 하위의
+// onDisconnect 쓰기는 root 삭제 뒤 유령 방을 만들 수 있어 먼저 취소한다.
+export const armOwnerRoomDisconnectCleanup = async (roomId: string, userId: string): Promise<boolean> => {
+  if (!roomId || !userId) return false;
+
+  try {
+    const db = getDatabase();
+    const roomRef = ref(db, `rooms/${roomId}`);
+    const ownerSnapshot = await get(ref(db, `rooms/${roomId}/createdBy`));
+
+    if (!ownerSnapshot.exists() || ownerSnapshot.val() !== userId) return false;
+
+    await Promise.all(
+      roomPresencePaths(roomId, userId).map((path) =>
+        onDisconnect(ref(db, path)).cancel().catch(() => {})
+      )
+    );
+
+    // remove 등록 승인을 기다린 뒤에만 온라인 상태를 기록해야 생성 직후 종료도 정리된다.
+    await onDisconnect(roomRef).remove();
+    await Promise.all([
+      onDisconnect(ref(db, `userStatus/${userId}`)).update({
+        online: false,
+        currentRoom: null,
+        lastSeen: serverTimestamp(),
+        lastActivity: serverTimestamp(),
+      }),
+      onDisconnect(ref(db, `userRooms/${userId}/${roomId}`)).remove(),
+    ]);
+
+    return true;
+  } catch (error) {
+    console.error('방장 연결 종료 정리 등록 오류:', error);
+    return false;
+  }
+};
+
 export const createRoom = async (name: string, creatorId: string, maxPlayers: number = 2): Promise<string | null> => {
   if (!database) {
     console.error('Firebase Database가 초기화되지 않았습니다.');
@@ -232,6 +277,13 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
     // 방 생성
     await set(newRoomRef, roomData);
     console.log('방 생성 성공:', roomId);
+
+    // 다음 화면이 뜨기 전에 창이 닫혀도 방이 남지 않도록 즉시 등록한다.
+    const disconnectCleanupArmed = await armOwnerRoomDisconnectCleanup(roomId, creatorId);
+    if (!disconnectCleanupArmed) {
+      await remove(newRoomRef).catch(() => {});
+      throw new Error('방 연결 종료 처리를 등록하지 못했습니다. 다시 시도해주세요.');
+    }
     
     // 방 생성자를 방 참여자로 추가
     await set(ref(database, `rooms/${roomId}/joinedPlayers/${creatorId}`), {
@@ -836,17 +888,11 @@ export const clearRoomPresence = async (roomId: string, userId: string) => {
 
   try {
     const db = getDatabase();
-    const paths = [
-      `rooms/${roomId}/playerStatus/${userId}`,
-      `rooms/${roomId}/members/${userId}`,
-      `rooms/${roomId}/joinedPlayers/${userId}`,
-      `rooms/${roomId}/gameState/players/${userId}`,
-      `rooms/${roomId}/spectators/${userId}`,
-    ];
-
     // 서버에 등록된 onDisconnect 작업 취소
     await Promise.all(
-      paths.map((p) => onDisconnect(ref(db, p)).cancel().catch(() => {}))
+      roomPresencePaths(roomId, userId).map((path) =>
+        onDisconnect(ref(db, path)).cancel().catch(() => {})
+      )
     );
 
     // 노드가 아직 존재하는 경우에만 오프라인 표시 (삭제된 방에 스텁 생성 금지)
@@ -935,8 +981,9 @@ export const updateRoomUserStatus = async (roomId: string, userId: string, isOnl
     const auth = getAuth();
 
     // 방이 없으면 아무것도 쓰지 않음 (삭제된 방에 잔여 데이터 생성 방지)
-    const roomExists = await get(ref(db, `rooms/${roomId}/createdBy`));
-    if (!roomExists.exists()) return false;
+    const roomOwnerSnapshot = await get(ref(db, `rooms/${roomId}/createdBy`));
+    if (!roomOwnerSnapshot.exists()) return false;
+    const isRoomOwner = roomOwnerSnapshot.val() === userId;
 
     const userStatusRef = ref(db, `rooms/${roomId}/playerStatus/${userId}`);
     
@@ -948,9 +995,6 @@ export const updateRoomUserStatus = async (roomId: string, userId: string, isOnl
       isOnline: isOnline
     };
     
-    // 방 내 사용자 상태 업데이트
-    await update(userStatusRef, userData);
-    
     // 게임 상태의 플레이어 정보도 업데이트
     // 주의: 존재할 때만 - update는 없는 경로를 생성하므로, 관전자가 호출하면
     // gameState.players에 유령 플레이어가 생겨 정산이 영원히 끝나지 않는다
@@ -959,31 +1003,44 @@ export const updateRoomUserStatus = async (roomId: string, userId: string, isOnl
       const playerSnap = await get(playerRef);
       const isPlayer = playerSnap.exists();
 
+      // 온라인 표시보다 연결 종료 예약을 먼저 서버에 등록한다.
+      if (isRoomOwner) {
+        const armed = await armOwnerRoomDisconnectCleanup(roomId, userId);
+        if (!armed) return false;
+      } else {
+        const disconnectOperations: Promise<void>[] = [
+          onDisconnect(userStatusRef).update({
+            isOnline: false,
+            lastSeen: serverTimestamp()
+          })
+        ];
+
+        if (isPlayer) {
+          disconnectOperations.push(
+            onDisconnect(playerRef).update({
+              isOnline: false,
+              lastSeen: serverTimestamp()
+            })
+          );
+        }
+
+        await Promise.all(disconnectOperations);
+      }
+
+      // 방이 예약 등록 도중 삭제됐으면 하위 경로를 다시 만들지 않는다.
+      const currentOwnerSnapshot = await get(ref(db, `rooms/${roomId}/createdBy`));
+      if (!currentOwnerSnapshot.exists()) return false;
+
       if (isPlayer) {
         await update(playerRef, {
           isOnline: true,
           lastSeen: serverTimestamp()
         });
       }
-
-      // 방 참여 시 연결 종료 처리 설정
-      const connectedRef = ref(db, '.info/connected');
-      onValue(connectedRef, (snapshot) => {
-        if (snapshot.val() === true) {
-          onDisconnect(userStatusRef).update({
-            isOnline: false,
-            lastSeen: serverTimestamp()
-          });
-
-          if (isPlayer) {
-            onDisconnect(playerRef).update({
-              isOnline: false,
-              lastSeen: serverTimestamp()
-            });
-          }
-        }
-      }, { onlyOnce: true });
     }
+
+    // 방 내 사용자 상태 업데이트
+    await update(userStatusRef, userData);
     
     return true;
   } catch (error) {

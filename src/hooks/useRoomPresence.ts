@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { getDatabase, ref, onValue, update, get, onDisconnect, serverTimestamp, set } from 'firebase/database';
-import { cleanupNullKeys, checkRoomMembership, rejoinRoom } from '../lib/firebase';
+import {
+  armOwnerRoomDisconnectCleanup,
+  cleanupNullKeys,
+  checkRoomMembership,
+  rejoinRoom,
+} from '../lib/firebase';
 import { getAuth } from 'firebase/auth';
 
 /**
@@ -102,6 +107,9 @@ export function useRoomPresence(userId: string, roomId: string) {
         
         // 방 참여자 노드
         const roomMemberRef = ref(database, `rooms/${roomId}/members/${userId}`);
+
+        // 게임방에서 표시하는 온라인 상태 노드
+        const roomPlayerStatusRef = ref(database, `rooms/${roomId}/playerStatus/${userId}`);
         
         // 방 참여 상태 노드 - Firebase에서만 추적
         const roomJoinRef = ref(database, `rooms/${roomId}/joinedPlayers/${userId}`);
@@ -167,38 +175,80 @@ export function useRoomPresence(userId: string, roomId: string) {
           setIsConnected(!!connected);
           
           if (connected) {
-            // 연결이 끊어질 때 실행할 작업
-            onDisconnect(roomMemberRef).update({
+            // 재연결 때 초기 스냅샷을 그대로 쓰면 삭제된 방이 다시 생길 수 있다.
+            const currentRoomSnapshot = await get(roomRef);
+            if (!currentRoomSnapshot.exists()) {
+              await update(userStatusRef, {
+                online: true,
+                currentRoom: null,
+                lastSeen: serverTimestamp()
+              }).catch(() => {});
+              setError('방을 찾을 수 없습니다.');
+              return;
+            }
+
+            const currentRoomData = currentRoomSnapshot.val();
+            const isRoomOwner = currentRoomData.createdBy === userId;
+            const currentGamePlayerExists = !!currentRoomData.gameState?.players?.[userId];
+            const currentIsSpectator = currentRoomData.gameState?.phase !== 'setup' && !currentGamePlayerExists;
+
+            if (isRoomOwner) {
+              const armed = await armOwnerRoomDisconnectCleanup(roomId, userId);
+              if (!armed) {
+                setError('방 연결 상태를 설정할 수 없습니다.');
+                return;
+              }
+            } else {
+              const disconnectOperations: Promise<void>[] = [
+                onDisconnect(roomMemberRef).update({
+                  online: false,
+                  lastSeen: serverTimestamp()
+                }),
+                onDisconnect(roomPlayerStatusRef).update({
+                  isOnline: false,
+                  lastSeen: serverTimestamp()
+                })
+              ];
+
+              if (!currentIsSpectator) {
+                disconnectOperations.push(
+                  onDisconnect(roomJoinRef).update({
+                    joined: true,
+                    offline: true,
+                    lastSeen: serverTimestamp()
+                  })
+                );
+              }
+
+              if (currentGamePlayerExists) {
+                disconnectOperations.push(
+                  onDisconnect(ref(database, `rooms/${roomId}/gameState/players/${userId}`)).update({
+                    isOnline: false,
+                    lastSeen: serverTimestamp()
+                  })
+                );
+              }
+
+              await Promise.all(disconnectOperations);
+            }
+
+            await onDisconnect(userStatusRef).update({
               online: false,
+              currentRoom: null,
               lastSeen: serverTimestamp()
             });
-            
-            onDisconnect(userStatusRef).update({
-              online: false,
-              lastSeen: serverTimestamp()
-            });
-            
-            // 재연결 시 자동으로 방 참여 상태 유지
-            if (!isSpectator) {
-              onDisconnect(roomJoinRef).update({
-                joined: true,
-                offline: true,
-                lastSeen: serverTimestamp()
-              });
-            }
-            
-            // 게임 상태의 플레이어 상태도 업데이트
-            if (roomData.gameState?.players && roomData.gameState.players[userId]) {
-              const gameStatePlayerRef = ref(database, `rooms/${roomId}/gameState/players/${userId}`);
-              onDisconnect(gameStatePlayerRef).update({
-                isOnline: false,
-                lastSeen: serverTimestamp()
-              });
-            }
             
             // 현재 상태 업데이트
             await update(roomMemberRef, {
               online: true,
+              displayName: auth.currentUser?.displayName || '익명 사용자',
+              photoURL: auth.currentUser?.photoURL || null,
+              lastSeen: serverTimestamp()
+            });
+
+            await update(roomPlayerStatusRef, {
+              uid: userId,
+              isOnline: true,
               displayName: auth.currentUser?.displayName || '익명 사용자',
               photoURL: auth.currentUser?.photoURL || null,
               lastSeen: serverTimestamp()
@@ -211,7 +261,7 @@ export function useRoomPresence(userId: string, roomId: string) {
             });
             
             // 게임 상태의 플레이어 상태도 온라인으로 업데이트
-            if (roomData.gameState?.players && roomData.gameState.players[userId]) {
+            if (currentGamePlayerExists) {
               await update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), {
                 isOnline: true,
                 lastSeen: serverTimestamp()
