@@ -6,10 +6,11 @@ import GameBoard from './GameBoard';
 import GameBoard3D, { BoardFx } from './three/GameBoard3D';
 import LiveBoardGrid, { LiveBoardEntry } from './LiveBoardGrid';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ScanSearch } from 'lucide-react';
-import { BOARD_SIZE, canMove, getNewPosition, isPositionInBoard, isSamePosition, findBlockingOneTimeWall, getMapItems } from '@/lib/gameUtils';
+import { BOARD_SIZE, canMove, getNewPosition, isPositionInBoard, isSamePosition, findBlockingOneTimeWall, getMapItems, isWormholeExitSafe } from '@/lib/gameUtils';
 import {
   appendTurnPosition,
   findRadarWalls,
+  getMineRollbackPosition,
   isVisionObscuredForPlayer,
   mergeWallSegments,
   MoveTurnOutcome,
@@ -373,8 +374,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
           if (mineIdx >= 0) {
             const mine = items[mineIdx];
-            const history = positionHistoryRef.current;
-            finalPosition = history.length >= 2 ? history[history.length - 2] : history[0] ?? startPosition;
+            finalPosition = getMineRollbackPosition(positionHistoryRef.current, playerPosition);
             moveMessage = '💥 지뢰를 밟아 2턴 전 위치로 되돌아갔습니다!';
             moveValidState = false;
             // 지뢰 칸에 폴짝 올라선 순간 폭발 -> 왔던 길로 뒤로 폴짝 2번
@@ -383,12 +383,15 @@ const GamePlay: React.FC<GamePlayProps> = ({
             consumeOpponentItem(mineIdx);
           } else if (wormholeIdx >= 0) {
             const wormhole = items[wormholeIdx];
-            finalPosition = wormhole.exit ?? newPosition;
-            moveMessage = '🌀 웜홀에 빨려들어가 다른 곳으로 이동했습니다!';
+            const exitIsSafe = isWormholeExitSafe(map, wormhole.exit);
+            finalPosition = exitIsSafe ? (wormhole.exit ?? newPosition) : playerPosition;
+            moveMessage = exitIsSafe
+              ? '🌀 웜홀에 빨려들어가 다른 곳으로 이동했습니다!'
+              : '불안정한 출구로 웜홀이 붕괴했습니다.';
             moveValidState = null;
             // 입구까지 폴짝 이동한 뒤 스파게티화되어 빨려들어감
             viaPath = [wormhole.entrance!];
-            fireFx({ type: 'wormhole', at: wormhole.entrance!, to: wormhole.exit, delay: 0.35 });
+            fireFx({ type: 'wormhole', at: wormhole.entrance!, to: finalPosition, delay: 0.35 });
             consumeOpponentItem(wormholeIdx);
           }
 
@@ -435,12 +438,12 @@ const GamePlay: React.FC<GamePlayProps> = ({
       obstacles,
       moveCount,
       endPosition,
-      startPosition,
       isPractice,
       userId,
       onGameComplete,
       items,
       itemsConsumed,
+      map,
       consumeOpponentItem,
       fireFx,
       handleOnlineMove,

@@ -16,6 +16,7 @@
  *
  * 실행: node scripts/sim-items.cjs [trials]
  */
+/* eslint-disable react-hooks/rules-of-hooks */
 const SIZE = 6;
 const TRIALS = Number(process.argv[2]) || 4000;
 
@@ -273,7 +274,7 @@ function experiment() {
   console.log(`# 대목 아이템 밸런스 시뮬레이션 (${TRIALS}판/조건, 6x6, 적대적 맵)\n`);
 
   // 1) 벽 개수별 기대 턴 (벽 1개의 한계 가치)
-  const wallCounts = [8, 10, 12, 13, 15, 17, 20];
+  const wallCounts = [8, 10, 12, 13, 15, 17, 19, 20, 21, 22];
   const baseline = {};
   for (const w of wallCounts) {
     const turns = [];
@@ -293,7 +294,7 @@ function experiment() {
   // 2) 함정 아이템: 같은 예산 20을 "벽만" vs "벽 (20-c) + 아이템"으로 비교
   const configs = [
     { name: '1회성 벽', cost: 5, apply: (map) => ({ fakeWalls: new Set([placeFakeWall(map)].filter(Boolean)) }) },
-    { name: '지뢰', cost: 3, apply: (map) => { const m = placeMine(map); return m == null ? {} : { mines: new Set([m]) }; } },
+    { name: '지뢰', cost: 1, apply: (map) => { const m = placeMine(map); return m == null ? {} : { mines: new Set([m]) }; } },
     { name: '웜홀', cost: 7, apply: (map) => { const wh = placeWormhole(map); return wh ? { wormholes: new Map([wh]) } : {}; } },
   ];
 
@@ -318,20 +319,20 @@ function experiment() {
   }
 
   // 3) 탐지기: 내 완주 턴 절약량 vs 그 비용으로 상대를 방해했을 피해
-  console.log('\n## 3. 탐지기 (비용 5): 상대 맵(벽 15개 가정)에서 내 턴 절약');
+  console.log('\n## 3. 탐지기 (비용 2): 상대 맵(벽 22개 가정)에서 내 턴 절약');
   for (const radarUses of [1, 2]) {
     const withR = [], withoutR = [];
     for (let t = 0; t < TRIALS; t++) {
-      const map = generateMap(15);
+      const map = generateMap(22);
       withoutR.push(runGame(map));
       withR.push(runGame(map, { radarUses }));
     }
     const saving = avg(withoutR) - avg(withR);
     console.log(`  탐지기 x${radarUses}: 평균 ${saving.toFixed(2)}턴 절약`);
   }
-  const wallDamage5 = baseline[20] - baseline[15];
-  console.log(`  (참고) 그 5 예산을 벽 5개로 쓰면 상대에게 +${wallDamage5.toFixed(2)}턴 피해`);
-  console.log('  -> 절약량이 벽 5개 피해량보다 크면 탐지기가 이득\n');
+  const wallDamage2 = baseline[22] - baseline[20];
+  console.log(`  (참고) 후보 비용 2를 벽으로 쓰면 상대에게 +${wallDamage2.toFixed(2)}턴 피해`);
+  console.log('  -> 레이더 절약량과 벽 2개 기회비용을 비교\n');
 }
 
 experiment();

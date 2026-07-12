@@ -20,6 +20,7 @@
  *   [3인전] 동시 보드 3개 확인 -> A/B/C 교대 -> A/B 완주자 건너뜀 -> C 포기
  *   마지막: 방장 나가기 -> 방 즉시 삭제 -> 상대 자동 리디렉션
  */
+/* eslint-disable @typescript-eslint/no-require-imports */
 const { chromium } = require('playwright');
 const { PNG } = require('playwright-core/lib/utilsBundle');
 const fs = require('fs');
@@ -173,13 +174,52 @@ async function signInWithFakeGoogle(page, acc) {
 }
 
 // 맵 제작 (2D 고정 보드): 시작(0,0), 도착(0,2), 벽 없음 (최단 2턴)
-async function setupMap(page, { smoke = false, ownerSecrets = false } = {}) {
+async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormholeSafety = false } = {}) {
   await expectText(page, '시작점을 선택하세요');
   const items = page.locator('div.grid').first().locator(':scope > *');
   await items.nth(0).click();
   await expectText(page, '도착점을 선택하세요');
   await items.nth(4).click();
   await expectText(page, '벽(장애물)을 배치하세요');
+  if (verifyWormholeSafety) {
+    const mineButton = page.getByRole('button', { name: /지뢰/ });
+    await mineButton.click();
+    await page.locator('[data-cell="5,4"]').click();
+    await page.getByRole('button', { name: '이전' }).click();
+    await page.locator('[data-cell="5,4"]').click();
+    if (!(await page.getByText('도착점을 선택하세요', { exact: false }).isVisible())) {
+      throw new Error('셀형 아이템 위로 도착점을 옮길 수 있음');
+    }
+    await page.locator('[data-cell="0,2"]').click();
+
+    const cornerWall = page.getByRole('button', { name: '6행 5열 right 벽' });
+    const wormholeButton = page.getByRole('button', { name: /웜홀/ });
+    await cornerWall.click();
+    await wormholeButton.click();
+    await page.locator('[data-cell="3,3"]').click();
+
+    let safetyMessage = '';
+    page.once('dialog', async (dialog) => {
+      safetyMessage = dialog.message();
+      await dialog.accept();
+    });
+    await page.locator('[data-cell="5,5"]').click();
+    if (!safetyMessage.includes('즉시 열린 방향이 최소 2개')) {
+      throw new Error(`웜홀 출구 안전 검증 메시지 불일치: ${JSON.stringify(safetyMessage)}`);
+    }
+
+    await wormholeButton.click(); // 배치 취소
+    await cornerWall.click();
+    await wormholeButton.click();
+    await page.locator('[data-cell="3,3"]').click();
+    const safeExit = page.locator('[data-cell="5,5"][data-valid-item-target="true"]');
+    await safeExit.waitFor({ state: 'visible', timeout: 10000 });
+    await safeExit.click();
+    if (!(await wormholeButton.isDisabled())) {
+      throw new Error('웜홀 1개 배치 후 종류별 최대 수량 제한이 적용되지 않음');
+    }
+    ok('item/goal overlap rejected; unsafe wormhole exit rejected; safe exit highlighted; cap enforced');
+  }
   if (ownerSecrets) {
     await page.getByRole('button', { name: '4행 1열 right 벽' }).click();
     await page.getByRole('button', { name: /1회성 벽/ }).click();
@@ -233,7 +273,7 @@ async function setupMap(page, { smoke = false, ownerSecrets = false } = {}) {
     ok(`방 생성됨: ${pageA.url().split('/rooms/')[1]}`);
 
     step('3: A 맵 제작 완료 -> 방장 대기 화면 (시작 버튼 비활성)');
-    await setupMap(pageA);
+    await setupMap(pageA, { verifyWormholeSafety: true });
     await expectText(pageA, '참가자 (1/2)');
     await pageA.getByRole('button', { name: '게임 시작' }).waitFor({ timeout: 15000 });
 
@@ -246,6 +286,11 @@ async function setupMap(page, { smoke = false, ownerSecrets = false } = {}) {
     step('5: B 맵 제작 완료 -> B는 방장 대기, A(방장)가 게임 시작');
     await setupMap(pageB, { smoke: true, ownerSecrets: true });
     await expectText(pageB, '방장이 시작하면 게임이 시작됩니다');
+    await pageB.getByRole('button', { name: '맵 다시 만들기' }).click();
+    await expectText(pageB, '시작점을 선택하세요');
+    await setupMap(pageB, { smoke: true, ownerSecrets: true });
+    await expectText(pageB, '방장이 시작하면 게임이 시작됩니다');
+    ok('non-owner map reopen and rebuild works');
     await expectText(pageA, '모두 준비되었습니다');
     await pageA.getByRole('button', { name: '게임 시작' }).click();
     await expectMyBoardTurns(pageA, 0);

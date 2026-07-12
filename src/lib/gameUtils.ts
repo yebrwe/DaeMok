@@ -2,17 +2,27 @@ import { Direction, GameMap, ItemType, MapItem, Obstacle, Player, Position } fro
 
 // 보드 크기 상수
 export const BOARD_SIZE = 6;
+export const CARDINAL_DIRECTIONS: Direction[] = ['up', 'down', 'left', 'right'];
+export const GAME_RULES_VERSION = 2;
 
 // 벽 예산 (아이템 비용 포함)
-export const MAX_OBSTACLES = 20;
+export const MAX_OBSTACLES = 22;
 
 // 아이템 비용 (벽 개수 기준)
 export const ITEM_COSTS: Record<ItemType, number> = {
   oneTimeWall: 5,
-  mine: 3,
-  wormhole: 7, // 밸런스 상향 (5 -> 7): 사실상 무적급이라 최고 비용
-  radar: 5, // 밸런스 상향 (3 -> 5)
-  smoke: 4,
+  mine: 1,
+  wormhole: 7,
+  radar: 2,
+  smoke: 1,
+};
+
+export const ITEM_LIMITS: Record<ItemType, number> = {
+  oneTimeWall: 1,
+  mine: 1,
+  wormhole: 1,
+  radar: 1,
+  smoke: 1,
 };
 
 export const ITEM_LABELS: Record<ItemType, string> = {
@@ -22,6 +32,23 @@ export const ITEM_LABELS: Record<ItemType, string> = {
   radar: '탐지기',
   smoke: '연막 함정',
 };
+
+function isDirection(value: unknown): value is Direction {
+  return typeof value === 'string' && CARDINAL_DIRECTIONS.includes(value as Direction);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isDenseRecordArray(values: unknown[]): boolean {
+  for (let index = 0; index < values.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(values, index) || !isRecord(values[index])) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export function isTurnEligible(player: Player | null | undefined): boolean {
   return !!player && !player.finished && !player.forfeited && !player.hasLeft;
@@ -85,8 +112,8 @@ export function isSameWallSegment(
 // 맵의 아이템 목록 (레거시 단일 item 필드 하위호환)
 export function getMapItems(map: { items?: MapItem[] | null; item?: MapItem | null } | null | undefined): MapItem[] {
   if (!map) return [];
-  if (Array.isArray(map.items)) return map.items;
-  return map.item ? [map.item] : [];
+  if (Array.isArray(map.items)) return map.items.filter((item): item is MapItem => isRecord(item));
+  return isRecord(map.item) ? [map.item as unknown as MapItem] : [];
 }
 
 // 해당 벽 세그먼트를 막고 있는 "미사용" 1회성 벽의 인덱스 (-1이면 없음)
@@ -106,10 +133,59 @@ export function findBlockingOneTimeWall(
   );
 }
 
+function getGuaranteedBlockingWalls(map: GameMap): Obstacle[] {
+  const itemWalls = getMapItems(map).flatMap((item) =>
+    item.type === 'oneTimeWall' && isPositionInBoard(item.wallPosition) && isDirection(item.wallDirection)
+      ? [{ position: item.wallPosition, direction: item.wallDirection }]
+      : []
+  );
+  const obstacles = Array.isArray(map.obstacles)
+    ? map.obstacles.filter(
+        (obstacle) =>
+          isRecord(obstacle) && isPositionInBoard(obstacle.position) && isDirection(obstacle.direction)
+      )
+    : [];
+  return [...obstacles, ...itemWalls];
+}
+
+export function getWormholeExitOpenDirections(map: GameMap, exit: Position): Direction[] {
+  const guaranteedWalls = getGuaranteedBlockingWalls(map);
+  return CARDINAL_DIRECTIONS.filter((direction) => {
+    const target = getNewPosition(exit, direction);
+    return isPositionInBoard(target) && canMove(exit, direction, guaranteedWalls);
+  });
+}
+
+export function getWormholeExitSafetyError(map: GameMap, exit: Position): string | null {
+  if (!isPositionInBoard(exit)) return '웜홀 출구가 보드 밖에 있습니다.';
+  if (!isPositionInBoard(map.endPosition)) return '웜홀 출구의 도착점 정보가 올바르지 않습니다.';
+
+  const openDirections = getWormholeExitOpenDirections(map, exit);
+  if (openDirections.length < 2) {
+    return '웜홀 출구에는 가짜벽이 아닌 즉시 열린 방향이 최소 2개 필요합니다.';
+  }
+
+  const guaranteedPath = findShortestPath(exit, map.endPosition, getGuaranteedBlockingWalls(map));
+  if (!guaranteedPath) {
+    return '웜홀 출구에서 도착점까지 특수벽에 의존하지 않는 안전 경로가 필요합니다.';
+  }
+
+  return null;
+}
+
+export function isWormholeExitSafe(map: GameMap, exit: Position | null | undefined): boolean {
+  return !!exit && getWormholeExitSafetyError(map, exit) === null;
+}
+
 // 위치가 보드 내에 있는지 확인
-export function isPositionInBoard(position: Position): boolean {
-  const { row, col } = position;
-  return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
+export function isPositionInBoard(position: Position | null | undefined): position is Position {
+  return !!position &&
+    Number.isInteger(position.row) &&
+    Number.isInteger(position.col) &&
+    position.row >= 0 &&
+    position.row < BOARD_SIZE &&
+    position.col >= 0 &&
+    position.col < BOARD_SIZE;
 }
 
 // 두 위치가 동일한지 확인
@@ -144,7 +220,11 @@ export function canMove(currentPosition: Position, direction: Direction, obstacl
   }
   
   // 해당 방향에 장애물이 있는지 확인
-  return !obstacles.some(obstacle => {
+  const safeObstacles = Array.isArray(obstacles) ? obstacles : [];
+  return !safeObstacles.some(obstacle => {
+    if (!isRecord(obstacle) || !isPositionInBoard(obstacle.position) || !isDirection(obstacle.direction)) {
+      return false;
+    }
     const { position, direction: obstacleDirection } = obstacle;
     
     // 현재 위치에서 해당 방향으로 이동할 때 장애물 확인
@@ -177,6 +257,8 @@ export function findShortestPath(
   end: Position,
   obstacles: Obstacle[]
 ): Position[] | null {
+  if (!isPositionInBoard(start) || !isPositionInBoard(end)) return null;
+
   // 방문 여부를 저장하는 배열
   const visited: boolean[][] = Array(BOARD_SIZE)
     .fill(null)
@@ -220,17 +302,107 @@ export function findShortestPath(
   return null;
 }
 
+function countUniqueMapWalls(obstacles: Obstacle[]): number {
+  const unique: Obstacle[] = [];
+  for (const obstacle of obstacles || []) {
+    if (
+      !unique.some((existing) =>
+        isSameWallSegment(existing.position, existing.direction, obstacle.position, obstacle.direction)
+      )
+    ) {
+      unique.push(obstacle);
+    }
+  }
+  return unique.length;
+}
+
 // 게임맵이 유효한지 확인 (시작점에서 끝점까지 경로가 존재하는지)
-export function isValidMap(map: GameMap): boolean {
+export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean {
+  if (!isRecord(map)) return false;
+  if (expectedRulesVersion != null && map.rulesVersion !== expectedRulesVersion) return false;
+  if (!isPositionInBoard(map.startPosition) || !isPositionInBoard(map.endPosition)) return false;
+  if (isSamePosition(map.startPosition, map.endPosition)) return false;
+
+  const rawObstacles = (map as unknown as { obstacles?: unknown }).obstacles;
+  if (rawObstacles != null && !Array.isArray(rawObstacles)) return false;
+  const obstacles = (Array.isArray(rawObstacles) ? rawObstacles : []) as unknown[];
+  if (!isDenseRecordArray(obstacles)) return false;
+  if (
+    obstacles.some(
+      (obstacle) =>
+        !isRecord(obstacle) ||
+        !isPositionInBoard(obstacle.position as Position | undefined) ||
+        !isDirection(obstacle.direction) ||
+        !isPositionInBoard(
+          getNewPosition(obstacle.position as Position, obstacle.direction as Direction)
+        )
+    )
+  ) {
+    return false;
+  }
+  const validObstacles = obstacles as Obstacle[];
+
+  const rawItems = (map as unknown as { items?: unknown }).items;
+  const rawLegacyItem = (map as unknown as { item?: unknown }).item;
+  if (rawItems != null && !Array.isArray(rawItems)) return false;
+  if (rawLegacyItem != null && !isRecord(rawLegacyItem)) return false;
+  const itemValues = Array.isArray(rawItems)
+    ? rawItems
+    : rawLegacyItem == null
+      ? []
+      : [rawLegacyItem];
+  if (!isDenseRecordArray(itemValues)) return false;
+  const items = itemValues as MapItem[];
+
+  const itemCounts: Partial<Record<ItemType, number>> = {};
+  const occupiedCells = new Set<string>();
+  const itemWalls: Obstacle[] = [];
+  let itemCost = 0;
+
+  const reserveCell = (position: Position | null | undefined): boolean => {
+    if (!isPositionInBoard(position)) return false;
+    if (isSamePosition(position, map.startPosition) || isSamePosition(position, map.endPosition)) {
+      return false;
+    }
+    const key = `${position.row},${position.col}`;
+    if (occupiedCells.has(key)) return false;
+    occupiedCells.add(key);
+    return true;
+  };
+
+  for (const item of items) {
+    if (!Object.prototype.hasOwnProperty.call(ITEM_COSTS, item.type)) return false;
+    itemCounts[item.type] = (itemCounts[item.type] || 0) + 1;
+    if (itemCounts[item.type] > ITEM_LIMITS[item.type]) return false;
+    itemCost += ITEM_COSTS[item.type];
+
+    if (item.type === 'oneTimeWall') {
+      if (!isPositionInBoard(item.wallPosition) || !isDirection(item.wallDirection)) return false;
+      if (!isPositionInBoard(getNewPosition(item.wallPosition, item.wallDirection))) return false;
+      const overlapsWall = [...validObstacles, ...itemWalls].some((wall) =>
+        isSameWallSegment(item.wallPosition!, item.wallDirection!, wall.position, wall.direction)
+      );
+      if (overlapsWall) return false;
+      itemWalls.push({ position: item.wallPosition, direction: item.wallDirection });
+    } else if (item.type === 'mine' || item.type === 'smoke') {
+      if (!reserveCell(item.position)) return false;
+    } else if (item.type === 'wormhole') {
+      if (!reserveCell(item.entrance) || !reserveCell(item.exit)) return false;
+    }
+  }
+
+  if (countUniqueMapWalls(validObstacles) + itemCost > MAX_OBSTACLES) return false;
+
   const basePath = findShortestPath(
     map.startPosition,
     map.endPosition,
-    map.obstacles
+    validObstacles
   );
   if (!basePath) return false;
 
-  return getMapItems(map).every((item) => {
+  return items.every((item) => {
     if (item.type !== 'wormhole') return true;
-    return !!item.exit && !!findShortestPath(item.exit, map.endPosition, map.obstacles);
+    if (!item.entrance || !item.exit) return false;
+    return isWormholeExitSafe(map, item.exit);
   });
 }

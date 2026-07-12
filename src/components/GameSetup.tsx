@@ -6,9 +6,12 @@ import GameBoard from './GameBoard';
 import {
   isValidMap,
   BOARD_SIZE,
+  GAME_RULES_VERSION,
   MAX_OBSTACLES,
   ITEM_COSTS,
+  ITEM_LIMITS,
   ITEM_LABELS,
+  getWormholeExitSafetyError,
   isSameWallSegment,
   isSamePosition,
 } from '@/lib/gameUtils';
@@ -27,13 +30,22 @@ const ITEM_ICONS: Record<ItemType, string> = {
   smoke: '🌫️',
 };
 
+const findWormholeSafetyError = (map: GameMap): string | null => {
+  for (const item of map.items || []) {
+    if (item.type !== 'wormhole' || !item.exit) continue;
+    const error = getWormholeExitSafetyError(map, item.exit);
+    if (error) return error;
+  }
+  return null;
+};
+
 const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   const [startPosition, setStartPosition] = useState<Position | undefined>();
   const [endPosition, setEndPosition] = useState<Position | undefined>();
   const [obstacles, setObstacles] = useState<Obstacle[]>([]);
   const [setupPhase, setSetupPhase] = useState<'start' | 'end' | 'obstacles'>('start');
   const [isMapValid, setIsMapValid] = useState<boolean>(false);
-  // 아이템 배치 (벽 예산 내 무제한, 각 아이템이 벽 예산 소모)
+  // 아이템 배치 (공용 벽 예산과 종류별 최대 수량 적용)
   const [placeMode, setPlaceMode] = useState<PlaceMode>('wall');
   const [items, setItems] = useState<MapItem[]>([]);
   const [wormholeEntrance, setWormholeEntrance] = useState<Position | null>(null);
@@ -56,7 +68,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
     countUniqueObstacles(obstacles) + itemsCost + ITEM_COSTS[type] <= MAX_OBSTACLES;
 
   const hasItemCapacity = (type: ItemType): boolean =>
-    type !== 'smoke' || items.filter((item) => item.type === 'smoke').length < 2;
+    items.filter((item) => item.type === type).length < ITEM_LIMITS[type];
 
   const addItem = (newItem: MapItem) => {
     setItems((prev) => [...prev, newItem]);
@@ -175,16 +187,38 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
     return true;
   };
 
+  const wormholeExitCandidates: Position[] = [];
+  if (wormholeEntrance && startPosition && endPosition) {
+    for (let row = 0; row < BOARD_SIZE; row += 1) {
+      for (let col = 0; col < BOARD_SIZE; col += 1) {
+        const position = { row, col };
+        if (!canPlaceItemOnCell(position) || isCellOccupiedByItem(position)) continue;
+        if (isSamePosition(position, wormholeEntrance)) continue;
+        const wormhole: MapItem = { type: 'wormhole', entrance: wormholeEntrance, exit: position };
+        const candidateMap: GameMap = {
+          startPosition,
+          endPosition,
+          obstacles,
+          items: [...items, wormhole],
+        };
+        if (!getWormholeExitSafetyError(candidateMap, position)) {
+          wormholeExitCandidates.push(position);
+        }
+      }
+    }
+  }
+
   // 셀 클릭 핸들러
   const handleCellClick = (position: Position) => {
     if (setupPhase === 'start') {
+      if (isCellOccupiedByItem(position)) return;
+      if (endPosition && isSamePosition(position, endPosition)) return;
       setStartPosition(position);
       setSetupPhase('end');
     } else if (setupPhase === 'end') {
       // 시작점과 같은 위치에 도착점을 설정하지 못하도록 함
-      if (startPosition && startPosition.row === position.row && startPosition.col === position.col) {
-        return;
-      }
+      if (startPosition && isSamePosition(position, startPosition)) return;
+      if (isCellOccupiedByItem(position)) return;
       setEndPosition(position);
       setSetupPhase('obstacles');
     } else if (setupPhase === 'obstacles') {
@@ -204,7 +238,22 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
           // 두 번째 클릭: 출구 지정 (입구와 달라야 함)
           if (isSamePosition(position, wormholeEntrance)) return;
           if (!canAffordItem('wormhole')) return;
-          addItem({ type: 'wormhole', entrance: wormholeEntrance, exit: position });
+          if (!startPosition || !endPosition) return;
+
+          const wormhole: MapItem = { type: 'wormhole', entrance: wormholeEntrance, exit: position };
+          const candidateMap: GameMap = {
+            startPosition,
+            endPosition,
+            obstacles,
+            items: [...items, wormhole],
+          };
+          const safetyError = getWormholeExitSafetyError(candidateMap, position);
+          if (safetyError) {
+            alert(safetyError);
+            return;
+          }
+
+          addItem(wormhole);
           setWormholeEntrance(null);
           setPlaceMode('wall');
         }
@@ -233,7 +282,21 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       if (overlapsWall) return;
       if (!canAffordItem('oneTimeWall')) return;
 
-      addItem({ type: 'oneTimeWall', wallPosition: position, wallDirection: direction });
+      const item: MapItem = { type: 'oneTimeWall', wallPosition: position, wallDirection: direction };
+      if (startPosition && endPosition) {
+        const safetyError = findWormholeSafetyError({
+          startPosition,
+          endPosition,
+          obstacles,
+          items: [...items, item],
+        });
+        if (safetyError) {
+          alert(safetyError);
+          return;
+        }
+      }
+
+      addItem(item);
       setPlaceMode('wall');
       return;
     }
@@ -322,6 +385,18 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
 
       // 벽 예산 확인 (아이템 비용 포함 최대 개수를 초과하지 않는지)
       if (uniqueObstacleCount + itemsCost <= MAX_OBSTACLES) {
+        if (startPosition && endPosition) {
+          const safetyError = findWormholeSafetyError({
+            startPosition,
+            endPosition,
+            obstacles: tempObstacles,
+            items,
+          });
+          if (safetyError) {
+            alert(safetyError);
+            return;
+          }
+        }
         setObstacles(tempObstacles);
       } else {
         alert(`벽 예산(${MAX_OBSTACLES}개)을 초과했습니다. 아이템 비용 ${itemsCost}개가 포함되어 있습니다.`);
@@ -332,7 +407,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   // 아이템 선택/제거 (예산 안에서 무제한)
   const handleSelectItemMode = (type: ItemType) => {
     if (!hasItemCapacity(type)) {
-      alert('연막 함정은 한 맵에 최대 2개까지 배치할 수 있습니다.');
+      alert(`${ITEM_LABELS[type]}은(는) 한 맵에 최대 ${ITEM_LIMITS[type]}개까지 배치할 수 있습니다.`);
       return;
     }
     if (!canAffordItem(type)) {
@@ -364,11 +439,18 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
     }
     
     const map: GameMap = {
+      rulesVersion: GAME_RULES_VERSION,
       startPosition,
       endPosition,
       obstacles,
       items,
     };
+
+    const safetyError = findWormholeSafetyError(map);
+    if (safetyError) {
+      alert(safetyError);
+      return;
+    }
 
     // 맵 유효성 검사 (1회성 벽은 부술 수 있으므로 경로 판정에서 제외)
     if (!isValidMap(map)) {
@@ -396,6 +478,9 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   // 사용한 벽 예산 (아이템 총비용 포함)
   const usedBudget = countUniqueObstacles(obstacles) + itemsCost;
   const remainingObstacles = MAX_OBSTACLES - usedBudget;
+  const wormholeSafetyError = startPosition && endPosition
+    ? findWormholeSafetyError({ startPosition, endPosition, obstacles, items })
+    : null;
   
   const steps: Array<{ key: 'start' | 'end' | 'obstacles'; label: string }> = [
     { key: 'start', label: '시작점' },
@@ -415,6 +500,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
           obstacles={obstacles}
           items={items}
           pendingCell={wormholeEntrance}
+          validTargetCells={wormholeExitCandidates}
           placeMode={placeMode}
           onCellClick={handleCellClick}
           onDirectionClick={handleDirectionClick}
@@ -467,17 +553,17 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
         className="absolute left-1/2 z-20 flex w-[96%] max-w-3xl -translate-x-1/2 flex-col items-center gap-2"
         style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
       >
-        {setupPhase === 'obstacles' && !isMapValid && obstacles.length > 0 && (
+        {setupPhase === 'obstacles' && !isMapValid && (obstacles.length > 0 || items.length > 0) && (
           <p className="text-red-300 text-xs px-3 py-1 rounded-full bg-red-500/20 border border-red-500/50 backdrop-blur-sm">
-            현재 맵 구성으로는 시작점에서 도착점까지 도달할 수 없습니다.
+            {wormholeSafetyError || '현재 맵 구성으로는 시작점에서 도착점까지 도달할 수 없습니다.'}
           </p>
         )}
 
-        {/* 아이템 팔레트 - 벽 예산 안에서 무제한 배치 */}
+        {/* 아이템 팔레트 - 공용 벽 예산과 종류별 제한 적용 */}
         {setupPhase === 'obstacles' && (
           <div className="w-full game-panel !rounded-xl px-3 py-2">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-[11px] font-bold text-purple-300">🎁 아이템 (예산 내 무제한)</span>
+              <span className="text-[11px] font-bold text-purple-300">🎁 아이템 (종류별 제한)</span>
               <div className="flex gap-1.5 flex-wrap">
                 {(['oneTimeWall', 'mine', 'wormhole', 'radar', 'smoke'] as ItemType[]).map((type) => (
                   <button
@@ -525,7 +611,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
                 {placeMode === 'smoke' && '칸을 클릭해 연막 함정을 배치하세요. 밟은 상대는 다음 차례에 보드를 볼 수 없습니다.'}
                 {placeMode === 'wormhole' &&
                   (wormholeEntrance
-                    ? '🌀 출구가 될 칸을 클릭하세요. (입구를 밟으면 이곳으로 이동)'
+                    ? `🌀 초록색 안전 출구 ${wormholeExitCandidates.length}칸 중 하나를 선택하세요.`
                     : '🌀 입구가 될 칸을 클릭하세요.')}
               </p>
             )}

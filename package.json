@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:game-rules": "node scripts/test-game-rules.cjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",

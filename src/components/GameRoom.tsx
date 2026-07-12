@@ -8,6 +8,7 @@ import LiveBoardGrid, { LiveBoardEntry } from './LiveBoardGrid';
 import { useGameState } from '@/hooks/useFirebase';
 import {
   placeObstacles,
+  resetPlayerMap,
   startGame,
   joinRoom,
   leaveRoom,
@@ -17,7 +18,7 @@ import {
   getRoomOnlineUsers,
   clearRoomPresence
 } from '@/lib/firebase';
-import { getFirstTurnPlayerId, getNextTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
+import { getFirstTurnPlayerId, getNextTurnPlayerId, getTurnOrder, isValidMap } from '@/lib/gameUtils';
 import { isVisionObscuredForPlayer } from '@/lib/gameTurn';
 import { useRouter } from 'next/navigation';
 import { getDatabase, ref, update, get, remove, onValue, serverTimestamp, runTransaction } from 'firebase/database';
@@ -308,6 +309,18 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     } catch (error) {
       console.error('맵 설정 중 오류 발생:', error);
       setMessage('맵 설정 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleEditMap = async () => {
+    try {
+      await resetPlayerMap(roomId, userId);
+      setIsReady(false);
+      setMyMap(null);
+      setMessage('맵 제작으로 돌아왔습니다.');
+    } catch (error) {
+      console.error('맵 재편집 전환 오류:', error);
+      setMessage(error instanceof Error ? error.message : '맵을 다시 편집하지 못했습니다.');
     }
   };
   
@@ -1185,35 +1198,53 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                   참가자 ({Object.keys(gameState.players || {}).length}/{roomData?.maxPlayers ?? 2})
                 </p>
                 <div className="flex flex-col gap-1.5 mb-4">
-                  {Object.entries(gameState.players || {}).map(([pid, p]) => (
-                    <div key={pid} className="flex items-center justify-between gap-3 px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50">
-                      <div className="flex items-center gap-2">
-                        {p.photoURL ? (
-                          <img src={p.photoURL} alt="" className="w-5 h-5 rounded-full" />
+                  {Object.entries(gameState.players || {}).map(([pid, p]) => {
+                    const playerMap = gameState.maps?.[pid];
+                    const needsMapUpdate = !!p.isReady && (
+                      !playerMap || !isValidMap(playerMap, roomData?.rulesVersion)
+                    );
+                    return (
+                      <div key={pid} className="flex items-center justify-between gap-3 px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50">
+                        <div className="flex items-center gap-2">
+                          {p.photoURL ? (
+                            <img src={p.photoURL} alt="" className="w-5 h-5 rounded-full" />
+                          ) : (
+                            <div className={`w-5 h-5 rounded-full ${pid === userId ? 'bg-blue-500' : 'bg-red-500'}`} />
+                          )}
+                          <span className="text-xs text-slate-200">
+                            {p.displayName?.substring(0, 8) || '플레이어'}
+                            {pid === roomData?.createdBy && <span className="text-amber-400 ml-1">👑</span>}
+                            {pid === userId && <span className="text-blue-300 ml-1">(나)</span>}
+                          </span>
+                        </div>
+                        {needsMapUpdate ? (
+                          <span className="text-[10px] font-bold text-amber-300">맵 갱신 필요</span>
+                        ) : p.isReady ? (
+                          <span className="text-[10px] font-bold text-green-400">✓ 준비 완료</span>
                         ) : (
-                          <div className={`w-5 h-5 rounded-full ${pid === userId ? 'bg-blue-500' : 'bg-red-500'}`} />
+                          <span className="text-[10px] text-slate-500">맵 제작 중...</span>
                         )}
-                        <span className="text-xs text-slate-200">
-                          {p.displayName?.substring(0, 8) || '플레이어'}
-                          {pid === roomData?.createdBy && <span className="text-amber-400 ml-1">👑</span>}
-                          {pid === userId && <span className="text-blue-300 ml-1">(나)</span>}
-                        </span>
                       </div>
-                      {p.isReady ? (
-                        <span className="text-[10px] font-bold text-green-400">✓ 준비 완료</span>
-                      ) : (
-                        <span className="text-[10px] text-slate-500">맵 제작 중...</span>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {(() => {
                   const playerEntries = Object.entries(gameState.players || {});
                   const mapsReady = gameState.maps || {};
+                  const hasInvalidMaps = playerEntries.some(
+                    ([pid, p]) =>
+                      !!p.isReady &&
+                      (!mapsReady[pid] || !isValidMap(mapsReady[pid], roomData?.rulesVersion))
+                  );
                   const allReady =
                     playerEntries.length >= 2 &&
-                    playerEntries.every(([pid, p]) => p.isReady && mapsReady[pid]);
+                    playerEntries.every(
+                      ([pid, p]) =>
+                        !!p.isReady &&
+                        !!mapsReady[pid] &&
+                        isValidMap(mapsReady[pid], roomData?.rulesVersion)
+                    );
                   const isOwner = roomData?.createdBy === userId;
 
                   if (isOwner) {
@@ -1223,7 +1254,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                           className="btn-game px-10 py-2.5 text-sm w-full"
                           onClick={async () => {
                             const ok = await startGame(roomId);
-                            if (!ok) setMessage('아직 시작할 수 없습니다. 모든 참가자가 준비되어야 합니다.');
+                            if (!ok) setMessage('방 상태가 변경되어 게임을 시작하지 못했습니다.');
                           }}
                           disabled={!allReady}
                         >
@@ -1232,6 +1263,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                         <p className="text-[10px] text-slate-500 mt-2">
                           {allReady
                             ? '모두 준비되었습니다! 시작 버튼을 누르세요.'
+                            : hasInvalidMaps
+                              ? '새 규칙에 맞지 않는 맵은 다시 제작해야 합니다.'
                             : '모든 참가자가 맵을 완성하면 시작할 수 있습니다.'}
                         </p>
                       </>
@@ -1244,6 +1277,9 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                     </div>
                   );
                 })()}
+                <button className="btn-sub mt-3 w-full px-5 py-2 text-xs" onClick={handleEditMap}>
+                  맵 다시 만들기
+                </button>
               </div>
             </div>
           ) : (gameState.phase === GamePhase.PLAY || gameState.phase === GamePhase.END) && opponentMap ? (

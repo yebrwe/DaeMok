@@ -58,21 +58,22 @@ export interface MapItem {
   // oneTimeWall: 일반 벽과 똑같이 한 번 막은 뒤, 다음 시도부터 통과되는 위장 벽 (벽 5개 소모)
   wallPosition?: Position;
   wallDirection?: Direction;
-  // mine: 밟으면 2턴 전 위치로 되돌아감 (벽 3개 소모)
-  // smoke: 밟으면 다음 유효 행동까지 주행 보드 시야가 가려짐 (벽 4개 소모)
+  // mine: 밟으면 2턴 전 위치로 되돌아감 (벽 1개 소모)
+  // smoke: 밟으면 다음 유효 행동까지 주행 보드 시야가 가려짐 (벽 1개 소모)
   position?: Position;
   // wormhole: 입구를 밟으면 출구로 순간이동, 1회성 (벽 7개 소모)
   entrance?: Position;
   exit?: Position;
-  // radar: 한 개당 1턴을 사용해 내 주변 3x3의 벽을 탐지 (벽 5개 소모)
+  // radar: 한 개당 1턴을 사용해 내 주변 3x3의 벽을 탐지 (벽 2개 소모)
 }
 
 // 게임 맵 타입
 export interface GameMap {
+  rulesVersion?: number;
   startPosition: Position;
   endPosition: Position;
   obstacles: Obstacle[];
-  items?: MapItem[] | null; // 설치된 아이템들 (벽 예산 내 무제한)
+  items?: MapItem[] | null; // 설치된 아이템들 (공용 벽 예산 + 종류별 최대 수량)
   item?: MapItem | null; // 레거시 단일 아이템 (구버전 맵 하위호환 - getMapItems로 읽을 것)
 }
 
@@ -127,6 +128,7 @@ export interface Room {
   players: string[];
   gameState: GameState | null;
   maxPlayers: number;
+  rulesVersion?: number;
   createdAt?: number | null;
   createdBy?: string;
   status?: 'waiting' | 'playing' | 'ended';

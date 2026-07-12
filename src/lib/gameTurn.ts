@@ -16,6 +16,7 @@ import {
   isPositionInBoard,
   isSamePosition,
   isSameWallSegment,
+  isWormholeExitSafe,
 } from '@/lib/gameUtils';
 
 export type TurnMoveEffect = 'move' | 'bump' | 'mine' | 'wormhole' | 'smoke';
@@ -97,7 +98,9 @@ export function findRadarWalls(
         const target = getNewPosition(cell, direction);
         if (!isPositionInBoard(target)) return;
         const hasWall =
-          playedMap.obstacles.some((wall) => isSameWallSegment(cell, direction, wall.position, wall.direction)) ||
+          (playedMap.obstacles || []).some(
+            (wall) => isSameWallSegment(cell, direction, wall.position, wall.direction)
+          ) ||
           findBlockingOneTimeWall(cell, direction, mapItems, (index) => !!consumed[index]) >= 0;
         if (hasWall) found.push({ position: cell, direction });
       });
@@ -114,6 +117,14 @@ export function appendTurnPosition(
 ): Position[] {
   const current = Array.isArray(history) && history.length > 0 ? history : [fallback];
   return [...current, result].slice(-8);
+}
+
+export function getMineRollbackPosition(
+  history: Position[] | undefined,
+  fallback: Position
+): Position {
+  const turns = Array.isArray(history) && history.length > 0 ? history : [fallback];
+  return turns.length >= 2 ? turns[turns.length - 2] : turns[0];
 }
 
 function collisionRecord(
@@ -172,23 +183,24 @@ function resolveMove(
     );
 
     if (mineIndex >= 0) {
-      const history = Array.isArray(player.positionHistory) && player.positionHistory.length > 0
-        ? player.positionHistory
-        : [origin];
-      position = history.length >= 2 ? history[history.length - 2] : history[0];
+      position = getMineRollbackPosition(player.positionHistory, origin);
       effect = 'mine';
       consumedItemIndex = mineIndex;
       itemPosition = mapItems[mineIndex].position;
       consumed[mineIndex] = true;
       message = `${player.displayName || '플레이어'}가 지뢰를 밟아 2턴 전 위치로 돌아갔습니다.`;
     } else if (wormholeIndex >= 0) {
-      position = mapItems[wormholeIndex].exit || attempted;
+      const exit = mapItems[wormholeIndex].exit;
+      const exitIsSafe = isWormholeExitSafe(playedMap, exit);
+      position = exitIsSafe && exit ? exit : origin;
       effect = 'wormhole';
       consumedItemIndex = wormholeIndex;
       itemPosition = mapItems[wormholeIndex].entrance;
-      wormholeExit = mapItems[wormholeIndex].exit;
+      wormholeExit = position;
       consumed[wormholeIndex] = true;
-      message = `${player.displayName || '플레이어'}가 웜홀을 통과했습니다.`;
+      message = exitIsSafe
+        ? `${player.displayName || '플레이어'}가 웜홀을 통과했습니다.`
+        : '불안정한 출구로 웜홀이 붕괴했습니다.';
     } else if (smokeIndex >= 0) {
       effect = 'smoke';
       consumedItemIndex = smokeIndex;

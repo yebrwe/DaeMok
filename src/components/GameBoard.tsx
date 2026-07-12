@@ -22,6 +22,7 @@ interface GameBoardProps {
   items?: MapItem[] | null; // 맵 아이템들
   itemsConsumed?: Record<number, boolean> | null; // 인덱스별 사용 여부
   pendingCell?: Position | null; // 배치 중 임시 표시 (웜홀 입구)
+  validTargetCells?: Position[]; // 아이템 배치 시 안전하게 선택 가능한 셀
   revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들 (일반 벽처럼 노란색으로 표시)
   placeMode?: 'wall' | ItemType;
 }
@@ -44,6 +45,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
   items = null,
   itemsConsumed = null,
   pendingCell = null,
+  validTargetCells = [],
   revealedWalls = [],
   placeMode = 'wall',
 }) => {
@@ -182,6 +184,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
     const cellType = getCellType(position);
     const isPlayer = playerPosition && isSamePosition(position, playerPosition);
     const isHovered = hoveredCell && isSamePosition(hoveredCell, position);
+    const isValidTarget = validTargetCells.some((target) => isSamePosition(target, position));
     const isInteractive = !readOnly && !!onCellClick && (
       gamePhase === GamePhase.PLAY ||
       selectionMode !== 'none' ||
@@ -193,6 +196,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
     const cellClasses = `
       relative w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14
       ${cellType === 'empty' || cellType === 'player' ? 'bg-white' : ''}
+      ${isValidTarget ? 'ring-2 ring-inset ring-emerald-400 bg-emerald-50' : ''}
       ${!readOnly && (gamePhase === GamePhase.SETUP || gamePhase === GamePhase.PLAY) ? 'cursor-pointer' : ''}
       touch-action-none transition-colors duration-300 ease-in-out
     `;
@@ -201,6 +205,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
       <div
         key={`cell-${position.row}-${position.col}`}
         data-cell={`${position.row},${position.col}`}
+        data-valid-item-target={isValidTarget ? 'true' : undefined}
         role={isInteractive ? 'button' : undefined}
         tabIndex={isInteractive ? 0 : undefined}
         aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 선택` : undefined}

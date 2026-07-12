@@ -55,7 +55,8 @@
 
           "maps": {
             "$ownerId": {
-              ".write": "auth != null && $ownerId === auth.uid && root.child('rooms').child($roomId).child('gameState').child('phase').val() === 'setup'"
+              ".write": "auth != null && $ownerId === auth.uid && root.child('rooms').child($roomId).child('gameState').child('phase').val() === 'setup'",
+              ".validate": "!root.child('rooms').child($roomId).child('rulesVersion').exists() || (newData.child('rulesVersion').isNumber() && newData.child('rulesVersion').val() === root.child('rooms').child($roomId).child('rulesVersion').val())"
             }
           },
 

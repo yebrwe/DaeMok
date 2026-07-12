@@ -13,7 +13,7 @@ import {
 } from 'firebase/auth';
 import { getAnalytics, isSupported } from 'firebase/analytics';
 import { Room, GameState, GamePhase, GameMap, UserProfile } from '@/types/game';
-import { getFirstTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
+import { GAME_RULES_VERSION, getFirstTurnPlayerId, getTurnOrder, isValidMap } from '@/lib/gameUtils';
 
 // Firebase 인스턴스를 저장할 변수들  
 export let auth;
@@ -269,6 +269,7 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
       createdBy: creatorId,
       players: [creatorId],
       maxPlayers: maxPlayers,
+      rulesVersion: GAME_RULES_VERSION,
       gameState: initialGameState,
       status: 'waiting', // waiting, playing, ended
       lastActivity: now
@@ -455,6 +456,10 @@ export const startGame = async (roomId: string): Promise<boolean> => {
   const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
 
   try {
+    const rulesVersionSnapshot = await get(ref(database, `rooms/${roomId}/rulesVersion`));
+    const expectedRulesVersion = rulesVersionSnapshot.exists()
+      ? Number(rulesVersionSnapshot.val())
+      : undefined;
     const result = await runTransaction(gameStateRef, (state: GameState | null) => {
       // 로컬 캐시가 비어 있으면 그대로 반환 -> 서버 데이터로 재시도됨
       if (!state) return state;
@@ -469,9 +474,12 @@ export const startGame = async (roomId: string): Promise<boolean> => {
       const enoughPlayers = playerIds.length >= 2;
       const allReady = playerIds.every((id) => players[id]?.isReady);
       const allMapsReady = playerIds.every((id) => maps[id]);
+      const allMapsValid = playerIds.every(
+        (id) => maps[id] && isValidMap(maps[id], expectedRulesVersion)
+      );
 
       // 시작 조건 미충족 -> 중단
-      if (!enoughPlayers || !allReady || !allMapsReady) return;
+      if (!enoughPlayers || !allReady || !allMapsReady || !allMapsValid) return;
 
       // 순환 릴레이 배정: sorted[i]는 sorted[(i+1)%N]의 맵을 달린다
       const assignments: Record<string, string> = {};
@@ -531,6 +539,14 @@ export const placeObstacles = async (roomId: string, userId: string, map: GameMa
     return;
   }
 
+  const rulesVersionSnapshot = await get(ref(database, `rooms/${roomId}/rulesVersion`));
+  const expectedRulesVersion = rulesVersionSnapshot.exists()
+    ? Number(rulesVersionSnapshot.val())
+    : undefined;
+  if (!isValidMap(map, expectedRulesVersion)) {
+    throw new Error('유효하지 않은 맵은 저장할 수 없습니다.');
+  }
+
   try {
     console.log('맵 설정 중...', { roomId, userId });
     const mapRef = ref(database, `rooms/${roomId}/gameState/maps/${userId}`);
@@ -546,6 +562,18 @@ export const placeObstacles = async (roomId: string, userId: string, map: GameMa
     console.error('맵 설정 중 오류 발생:', error);
     throw error;
   }
+};
+
+export const resetPlayerMap = async (roomId: string, userId: string): Promise<void> => {
+  if (!database || !roomId || !userId) throw new Error('맵을 다시 편집할 수 없습니다.');
+
+  const phaseSnapshot = await get(ref(database, `rooms/${roomId}/gameState/phase`));
+  if (phaseSnapshot.val() !== GamePhase.SETUP) {
+    throw new Error('맵 제작 단계에서만 다시 편집할 수 있습니다.');
+  }
+
+  await update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), { isReady: false });
+  await touchRoomActivity(roomId);
 };
 
 // 방 나가기
