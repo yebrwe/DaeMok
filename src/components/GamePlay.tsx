@@ -6,7 +6,17 @@ import GameBoard from './GameBoard';
 import GameBoard3D, { BoardFx } from './three/GameBoard3D';
 import LiveBoardGrid, { LiveBoardEntry } from './LiveBoardGrid';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ScanSearch } from 'lucide-react';
-import { BOARD_SIZE, canMove, getNewPosition, getNextTurnPlayerId, isPositionInBoard, isSamePosition, findBlockingOneTimeWall, getMapItems, isSameWallSegment } from '@/lib/gameUtils';
+import { BOARD_SIZE, canMove, getNewPosition, isPositionInBoard, isSamePosition, findBlockingOneTimeWall, getMapItems } from '@/lib/gameUtils';
+import {
+  appendTurnPosition,
+  findRadarWalls,
+  isVisionObscuredForPlayer,
+  mergeWallSegments,
+  MoveTurnOutcome,
+  normalizeConsumed,
+  RadarTurnOutcome,
+  resolveTurnAction,
+} from '@/lib/gameTurn';
 import { getDatabase, ref, update, runTransaction, serverTimestamp } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
 
@@ -36,68 +46,6 @@ interface GamePlayProps {
 }
 
 type ViewMode = 'third' | '2d';
-
-function normalizeConsumed(value: unknown): Record<number, boolean> {
-  if (value === true) return { 0: true };
-  return value && typeof value === 'object' ? { ...(value as Record<number, boolean>) } : {};
-}
-
-function mergeWallSegments(current: Obstacle[], incoming: Obstacle[]): Obstacle[] {
-  const merged = [...current];
-  incoming.forEach((wall) => {
-    if (!merged.some((item) => isSameWallSegment(item.position, item.direction, wall.position, wall.direction))) {
-      merged.push(wall);
-    }
-  });
-  return merged;
-}
-
-function findRadarWalls(
-  position: Position,
-  playedMap: GameMap,
-  consumed: Record<number, boolean>
-): Obstacle[] {
-  const mapItems = getMapItems(playedMap);
-  const found: Obstacle[] = [];
-
-  for (let dr = -1; dr <= 1; dr += 1) {
-    for (let dc = -1; dc <= 1; dc += 1) {
-      const cell = { row: position.row + dr, col: position.col + dc };
-      if (!isPositionInBoard(cell)) continue;
-
-      (['up', 'down', 'left', 'right'] as Direction[]).forEach((direction) => {
-        const target = getNewPosition(cell, direction);
-        if (!isPositionInBoard(target)) return;
-        const hasWall =
-          playedMap.obstacles.some((wall) => isSameWallSegment(cell, direction, wall.position, wall.direction)) ||
-          findBlockingOneTimeWall(cell, direction, mapItems, (index) => !!consumed[index]) >= 0;
-        if (hasWall) found.push({ position: cell, direction });
-      });
-    }
-  }
-
-  return mergeWallSegments([], found);
-}
-
-function appendTurnPosition(history: Position[] | undefined, fallback: Position, result: Position): Position[] {
-  const current = Array.isArray(history) && history.length > 0 ? history : [fallback];
-  return [...current, result].slice(-8);
-}
-
-type MoveEffect = 'move' | 'bump' | 'mine' | 'wormhole';
-
-interface OnlineMoveOutcome {
-  origin: Position;
-  attempted: Position;
-  position: Position;
-  moves: number;
-  effect: MoveEffect;
-  consumedItemIndex: number | null;
-  itemPosition?: Position;
-  wormholeExit?: Position;
-  reachedGoal: boolean;
-  message: string;
-}
 
 const GamePlay: React.FC<GamePlayProps> = ({
   map,
@@ -227,54 +175,16 @@ const GamePlay: React.FC<GamePlayProps> = ({
     if (movePendingRef.current) return;
 
     movePendingRef.current = true;
-    let outcome: { found: Obstacle[]; position: Position; moves: number } | null = null;
+    let outcome: RadarTurnOutcome | null = null;
 
     try {
       const database = getDatabase();
       const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
       const result = await runTransaction(gameStateRef, (state: GameState | null) => {
-        if (!state || state.phase !== GamePhase.PLAY || state.currentTurn !== userId) return;
-
-        const player = state.players?.[userId];
-        const mapOwner = state.assignments?.[userId];
-        const playedMap = mapOwner ? state.maps?.[mapOwner] : null;
-        const ownMap = state.maps?.[userId];
-        if (!player || player.finished || player.forfeited || !playedMap || !ownMap) return;
-
-        const ownConsumed = normalizeConsumed(state.itemState?.[userId]?.consumed);
-        const ownItems = getMapItems(ownMap);
-        if (ownItems[usedIndex]?.type !== 'radar' || ownConsumed[usedIndex]) return;
-
-        const mapConsumed = normalizeConsumed(state.itemState?.[mapOwner!]?.consumed);
-        const found = findRadarWalls(player.position, playedMap, mapConsumed);
-        const moves = (player.moves || 0) + 1;
-        const updatedPlayer = {
-          ...player,
-          moves,
-          positionHistory: appendTurnPosition(player.positionHistory, player.position, player.position),
-        };
-        const players = { ...state.players, [userId]: updatedPlayer };
-        const revealed = mergeWallSegments(state.revealedWallsByPlayer?.[userId] || [], found);
-
-        state.players = players;
-        state.itemState = {
-          ...(state.itemState || {}),
-          [userId]: {
-            ...(state.itemState?.[userId] || {}),
-            consumed: { ...ownConsumed, [usedIndex]: true },
-            consumedAt: Date.now(),
-          },
-        };
-        state.revealedWallsByPlayer = {
-          ...(state.revealedWallsByPlayer || {}),
-          [userId]: revealed,
-        };
-        state.currentTurn = getNextTurnPlayerId(players, userId, state.turnOrder);
-        state.turnNumber = (state.turnNumber || 1) + 1;
-        state.turnMessage = `${player.displayName || '플레이어'}가 탐지기를 사용했습니다.`;
-        state.turnMessageTimestamp = Date.now();
-        outcome = { found, position: player.position, moves };
-        return state;
+        const resolved = resolveTurnAction(state, userId, { type: 'radar', itemIndex: usedIndex });
+        if (!resolved || resolved.outcome.type !== 'radar') return;
+        outcome = resolved.outcome;
+        return resolved.state;
       }, { applyLocally: false });
 
       if (!result.committed || !outcome) {
@@ -282,7 +192,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
         return;
       }
 
-      const committed = outcome as { found: Obstacle[]; position: Position; moves: number };
+      const committed = outcome as RadarTurnOutcome;
       setRevealedWalls((prev) => mergeWallSegments(prev, committed.found));
       setMyItemsConsumed((prev) => ({ ...prev, [usedIndex]: true }));
       setMoveCount(committed.moves);
@@ -332,131 +242,16 @@ const GamePlay: React.FC<GamePlayProps> = ({
     }
 
     movePendingRef.current = true;
-    let outcome: OnlineMoveOutcome | null = null;
+    let outcome: MoveTurnOutcome | null = null;
 
     try {
       const database = getDatabase();
       const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
       const result = await runTransaction(gameStateRef, (state: GameState | null) => {
-        if (!state || state.phase !== GamePhase.PLAY || state.currentTurn !== userId) return;
-
-        const player = state.players?.[userId];
-        const ownerId = state.assignments?.[userId];
-        const playedMap = ownerId ? state.maps?.[ownerId] : null;
-        if (!player || player.finished || player.forfeited || !ownerId || !playedMap) return;
-
-        const origin = player.position || playedMap.startPosition;
-        const attempted = getNewPosition(origin, direction);
-        // 보드 테두리는 공개 정보이므로 잘못 누른 입력은 턴으로 계산하지 않는다.
-        if (!isPositionInBoard(attempted)) return;
-
-        const mapItems = getMapItems(playedMap);
-        const consumed = normalizeConsumed(state.itemState?.[ownerId]?.consumed);
-        const passesStaticWall = canMove(origin, direction, playedMap.obstacles || []);
-        const oneTimeWallIndex = passesStaticWall
-          ? findBlockingOneTimeWall(origin, direction, mapItems, (index) => !!consumed[index])
-          : -1;
-        const blocked = !passesStaticWall || oneTimeWallIndex >= 0;
-        const moves = (player.moves || 0) + 1;
-        let position = origin;
-        let effect: MoveEffect = blocked ? 'bump' : 'move';
-        let consumedItemIndex: number | null = null;
-        let itemPosition: Position | undefined;
-        let wormholeExit: Position | undefined;
-        let actionMessage = blocked
-          ? `${player.displayName || '플레이어'}가 벽에 부딪혔습니다.`
-          : `${player.displayName || '플레이어'}가 한 칸 이동했습니다.`;
-
-        if (oneTimeWallIndex >= 0) {
-          consumedItemIndex = oneTimeWallIndex;
-          consumed[oneTimeWallIndex] = true;
-        }
-
-        if (!blocked) {
-          position = attempted;
-          const mineIndex = mapItems.findIndex(
-            (item, index) => item.type === 'mine' && !!item.position && !consumed[index] && isSamePosition(attempted, item.position)
-          );
-          const wormholeIndex = mapItems.findIndex(
-            (item, index) => item.type === 'wormhole' && !!item.entrance && !consumed[index] && isSamePosition(attempted, item.entrance)
-          );
-
-          if (mineIndex >= 0) {
-            const history = Array.isArray(player.positionHistory) && player.positionHistory.length > 0
-              ? player.positionHistory
-              : [origin];
-            position = history.length >= 2 ? history[history.length - 2] : history[0];
-            effect = 'mine';
-            consumedItemIndex = mineIndex;
-            itemPosition = mapItems[mineIndex].position;
-            consumed[mineIndex] = true;
-            actionMessage = `${player.displayName || '플레이어'}가 지뢰를 밟아 2턴 전 위치로 돌아갔습니다.`;
-          } else if (wormholeIndex >= 0) {
-            position = mapItems[wormholeIndex].exit || attempted;
-            effect = 'wormhole';
-            consumedItemIndex = wormholeIndex;
-            itemPosition = mapItems[wormholeIndex].entrance;
-            wormholeExit = mapItems[wormholeIndex].exit;
-            consumed[wormholeIndex] = true;
-            actionMessage = `${player.displayName || '플레이어'}가 웜홀을 통과했습니다.`;
-          }
-        }
-
-        const reachedGoal = isSamePosition(position, playedMap.endPosition);
-        const updatedPlayer = {
-          ...player,
-          position,
-          moves,
-          positionHistory: appendTurnPosition(player.positionHistory, origin, position),
-          ...(reachedGoal ? { finished: true, finishMoves: moves } : {}),
-        };
-        const players = { ...state.players, [userId]: updatedPlayer };
-        state.players = players;
-
-        if (consumedItemIndex !== null) {
-          state.itemState = {
-            ...(state.itemState || {}),
-            [ownerId]: {
-              ...(state.itemState?.[ownerId] || {}),
-              consumed,
-              consumedAt: Date.now(),
-            },
-          };
-        }
-
-        if (blocked) {
-          const collision: CollisionWall = {
-            playerId: userId,
-            position: origin,
-            direction,
-            timestamp: Date.now(),
-            mapOwnerId: ownerId,
-          };
-          const safePlayerId = userId.replace(/[.#$\[\]/]/g, '_');
-          const collisionKey = `turn_${state.turnNumber || 1}_${safePlayerId}`;
-          state.collisionWalls = {
-            ...(state.collisionWalls || {}),
-            [collisionKey]: collision,
-          };
-        }
-
-        state.currentTurn = getNextTurnPlayerId(players, userId, state.turnOrder);
-        state.turnNumber = (state.turnNumber || 1) + 1;
-        state.turnMessage = actionMessage;
-        state.turnMessageTimestamp = Date.now();
-        outcome = {
-          origin,
-          attempted,
-          position,
-          moves,
-          effect,
-          consumedItemIndex,
-          itemPosition,
-          wormholeExit,
-          reachedGoal,
-          message: actionMessage,
-        };
-        return state;
+        const resolved = resolveTurnAction(state, userId, { type: 'move', direction });
+        if (!resolved || resolved.outcome.type !== 'move') return;
+        outcome = resolved.outcome;
+        return resolved.state;
       }, { applyLocally: false });
 
       if (!result.committed || !outcome) {
@@ -464,10 +259,16 @@ const GamePlay: React.FC<GamePlayProps> = ({
         return;
       }
 
-      const committed = outcome as OnlineMoveOutcome;
+      const committed = outcome as MoveTurnOutcome;
       setMoveCount(committed.moves);
       setPlayerPosition(committed.position);
-      setLastMoveValid(committed.effect === 'move' ? true : committed.effect === 'wormhole' ? null : false);
+      setLastMoveValid(
+        committed.effect === 'move' || committed.effect === 'smoke'
+          ? true
+          : committed.effect === 'wormhole'
+            ? null
+            : false
+      );
       setMessage(committed.message);
       if (committed.consumedItemIndex !== null) {
         setItemsConsumed((prev) => ({ ...prev, [committed.consumedItemIndex!]: true }));
@@ -731,9 +532,14 @@ const GamePlay: React.FC<GamePlayProps> = ({
         celebrating: !!runner.finished && !runner.forfeited,
         revealObstacles: !!runner.finished,
         pawnColor: isMine ? '#3b82f6' : '#ef4444',
+        smokeAffected: isVisionObscuredForPlayer(gameState, runnerId),
+        visionObscured:
+          isMine &&
+          currentTurnId === runnerId &&
+          isVisionObscuredForPlayer(gameState, runnerId),
       }];
     });
-  }, [isPractice, gameState, userId, playerName, playerPosition, moveCount, revealedWalls, fx, moveVia]);
+  }, [isPractice, gameState, userId, playerName, playerPosition, moveCount, revealedWalls, fx, moveVia, currentTurnId]);
 
   const renderDirectionPad = (compact: boolean) => {
     const sizeClass = compact ? '!h-9 !w-9 sm:!h-10 sm:!w-10' : '!h-12 !w-12';
@@ -803,6 +609,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
           collisionWalls={collisionWalls}
           readOnly={true}
           revealObstacles={isFinished}
+          revealItems={isFinished}
+          distinguishOneTimeWalls={isFinished}
           items={items}
           itemsConsumed={itemsConsumed}
           revealedWalls={revealedWalls}
@@ -823,6 +631,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
             readOnly={true}
             playerPhotoURL={playerPhotoURL || undefined}
             revealObstacles={isFinished}
+            revealItems={isFinished}
+            distinguishOneTimeWalls={isFinished}
             items={items}
             itemsConsumed={itemsConsumed}
             revealedWalls={revealedWalls}

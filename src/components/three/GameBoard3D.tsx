@@ -4,7 +4,7 @@ import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react'
 import { Canvas, useFrame, useThree, ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
-import { CollisionWall, Direction, GamePhase, MapItem, Obstacle, Position } from '@/types/game';
+import { CollisionWall, Direction, GamePhase, ItemType, MapItem, Obstacle, Position } from '@/types/game';
 import { BOARD_SIZE, isSamePosition } from '@/lib/gameUtils';
 
 // ===== 보드 배치 상수 =====
@@ -28,6 +28,7 @@ const COLORS = {
   baseSide: '#5f452d',
   wall: '#eab308', // 노란 벽 (설치된 장애물)
   wallPreview: '#fde047',
+  fakeWall: '#22d3ee',
   collision: '#ef4444', // 충돌한 벽 (빨강)
   reveal: '#f59e0b', // 게임 종료 후 공개된 벽
   start: '#22c55e',
@@ -130,6 +131,41 @@ function WallBox({ seg, color, opacity = 1, height = WALL_HEIGHT }: { seg: WallS
   );
 }
 
+function FakeWallBox({ seg, consumed = false }: { seg: WallSegment; consumed?: boolean }) {
+  const [x, , z] = segmentToWorld(seg);
+  const size = segmentSize(seg);
+  const length = seg.type === 'H' ? size[0] : size[2];
+  const pieceLength = length * 0.27;
+  const offsets = [-length * 0.36, 0, length * 0.36];
+  const height = consumed ? WALL_HEIGHT * 0.45 : WALL_HEIGHT;
+
+  return (
+    <group>
+      {offsets.map((offset) => (
+        <mesh
+          key={offset}
+          position={seg.type === 'H' ? [x + offset, height / 2, z] : [x, height / 2, z + offset]}
+          castShadow={!consumed}
+        >
+          <boxGeometry
+            args={seg.type === 'H'
+              ? [pieceLength, height, WALL_THICKNESS]
+              : [WALL_THICKNESS, height, pieceLength]}
+          />
+          <meshStandardMaterial
+            color={COLORS.fakeWall}
+            emissive={COLORS.fakeWall}
+            emissiveIntensity={consumed ? 0.05 : 0.25}
+            transparent={consumed}
+            opacity={consumed ? 0.32 : 1}
+            roughness={0.35}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 function WallSlot({
   seg,
   occupied,
@@ -195,7 +231,7 @@ function Tile({
   isStart: boolean;
   isEnd: boolean;
   onCellClick?: (p: Position) => void;
-  placeMode?: 'wall' | 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
+  placeMode?: 'wall' | ItemType;
   isPendingEntrance?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -781,26 +817,32 @@ function ItemVisuals({
   consumed,
   visible,
   setup = false,
+  distinguishOneTimeWalls = false,
 }: {
   item: MapItem;
   consumed: boolean;
   visible: boolean;
   setup?: boolean;
+  distinguishOneTimeWalls?: boolean;
 }) {
-  if (!visible && !consumed) return null;
+  if (!visible) return null;
 
   if (item.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
     const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
     if (!seg) return null;
     // 위장 벽: 어디서든 일반 벽과 픽셀 단위로 동일하게 - 제작 중엔 노란 벽,
     // 종료 공개 시엔 공개 벽과 같은 색. 통과된 뒤엔 표시하지 않음
-    if (consumed) return null;
-    if (setup) return <WallBox seg={seg} color={COLORS.wall} />;
+    if (consumed) return distinguishOneTimeWalls ? <FakeWallBox seg={seg} consumed /> : null;
+    if (setup || distinguishOneTimeWalls) return <FakeWallBox seg={seg} />;
     return <WallBox seg={seg} color={COLORS.reveal} opacity={0.75} />;
   }
 
   if (item.type === 'mine' && item.position) {
     return <MineVisual position={item.position} consumed={consumed} />;
+  }
+
+  if (item.type === 'smoke' && item.position) {
+    return <SmokeVisual position={item.position} consumed={consumed} />;
   }
 
   if (item.type === 'wormhole' && item.entrance && item.exit) {
@@ -838,6 +880,32 @@ function MineVisual({ position, consumed }: { position: Position; consumed: bool
       <mesh position={[0, 0.13, 0]}>
         <cylinderGeometry args={[0.02, 0.02, 0.1, 8]} />
         <meshStandardMaterial ref={lampRef} color="#ef4444" emissive="#ef4444" emissiveIntensity={0.6} />
+      </mesh>
+    </group>
+  );
+}
+
+function SmokeVisual({ position, consumed }: { position: Position; consumed: boolean }) {
+  const [x, , z] = cellToWorld(position);
+
+  if (consumed) {
+    return (
+      <mesh position={[x, 0.06, z]}>
+        <cylinderGeometry args={[0.24, 0.3, 0.04, 16]} />
+        <meshStandardMaterial color="#475569" roughness={1} />
+      </mesh>
+    );
+  }
+
+  return (
+    <group position={[x, 0.2, z]}>
+      <mesh castShadow>
+        <cylinderGeometry args={[0.13, 0.16, 0.3, 16]} />
+        <meshStandardMaterial color="#64748b" roughness={0.45} metalness={0.35} />
+      </mesh>
+      <mesh position={[0, 0.17, 0]}>
+        <cylinderGeometry args={[0.07, 0.09, 0.05, 12]} />
+        <meshStandardMaterial color="#cbd5e1" roughness={0.3} metalness={0.5} />
       </mesh>
     </group>
   );
@@ -895,11 +963,13 @@ export interface GameBoard3DProps {
   readOnly?: boolean;
   selectionMode?: 'start' | 'end' | 'none';
   revealObstacles?: boolean; // 게임 종료 후 상대 벽 공개
+  revealItems?: boolean; // 맵 제작자 시점 또는 게임 종료 후 숨은 아이템 공개
+  distinguishOneTimeWalls?: boolean;
   pawnColor?: string; // 말 색상 (기본 파랑, 관전 시 상대 말은 빨강)
   items?: MapItem[] | null;
   itemsConsumed?: Record<number, boolean> | null; // 인덱스별 사용 여부
   revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들
-  placeMode?: 'wall' | 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
+  placeMode?: 'wall' | ItemType;
   pendingCell?: Position | null;
   fx?: BoardFx | null; // 액션 이펙트
   pawnVia?: Position[] | null; // 말 이동 경유지 (지뢰 넉백 등 경로 연출)
@@ -942,6 +1012,8 @@ const BoardContents: React.FC<GameBoard3DProps> = ({
   readOnly = false,
   selectionMode = 'none',
   revealObstacles = false,
+  revealItems = false,
+  distinguishOneTimeWalls = false,
   pawnColor,
   items = null,
   itemsConsumed = null,
@@ -1056,8 +1128,9 @@ const BoardContents: React.FC<GameBoard3DProps> = ({
           key={`item-${idx}`}
           item={it}
           consumed={!!itemsConsumed?.[idx]}
-          visible={isSetup || !!revealObstacles}
+          visible={isSetup || revealItems}
           setup={isSetup}
+          distinguishOneTimeWalls={distinguishOneTimeWalls}
         />
       ))}
 

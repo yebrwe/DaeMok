@@ -51,7 +51,7 @@ export interface Player {
 }
 
 // 맵 아이템 타입 (벽 예산 안에서 여러 개 배치 가능)
-export type ItemType = 'oneTimeWall' | 'mine' | 'wormhole' | 'radar';
+export type ItemType = 'oneTimeWall' | 'mine' | 'wormhole' | 'radar' | 'smoke';
 
 export interface MapItem {
   type: ItemType;
@@ -59,6 +59,7 @@ export interface MapItem {
   wallPosition?: Position;
   wallDirection?: Direction;
   // mine: 밟으면 2턴 전 위치로 되돌아감 (벽 3개 소모)
+  // smoke: 밟으면 다음 유효 행동까지 주행 보드 시야가 가려짐 (벽 4개 소모)
   position?: Position;
   // wormhole: 입구를 밟으면 출구로 순간이동, 1회성 (벽 7개 소모)
   entrance?: Position;
@@ -92,6 +93,13 @@ export interface ItemStateEntry {
   consumedAt?: unknown;
 }
 
+export interface VisionEffect {
+  type: 'smoke';
+  sourcePlayerId: string;
+  appliedAtTurn: number;
+  expiresAtTargetMove: number;
+}
+
 // 게임 상태 타입
 export interface GameState {
   phase: GamePhase;
@@ -107,6 +115,7 @@ export interface GameState {
   collisionWalls?: Record<string, CollisionWall> | CollisionWall[];
   itemState?: Record<string, ItemStateEntry>;
   revealedWallsByPlayer?: Record<string, Obstacle[]>;
+  visionEffectsByPlayer?: Record<string, VisionEffect> | null;
   turnMessage?: string;
   turnMessageTimestamp?: unknown;
 }

@@ -447,6 +447,7 @@ export const startGame = async (roomId: string): Promise<boolean> => {
         currentTurn,
         turnOrder,
         turnNumber: 1,
+        visionEffectsByPlayer: {},
         turnMessage: currentTurn ? `${players[currentTurn]?.displayName || '플레이어'}의 턴` : undefined,
         turnMessageTimestamp: Date.now(),
       };

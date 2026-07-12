@@ -18,6 +18,7 @@ import {
   clearRoomPresence
 } from '@/lib/firebase';
 import { getFirstTurnPlayerId, getNextTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
+import { isVisionObscuredForPlayer } from '@/lib/gameTurn';
 import { useRouter } from 'next/navigation';
 import { getDatabase, ref, update, get, remove, onValue, serverTimestamp, runTransaction } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
@@ -532,6 +533,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         collisionWalls: null,
         itemState: null,
         revealedWallsByPlayer: null,
+        visionEffectsByPlayer: null,
         turnMessage: null,
         turnMessageTimestamp: null,
         restartedBy: userId,
@@ -1076,6 +1078,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         celebrating: !!runner.finished && !runner.forfeited,
         revealObstacles: !!runner.finished,
         pawnColor: pawnColors[index],
+        smokeAffected: isVisionObscuredForPlayer(gameState, runnerId),
+        visionObscured: false,
       }];
     });
 

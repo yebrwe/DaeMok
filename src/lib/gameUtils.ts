@@ -12,6 +12,7 @@ export const ITEM_COSTS: Record<ItemType, number> = {
   mine: 3,
   wormhole: 7, // 밸런스 상향 (5 -> 7): 사실상 무적급이라 최고 비용
   radar: 5, // 밸런스 상향 (3 -> 5)
+  smoke: 4,
 };
 
 export const ITEM_LABELS: Record<ItemType, string> = {
@@ -19,6 +20,7 @@ export const ITEM_LABELS: Record<ItemType, string> = {
   mine: '지뢰',
   wormhole: '웜홀',
   radar: '탐지기',
+  smoke: '연막 함정',
 };
 
 export function isTurnEligible(player: Player | null | undefined): boolean {
@@ -220,9 +222,15 @@ export function findShortestPath(
 
 // 게임맵이 유효한지 확인 (시작점에서 끝점까지 경로가 존재하는지)
 export function isValidMap(map: GameMap): boolean {
-  return !!findShortestPath(
+  const basePath = findShortestPath(
     map.startPosition,
     map.endPosition,
     map.obstacles
   );
+  if (!basePath) return false;
+
+  return getMapItems(map).every((item) => {
+    if (item.type !== 'wormhole') return true;
+    return !!item.exit && !!findShortestPath(item.exit, map.endPosition, map.obstacles);
+  });
 }

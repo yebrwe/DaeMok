@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useCallback } from 'react';
-import { CellType, CollisionWall, Direction, GamePhase, MapItem, Obstacle, Position } from '@/types/game';
+import { CellType, CollisionWall, Direction, GamePhase, ItemType, MapItem, Obstacle, Position } from '@/types/game';
 import { BOARD_SIZE, isSamePosition, isSameWallSegment } from '@/lib/gameUtils';
 
 interface GameBoardProps {
@@ -17,10 +17,13 @@ interface GameBoardProps {
   collisionWalls?: CollisionWall[];
   playerPhotoURL?: string;
   revealObstacles?: boolean; // 게임 종료 후 벽 공개
-  items?: MapItem[] | null; // 맵 아이템들 (1회성 벽/지뢰/웜홀)
+  revealItems?: boolean; // 맵 제작자 시점 또는 게임 종료 후 숨은 아이템 공개
+  distinguishOneTimeWalls?: boolean; // 제작자 시점에서 가짜벽을 일반 벽과 구분
+  items?: MapItem[] | null; // 맵 아이템들
   itemsConsumed?: Record<number, boolean> | null; // 인덱스별 사용 여부
   pendingCell?: Position | null; // 배치 중 임시 표시 (웜홀 입구)
   revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들 (일반 벽처럼 노란색으로 표시)
+  placeMode?: 'wall' | ItemType;
 }
 
 const GameBoard: React.FC<GameBoardProps> = ({
@@ -36,17 +39,20 @@ const GameBoard: React.FC<GameBoardProps> = ({
   collisionWalls = [],
   playerPhotoURL,
   revealObstacles = false,
+  revealItems = false,
+  distinguishOneTimeWalls = false,
   items = null,
   itemsConsumed = null,
   pendingCell = null,
   revealedWalls = [],
+  placeMode = 'wall',
 }) => {
   // 탐지기로 밝혀진 벽인지 (1회성 벽도 일반 벽으로 위장되어 포함됨)
   const isRadarRevealed = (position: Position, direction: Direction): boolean =>
     revealedWalls.some((w) => isSameWallSegment(position, direction, w.position, w.direction));
 
-  // 아이템 전체 공개 조건: 맵 제작 중 / 게임 종료 공개
-  const showItemsFully = gamePhase === GamePhase.SETUP || revealObstacles;
+  const showItemsFully = gamePhase === GamePhase.SETUP || revealItems;
+  const showFakeWallIdentity = gamePhase === GamePhase.SETUP || distinguishOneTimeWalls;
 
   const itemList = items || [];
 
@@ -74,13 +80,21 @@ const GameBoard: React.FC<GameBoardProps> = ({
     for (let idx = 0; idx < itemList.length; idx++) {
       const it = itemList[idx];
       const consumed = !!itemsConsumed?.[idx];
-      const visible = showItemsFully || consumed;
+      const visible = showItemsFully;
       if (!visible) continue;
 
       if (it.type === 'mine' && it.position && isSamePosition(position, it.position)) {
         return (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+          <div data-map-item="mine" className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
             <span className="text-lg">{consumed ? '💥' : '💣'}</span>
+          </div>
+        );
+      }
+
+      if (it.type === 'smoke' && it.position && isSamePosition(position, it.position)) {
+        return (
+          <div data-map-item="smoke" className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+            <span className={`text-lg ${consumed ? 'opacity-60' : ''}`}>{consumed ? '💨' : '🌫️'}</span>
           </div>
         );
       }
@@ -90,7 +104,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         const isExit = !!it.exit && isSamePosition(position, it.exit);
         if (isEntrance || isExit) {
           return (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+            <div data-map-item="wormhole" className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
               <div
                 className={`w-6 h-6 text-[10px] rounded-full flex items-center justify-center font-bold ${
                   isEntrance
@@ -168,6 +182,13 @@ const GameBoard: React.FC<GameBoardProps> = ({
     const cellType = getCellType(position);
     const isPlayer = playerPosition && isSamePosition(position, playerPosition);
     const isHovered = hoveredCell && isSamePosition(hoveredCell, position);
+    const isInteractive = !readOnly && !!onCellClick && (
+      gamePhase === GamePhase.PLAY ||
+      selectionMode !== 'none' ||
+      placeMode === 'mine' ||
+      placeMode === 'smoke' ||
+      placeMode === 'wormhole'
+    );
     
     const cellClasses = `
       relative w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14
@@ -179,6 +200,10 @@ const GameBoard: React.FC<GameBoardProps> = ({
     return (
       <div
         key={`cell-${position.row}-${position.col}`}
+        data-cell={`${position.row},${position.col}`}
+        role={isInteractive ? 'button' : undefined}
+        tabIndex={isInteractive ? 0 : undefined}
+        aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 선택` : undefined}
         className={cellClasses}
         onClick={() => {
           if (!readOnly && onCellClick) {
@@ -198,6 +223,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
         onMouseLeave={() => {
           if (isMouseDownRef.current) return; // 마우스 드래그 중에는 이벤트 무시
           setHoveredCellWithDebounce(null);
+        }}
+        onKeyDown={(event) => {
+          if (isInteractive && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            onCellClick(position);
+          }
         }}
       >
         {/* 시작점 마커 */}
@@ -303,14 +334,19 @@ const GameBoard: React.FC<GameBoardProps> = ({
       );
     }
     
+    const isInteractive = gamePhase === GamePhase.SETUP && !readOnly && !!onDirectionClick &&
+      selectionMode === 'none' && (placeMode === 'wall' || placeMode === 'oneTimeWall');
     const containerClasses = `w-full h-2 z-10 relative
-      ${gamePhase === GamePhase.SETUP && !readOnly ? 'cursor-pointer' : ''}
+      ${isInteractive ? 'cursor-pointer wall-hit-horizontal' : ''}
       transition-all duration-150 ease-in-out bg-transparent hover:bg-yellow-200`;
     
     return (
       <div
         key={`h-wall-${row}-${col}`}
         className={containerClasses}
+        role={isInteractive ? 'button' : undefined}
+        tabIndex={isInteractive ? 0 : undefined}
+        aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽` : undefined}
         onClick={(e) => {
           e.stopPropagation();
           if (gamePhase === GamePhase.SETUP && !readOnly && onDirectionClick) {
@@ -326,6 +362,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
         onMouseLeave={(e) => {
           e.stopPropagation();
           setHoveredWall(null);
+        }}
+        onKeyDown={(event) => {
+          if (isInteractive && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            onDirectionClick(position, direction);
+          }
         }}
       >
         {/* 설정 단계: 노란색으로 호버 효과 및 배치된 벽 표시 */}
@@ -360,16 +402,24 @@ const GameBoard: React.FC<GameBoardProps> = ({
           const itemWallIdx = findItemWallIndex(position, direction);
           if (itemWallIdx < 0 || !showItemsFully) return null;
           const consumed = !!itemsConsumed?.[itemWallIdx];
-          if (gamePhase === GamePhase.SETUP) {
+          if (showFakeWallIdentity) {
             return (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className={`w-3/4 h-1/2 ${consumed ? 'bg-slate-400/70' : 'bg-yellow-500'}`} />
+              <div
+                data-map-item="oneTimeWall"
+                title={`1회성 가짜벽 · ${consumed ? '소모됨' : '미사용'}`}
+                className={`absolute inset-0 flex items-center justify-center ${consumed ? 'opacity-35' : ''}`}
+              >
+                <div className="flex h-1/2 w-3/4 justify-between">
+                  <span className="h-full w-[28%] bg-cyan-400 ring-1 ring-cyan-100" />
+                  <span className="h-full w-[28%] bg-cyan-400 ring-1 ring-cyan-100" />
+                  <span className="h-full w-[28%] bg-cyan-400 ring-1 ring-cyan-100" />
+                </div>
               </div>
             );
           }
           if (consumed) return null;
           return (
-            <div className="absolute inset-0 flex items-center justify-center">
+            <div data-map-item="oneTimeWall" className="absolute inset-0 flex items-center justify-center">
               <div className="w-3/4 h-1/2 bg-amber-400" />
             </div>
           );
@@ -427,14 +477,19 @@ const GameBoard: React.FC<GameBoardProps> = ({
       );
     }
     
+    const isInteractive = gamePhase === GamePhase.SETUP && !readOnly && !!onDirectionClick &&
+      selectionMode === 'none' && (placeMode === 'wall' || placeMode === 'oneTimeWall');
     const containerClasses = `h-full w-2 z-10 relative 
-      ${gamePhase === GamePhase.SETUP && !readOnly ? 'cursor-pointer' : ''}
+      ${isInteractive ? 'cursor-pointer wall-hit-vertical' : ''}
       transition-all duration-150 ease-in-out bg-transparent hover:bg-yellow-200`;
     
     return (
       <div
         key={`v-wall-${row}-${col}`}
         className={containerClasses}
+        role={isInteractive ? 'button' : undefined}
+        tabIndex={isInteractive ? 0 : undefined}
+        aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽` : undefined}
         onClick={(e) => {
           e.stopPropagation();
           if (gamePhase === GamePhase.SETUP && !readOnly && onDirectionClick) {
@@ -450,6 +505,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
         onMouseLeave={(e) => {
           e.stopPropagation();
           setHoveredWall(null);
+        }}
+        onKeyDown={(event) => {
+          if (isInteractive && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            onDirectionClick(position, direction);
+          }
         }}
       >
         {/* 설정 단계: 노란색으로 호버 효과 및 배치된 벽 표시 */}
@@ -484,16 +545,24 @@ const GameBoard: React.FC<GameBoardProps> = ({
           const itemWallIdx = findItemWallIndex(position, direction);
           if (itemWallIdx < 0 || !showItemsFully) return null;
           const consumed = !!itemsConsumed?.[itemWallIdx];
-          if (gamePhase === GamePhase.SETUP) {
+          if (showFakeWallIdentity) {
             return (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className={`w-1/2 h-3/4 ${consumed ? 'bg-slate-400/70' : 'bg-yellow-500'}`} />
+              <div
+                data-map-item="oneTimeWall"
+                title={`1회성 가짜벽 · ${consumed ? '소모됨' : '미사용'}`}
+                className={`absolute inset-0 flex items-center justify-center ${consumed ? 'opacity-35' : ''}`}
+              >
+                <div className="flex h-3/4 w-1/2 flex-col justify-between">
+                  <span className="h-[28%] w-full bg-cyan-400 ring-1 ring-cyan-100" />
+                  <span className="h-[28%] w-full bg-cyan-400 ring-1 ring-cyan-100" />
+                  <span className="h-[28%] w-full bg-cyan-400 ring-1 ring-cyan-100" />
+                </div>
               </div>
             );
           }
           if (consumed) return null;
           return (
-            <div className="absolute inset-0 flex items-center justify-center">
+            <div data-map-item="oneTimeWall" className="absolute inset-0 flex items-center justify-center">
               <div className="w-1/2 h-3/4 bg-amber-400" />
             </div>
           );

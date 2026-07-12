@@ -134,7 +134,8 @@ async function expectWaitingInputIgnored(page, key, expectedTurns) {
 
 // 구글 로그인 - 에뮬레이터의 가짜 계정 팝업을 자동 조작
 async function signInWithFakeGoogle(page, acc) {
-  await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: /Google 계정으로 시작하기/ }).waitFor({ timeout: 15000 });
 
   const [popup] = await Promise.all([
     page.waitForEvent('popup'),
@@ -172,13 +173,28 @@ async function signInWithFakeGoogle(page, acc) {
 }
 
 // 맵 제작 (2D 고정 보드): 시작(0,0), 도착(0,2), 벽 없음 (최단 2턴)
-async function setupMap(page) {
+async function setupMap(page, { smoke = false, ownerSecrets = false } = {}) {
   await expectText(page, '시작점을 선택하세요');
   const items = page.locator('div.grid').first().locator(':scope > *');
   await items.nth(0).click();
   await expectText(page, '도착점을 선택하세요');
   await items.nth(4).click();
   await expectText(page, '벽(장애물)을 배치하세요');
+  if (ownerSecrets) {
+    await page.getByRole('button', { name: '4행 1열 right 벽' }).click();
+    await page.getByRole('button', { name: /1회성 벽/ }).click();
+    await page.getByRole('button', { name: '3행 1열 right 벽' }).click();
+    await page.getByRole('button', { name: /지뢰/ }).click();
+    await page.locator('[data-cell="2,2"]').click();
+    await page.getByRole('button', { name: /웜홀/ }).click();
+    await page.locator('[data-cell="3,3"]').click();
+    await page.locator('[data-cell="4,4"]').click();
+  }
+  if (smoke) {
+    await page.getByRole('button', { name: /연막 함정/ }).click();
+    await page.locator('[data-cell="0,1"]').click();
+    await expectText(page, '연막 함정 배치됨');
+  }
   await page.getByRole('button', { name: '완료' }).click();
 }
 
@@ -228,7 +244,7 @@ async function setupMap(page) {
     await pageB.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
 
     step('5: B 맵 제작 완료 -> B는 방장 대기, A(방장)가 게임 시작');
-    await setupMap(pageB);
+    await setupMap(pageB, { smoke: true, ownerSecrets: true });
     await expectText(pageB, '방장이 시작하면 게임이 시작됩니다');
     await expectText(pageA, '모두 준비되었습니다');
     await pageA.getByRole('button', { name: '게임 시작' }).click();
@@ -248,6 +264,31 @@ async function setupMap(page) {
     await expectText(pageB, `${ACCOUNTS.a.name} 턴`);
     ok('3인칭 기본 + 동시 보드 + 턴 HUD 확인');
 
+    step('6-1: 2D 제작자 시점만 숨은 아이템 공개 + 가짜벽 구분');
+    await pageA.getByRole('button', { name: '2D', exact: true }).click();
+    await pageB.getByRole('button', { name: '2D', exact: true }).click();
+    const ownerBoard = pageB.locator('[data-player-board][data-map-owner-preview="true"]');
+    await ownerBoard.waitFor({ timeout: 10000 });
+    for (const itemType of ['oneTimeWall', 'mine', 'wormhole', 'smoke']) {
+      if (await ownerBoard.locator(`[data-map-item="${itemType}"]`).count() === 0) {
+        throw new Error(`온라인 제작자 시점에서 ${itemType}이 보이지 않음`);
+      }
+    }
+    if (await ownerBoard.locator('[data-map-item="oneTimeWall"] .bg-cyan-400').count() < 3) {
+      throw new Error('온라인 제작자 시점 가짜벽이 일반벽과 구분되지 않음');
+    }
+    if (await ownerBoard.locator('.bg-amber-400').count() === 0) {
+      throw new Error('온라인 제작자 시점에서 일반벽이 보이지 않음');
+    }
+    if (await pageA.locator('[data-player-board][data-my-player="true"] [data-map-item]').count() !== 0) {
+      throw new Error('온라인 주자 화면에 상대 비밀 아이템 DOM이 노출됨');
+    }
+    await pageA.screenshot({ path: `${OUT}/mp-runner-secrets-hidden-2d.png` });
+    await pageB.screenshot({ path: `${OUT}/mp-owner-secrets-2d.png` });
+    await pageA.getByRole('button', { name: '3인칭', exact: true }).click();
+    await pageB.getByRole('button', { name: '3인칭', exact: true }).click();
+    ok('온라인 제작자만 전체 함정 공개, 주자에게는 비공개');
+
     step('7: [1게임] B의 대기 입력 무효 -> A/B 한 행동씩 교대');
     await expectWaitingInputIgnored(pageB, 'ArrowRight', 0);
     await pageA.keyboard.press('ArrowRight');
@@ -257,11 +298,27 @@ async function setupMap(page) {
     await pageB.keyboard.press('ArrowDown');
     await expectMyBoardTurns(pageB, 1);
     await expectText(pageA, '내 턴');
+    await pageA.locator('[data-my-player="true"][data-vision-effect="smoke"][data-vision-obscured="true"]')
+      .waitFor({ timeout: 10000 });
+    await pageA.locator('[data-testid=board-obscure-overlay]').waitFor({ timeout: 10000 });
+    if (await pageA.getByRole('button', { name: '오른쪽으로 이동' }).first().isDisabled()) {
+      throw new Error('온라인 연막 상태에서 대상의 방향 조작이 비활성화됨');
+    }
+    if (await pageB.locator('[data-vision-obscured="true"]').count() > 0) {
+      throw new Error('연막을 설치한 상대 화면까지 완전히 가려짐');
+    }
+    if (await pageB.locator('[data-vision-effect="smoke"]').count() !== 1) {
+      throw new Error('상대 화면에 연막 피격 상태가 표시되지 않음');
+    }
+    ok('Firebase 연막 상태 동기화 + 피격자 자신의 다음 차례만 시야 차단');
 
     step('8: A가 두 번째 행동으로 선완주 -> B로 턴 이동');
     await pageA.keyboard.press('ArrowRight');
     await expectText(pageA, '턴으로 완주했습니다');
     await expectMyBoardTurns(pageA, 2);
+    if (await pageA.locator('[data-vision-obscured="true"]').count() > 0) {
+      throw new Error('온라인 유효 행동 후 연막이 해제되지 않음');
+    }
     await expectText(pageB, '내 턴');
     ok('A 2턴 완주 후 완주자를 건너뛰고 B 턴 유지');
 
@@ -364,6 +421,12 @@ async function setupMap(page) {
     await expectPlayerBoardCount(pageA, 3);
     await expectPlayerBoardCount(pageB, 3);
     await expectPlayerBoardCount(pageC, 3);
+    for (const [label, participantPage] of [['A', pageA], ['B', pageB], ['C', pageC]]) {
+      const ownerPreviewCount = await participantPage.locator('[data-map-owner-preview="true"]').count();
+      if (ownerPreviewCount !== 1) {
+        throw new Error(`3인전 ${label}의 제작자 시점 보드 수 오류: ${ownerPreviewCount}`);
+      }
+    }
     await expectNoLegacyMinimap(pageA);
     await expectNoLegacyMinimap(pageB);
     await expectNoLegacyMinimap(pageC);
@@ -436,6 +499,9 @@ async function setupMap(page) {
     await pageA.getByRole('button', { name: '게임 시작' }).click();
     await expectMyBoardTurns(pageA, 0);
     await expectPlayerBoardCount(pageA, 4);
+    if (await pageA.locator('[data-map-owner-preview="true"]').count() !== 1) {
+      throw new Error('4인전 제작자 시점 보드가 정확히 하나가 아님');
+    }
     await expectPlayerBoardCount(pageD, 4);
     const canvasCount = await pageA.locator('[data-player-board] canvas').count();
     if (canvasCount !== 4) throw new Error(`4인 3D 캔버스 수 불일치: ${canvasCount}`);

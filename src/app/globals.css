@@ -31,6 +31,21 @@ body {
   touch-action: none; /* 브라우저 기본 터치 동작 비활성화 */
 }
 
+.wall-hit-horizontal::before,
+.wall-hit-vertical::before {
+  content: '';
+  position: absolute;
+  touch-action: manipulation;
+}
+
+.wall-hit-horizontal::before {
+  inset: -8px 0;
+}
+
+.wall-hit-vertical::before {
+  inset: 0 -8px;
+}
+
 @layer components {
   /* 게임 패널 (공통 카드) */
   .game-panel {

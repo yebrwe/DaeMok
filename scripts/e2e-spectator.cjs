@@ -106,7 +106,8 @@ async function expectWaitingInputIgnored(page, key, expectedTurns) {
 }
 
 async function signInWithFakeGoogle(page, acc) {
-  await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: /Google 계정으로 시작하기/ }).waitFor({ timeout: 15000 });
 
   const [popup] = await Promise.all([
     page.waitForEvent('popup'),
@@ -208,6 +209,9 @@ async function setupMap(page) {
     await expectText(pageC, '관전 모드');
     await expectText(pageC, '관전 중');
     await expectPlayerBoardCount(pageC, 2);
+    if (await pageC.locator('[data-map-owner-preview="true"]').count() !== 0) {
+      throw new Error('관전자에게 맵 제작자 시점 권한이 노출됨');
+    }
     await expectNoLegacyMinimap(pageC);
     await expectNamedBoardTurns(pageC, ACCOUNTS.a.name, 0);
     await expectNamedBoardTurns(pageC, ACCOUNTS.b.name, 0);
