@@ -562,17 +562,27 @@ const GamePlay: React.FC<GamePlayProps> = ({
         myPlayerId={userId}
         viewMode={effectiveViewMode}
         gameEnded={gameEnded}
-        className={`absolute inset-0 px-2 pt-[112px] ${isFinished ? 'pb-2' : 'pb-[66px]'}`}
+        className={`absolute inset-0 px-2 pt-[112px] ${
+          isFinished ? 'pb-2' : 'pb-[calc(206px+env(safe-area-inset-bottom))] sm:pb-[66px]'
+        }`}
         emptyState={<span className="text-sm text-slate-400">보드 동기화 중</span>}
-        renderOverlay={(board) => board.runnerId === userId && !isFinished ? (
+      />
+
+      {!isFinished && (
+        <div
+          className="absolute inset-x-0 z-30 flex h-[148px] items-center justify-center border-t border-slate-800 bg-slate-950/95 sm:hidden"
+          style={{ bottom: 'calc(58px + env(safe-area-inset-bottom))' }}
+          data-testid="online-mobile-direction-dock"
+        >
           <MobileDirectionPad
             disabled={!isMyTurn}
             active={isMyTurn}
+            placement="dock"
             onMove={handleMove}
             testId="online-mobile-direction-pad"
           />
-        ) : null}
-      />
+        </div>
+      )}
 
       {!isFinished && renderControls()}
 

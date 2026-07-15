@@ -644,6 +644,7 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
       const selectors = [
         '[data-testid="online-hud"]',
         '[data-testid="online-controls"]',
+        '[data-testid="online-mobile-direction-dock"]',
         '[data-testid="online-mobile-direction-pad"]',
       ];
       const containers = selectors.map((selector) => {
@@ -663,18 +664,24 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
         return { width: rect.width, height: rect.height };
       }).filter((size) => size.width > 0 && size.height > 0);
       const pad = document.querySelector('[data-testid="online-mobile-direction-pad"]');
+      const dock = document.querySelector('[data-testid="online-mobile-direction-dock"]');
       const ownBoard = document.querySelector('[data-player-board][data-my-player="true"]');
-      const dpad = pad && ownBoard ? (() => {
+      const dpad = pad && dock && ownBoard ? (() => {
         const padRect = pad.getBoundingClientRect();
+        const dockRect = dock.getBoundingClientRect();
         const boardRect = ownBoard.getBoundingClientRect();
         const buttons = Object.fromEntries(Array.from(pad.querySelectorAll('button')).map((button) => [
           button.getAttribute('aria-label'),
           button.getBoundingClientRect().toJSON(),
         ]));
         return {
-          inside:
-            padRect.left >= boardRect.left - 1 && padRect.right <= boardRect.right + 1 &&
-            padRect.top >= boardRect.top - 1 && padRect.bottom <= boardRect.bottom + 1,
+          insideDock:
+            padRect.left >= dockRect.left - 1 && padRect.right <= dockRect.right + 1 &&
+            padRect.top >= dockRect.top - 1 && padRect.bottom <= dockRect.bottom + 1,
+          belowBoard: padRect.top >= boardRect.bottom - 1,
+          overlapsBoard:
+            Math.min(padRect.right, boardRect.right) - Math.max(padRect.left, boardRect.left) > 1 &&
+            Math.min(padRect.bottom, boardRect.bottom) - Math.max(padRect.top, boardRect.top) > 1,
           buttons,
         };
       })() : null;
@@ -705,12 +712,14 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     }
     const dpadButtons = mobileLayout.dpad?.buttons || {};
     if (
-      !mobileLayout.dpad?.inside ||
+      !mobileLayout.dpad?.insideDock ||
+      !mobileLayout.dpad?.belowBoard ||
+      mobileLayout.dpad?.overlapsBoard ||
       !(dpadButtons['위로 이동']?.y < dpadButtons['왼쪽으로 이동']?.y) ||
       !(dpadButtons['아래로 이동']?.y > dpadButtons['오른쪽으로 이동']?.y) ||
       !(dpadButtons['왼쪽으로 이동']?.x < dpadButtons['오른쪽으로 이동']?.x)
     ) {
-      throw new Error(`Galaxy S21 in-board D-pad layout invalid: ${JSON.stringify(mobileLayout.dpad)}`);
+      throw new Error(`Galaxy S21 below-board D-pad layout invalid: ${JSON.stringify(mobileLayout.dpad)}`);
     }
     await pageA.screenshot({ path: `${OUT}/mp-4p-galaxy-s21.png` });
     ok('4인 2x2 동시 보드 및 데스크톱/Galaxy S21 렌더링');

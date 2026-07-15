@@ -7,6 +7,7 @@ import { Direction } from '@/types/game';
 interface MobileDirectionPadProps {
   disabled?: boolean;
   active?: boolean;
+  placement?: 'overlay' | 'dock';
   onMove: (direction: Direction) => void;
   testId?: string;
 }
@@ -26,11 +27,14 @@ const BUTTONS: Array<{
 const MobileDirectionPad: React.FC<MobileDirectionPadProps> = ({
   disabled = false,
   active = false,
+  placement = 'overlay',
   onMove,
   testId = 'mobile-direction-pad',
 }) => (
   <div
-    className="pointer-events-auto absolute bottom-2 left-1/2 z-30 grid h-[140px] w-[140px] -translate-x-1/2 grid-cols-3 grid-rows-3 gap-1 sm:hidden"
+    className={`pointer-events-auto z-30 grid h-[140px] w-[140px] grid-cols-3 grid-rows-3 gap-1 sm:hidden ${
+      placement === 'dock' ? 'relative' : 'absolute bottom-2 left-1/2 -translate-x-1/2'
+    }`}
     role="group"
     aria-label="이동 방향"
     data-testid={testId}
