@@ -80,13 +80,27 @@
 
 @media (max-width: 700px) {
   .shell {
-    min-height: min(68svh, 620px);
+    height: var(--adventure-mobile-town-height, min(68svh, 620px));
+    min-height: var(--adventure-mobile-town-height, min(68svh, 620px));
   }
 
   .hint {
-    right: 10px;
-    bottom: max(10px, env(safe-area-inset-bottom));
-    font-size: 11px;
+    display: none;
+  }
+
+  .serviceLabel {
+    min-width: 0;
+    padding: 3px 6px;
+    border: 0;
+    background: rgb(10 11 9 / 72%);
+    font-size: 10px;
+    font-weight: 800;
+    text-shadow: 0 1px 2px #000;
+    white-space: nowrap;
+  }
+
+  .serviceLabel span {
+    display: none;
   }
 
   .directionPad {

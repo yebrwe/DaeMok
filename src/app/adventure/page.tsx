@@ -222,6 +222,7 @@ export default function AdventurePage() {
   const [characterName, setCharacterName] = useState('');
   const [runeTargetId, setRuneTargetId] = useState<string | null>(null);
   const [editingSkillSlot, setEditingSkillSlot] = useState<number | null>(null);
+  const [battlefieldSkillsOpen, setBattlefieldSkillsOpen] = useState(false);
   const [selectedTownService, setSelectedTownService] = useState<TownServiceId | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [rankings, setRankings] = useState<AdventureRankingEntry[]>([]);
@@ -507,6 +508,8 @@ export default function AdventurePage() {
       showNotice('모험가 이름을 입력해 주세요.');
       return;
     }
+    setActiveTab('hunt');
+    setBattlefieldSkillsOpen(false);
     setGame(withAdventureTownState({
       ...createInitialState(selectedClass, trimmed),
       resetGeneration: resetGenerationRef.current,
@@ -523,6 +526,8 @@ export default function AdventurePage() {
       resetOperationRef.current === resetOperation
       && currentUserUidRef.current === resetUid
     );
+    setActiveTab('hunt');
+    setBattlefieldSkillsOpen(false);
     setSelectedTownService(null);
     saveEpochRef.current += 1;
     pendingSaveRef.current = null;
@@ -671,7 +676,10 @@ export default function AdventurePage() {
     ));
     const activeCount = game.skillLoadout.filter(Boolean).length;
     return (
-      <section className={styles.skillLoadout} aria-label="전투 기술 슬롯">
+      <section
+        className={`${styles.skillLoadout} ${battlefieldSkillsOpen ? styles.skillLoadoutMobileOpen : ''}`}
+        aria-label="전투 기술 슬롯"
+      >
         <header className={styles.skillLoadoutHeader}>
           <span><Zap size={13} /> 전투 기술</span>
           <small>{activeCount}/6</small>
@@ -810,8 +818,8 @@ export default function AdventurePage() {
             <div className={styles.townStatus}>
               <span>생명력 <strong>{formatNumber(game.hp)}/{formatNumber(derived.maxHp)}</strong></span>
               <span>골드 <strong>{formatNumber(game.gold)}G</strong></span>
-              <button type="button" className={styles.returnTownButton} onClick={() => setSelectedTownService('waypoint')}>
-                <DoorOpen size={15} /> 성문
+              <button type="button" className={styles.returnTownButton} aria-label="성문" onClick={() => setSelectedTownService('waypoint')}>
+                <DoorOpen size={15} /> <span>성문</span>
               </button>
             </div>
           </header>
@@ -862,14 +870,28 @@ export default function AdventurePage() {
             <span>우두머리 추적 <strong>{bossProgress.current}/{bossProgress.required}</strong></span>
             <button
               type="button"
+              className={styles.skillMenuButton}
+              aria-label="전투 기술 설정"
+              aria-expanded={battlefieldSkillsOpen}
+              onClick={() => setBattlefieldSkillsOpen((open) => !open)}
+            >
+              <Zap size={16} />
+              <span>기술 설정</span>
+            </button>
+            <button
+              type="button"
               className={styles.returnTownButton}
+              aria-label="마을 귀환"
               onClick={() => {
                 const result = returnToTown(game);
                 applyResult(result);
-                if (result.ok) setSelectedTownService(null);
+                if (result.ok) {
+                  setSelectedTownService(null);
+                  setBattlefieldSkillsOpen(false);
+                }
               }}
             >
-              <DoorOpen size={15} /> 마을 귀환
+              <DoorOpen size={15} /> <span>마을 귀환</span>
             </button>
           </div>
         </header>
@@ -1122,6 +1144,7 @@ export default function AdventurePage() {
     <main
       className={styles.page}
       data-battlefield={activeTab === 'hunt' && game.town.location === 'wilderness' ? 'true' : undefined}
+      data-town={activeTab === 'hunt' && game.town.location === 'town' ? 'true' : undefined}
     >
       <header className={styles.topbar}>
         <div className={styles.topbarInner}>

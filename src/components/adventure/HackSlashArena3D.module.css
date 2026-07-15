@@ -30,6 +30,10 @@
   width: 88px;
 }
 
+.enemyPlateBoss {
+  width: 96px;
+}
+
 .enemyName {
   overflow: hidden;
   color: #e7e0d0;
@@ -80,16 +84,27 @@
 
 @media (max-width: 480px) {
   .enemyPlate {
-    width: 64px;
+    width: 50px;
+    gap: 0;
   }
 
-  .enemyPlateElite {
-    width: 72px;
+  .enemyPlateElite,
+  .enemyPlateBoss {
+    width: 64px;
+    gap: 2px;
+  }
+
+  .enemyPlate:not(.enemyPlateElite):not(.enemyPlateBoss) .enemyName {
+    display: none;
   }
 
   .enemyName {
     font-size: 7px;
     line-height: 9px;
+  }
+
+  .enemyHealthTrack {
+    height: 4px;
   }
 }
 

@@ -528,7 +528,7 @@ async function holdMovement(page, keys, label) {
     const after = await captureArenaCanvasFrame(page);
     const difference = compareCanvasFrames(before, after);
     assert.ok(
-      difference.changedPixelRatio >= 0.025 || difference.meanChannelDelta >= 1.5,
+      difference.changedPixelRatio >= 0.02 || difference.meanChannelDelta >= 0.7,
       `${label}: 이동 입력 뒤 3D 화면 변화가 부족합니다. ${JSON.stringify(difference)}`,
     );
     return difference;
@@ -606,10 +606,10 @@ async function waitForEnemyTarget(page, stage, timeoutMs = 8_000) {
   while (Date.now() < deadline) {
     await ensureArenaAlive(page);
     const state = await readEnemyCombatState(stage);
-    if (state.listedEnemyCount > 0 && state.healthBarCount > 0) return state;
+    if (state.listedEnemyCount > 0) return state;
     await delay(80);
   }
-  throw new Error('3D 전장에서 공격할 적과 체력 바가 제한 시간 안에 나타나지 않았습니다.');
+  throw new Error('3D 전장에서 공격할 적이 제한 시간 안에 나타나지 않았습니다.');
 }
 
 async function observeActionOutcome(page, stage, beforeFrame, beforeCombat, label, timeoutMs = 4_500) {
@@ -830,6 +830,10 @@ async function waitForKillPersistence(page, stage, session, killsBefore) {
     observePage(secondPage);
     await secondPage.goto(`${BASE_URL}/adventure`, { waitUntil: 'domcontentloaded' });
     await waitForTownCharacter(secondPage, CHARACTER_NAME);
+    await Promise.all([
+      page.getByRole('button', { name: '장비 열기' }).click(),
+      secondPage.getByRole('button', { name: '장비 열기' }).click(),
+    ]);
     const resetButtons = await Promise.all([
       page.getByRole('button', { name: '캐릭터 초기화' }).elementHandle(),
       secondPage.getByRole('button', { name: '캐릭터 초기화' }).elementHandle(),
@@ -854,6 +858,7 @@ async function waitForKillPersistence(page, stage, session, killsBefore) {
     ok('두 탭 초기화 충돌 뒤 최신 세대 캐릭터 저장과 복구');
 
     console.log('STEP 7: Firebase 초기화와 재접속 삭제 유지');
+    await page.getByRole('button', { name: '장비 열기' }).click();
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: '캐릭터 초기화' }).click();
     await page.getByRole('heading', { name: '오래 키울 첫 캐릭터를 선택하세요' }).waitFor({ timeout: 20_000 });

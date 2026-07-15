@@ -431,9 +431,16 @@ function ArenaCamera({
     camera.lookAt(smoothedTarget.current);
 
     const portrait = size.width / Math.max(1, size.height) < 0.9;
-    const visibleWidth = portrait ? 11.2 : 16.2;
-    const visibleHeight = portrait ? 11.8 : 10.7;
-    const nextZoom = Math.max(20, Math.min(size.width / visibleWidth, size.height / visibleHeight));
+    const mobile = size.width <= 700;
+    // Phone controls and HUD occupy more of the stage, so retain additional
+    // world context around the player instead of using the desktop framing.
+    const visibleWidth = mobile ? (portrait ? 16.5 : 20) : (portrait ? 11.2 : 16.2);
+    const visibleHeight = mobile ? (portrait ? 18 : 13) : (portrait ? 11.8 : 10.7);
+    const minimumZoom = mobile ? 16 : 20;
+    const nextZoom = Math.max(
+      minimumZoom,
+      Math.min(size.width / visibleWidth, size.height / visibleHeight),
+    );
     if (Math.abs(camera.zoom - nextZoom) > 0.01) {
       camera.zoom = nextZoom;
       camera.updateProjectionMatrix();
@@ -3031,10 +3038,16 @@ function BlobShadow({ radius }: { radius: number }) {
 }
 
 function EnemyHealthBar({ enemy, height }: { enemy: Arena3DEnemy; height: number }) {
+  const { size } = useThree();
   const ratio = enemy.maxHp > 0 ? clamp(enemy.hp / enemy.maxHp, 0, 1) : 0;
+  const mobile = size.width <= 480;
+  const emphasized = enemy.elite || enemy.boss;
+  const damaged = ratio < 0.995;
+  const attacking = enemy.pendingAttackAt != null;
+  if (mobile && !emphasized && !damaged && !attacking) return null;
   return (
     <Html center position={[0, height, 0]} zIndexRange={[20, 0]}>
-      <div className={`${styles.enemyPlate} ${enemy.elite ? styles.enemyPlateElite : ''}`}>
+      <div className={`${styles.enemyPlate} ${enemy.elite ? styles.enemyPlateElite : ''} ${enemy.boss ? styles.enemyPlateBoss : ''}`}>
         <span className={styles.enemyName}>{enemy.name}</span>
         <span className={styles.enemyHealthTrack}>
           <span className={styles.enemyHealthFill} style={{ width: `${ratio * 100}%` }} />

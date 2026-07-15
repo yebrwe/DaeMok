@@ -3,7 +3,7 @@
 import { Html } from '@react-three/drei';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp } from 'lucide-react';
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import type { CharacterClassId } from '@/lib/adventure';
 import {
@@ -507,12 +507,37 @@ function TownHero({
   );
 }
 
+function TownServiceBeacon({ color, height }: { color: string; height: number }) {
+  const root = useRef<THREE.Group | null>(null);
+  useFrame(({ clock }) => {
+    if (!root.current) return;
+    root.current.rotation.y = clock.elapsedTime * 1.1;
+    root.current.position.y = height + Math.sin(clock.elapsedTime * 2.2) * 0.08;
+  });
+  return (
+    <group ref={root} position={[0, height, 0]}>
+      <mesh castShadow rotation={[0, 0, Math.PI / 4]}>
+        <octahedronGeometry args={[0.2, 0]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.15} roughness={0.34} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.28, 0]}>
+        <ringGeometry args={[0.2, 0.25, 18]} />
+        <meshBasicMaterial color={color} transparent opacity={0.68} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
 function TownNpc({
   placement,
   onApproach,
+  compact,
+  showLabel,
 }: {
   placement: ServicePlacement;
   onApproach: (placement: ServicePlacement) => void;
+  compact: boolean;
+  showLabel: boolean;
 }) {
   const root = useRef<THREE.Group | null>(null);
   const leftLeg = useRef<THREE.Group | null>(null);
@@ -563,7 +588,8 @@ function TownNpc({
           </mesh>
           <mesh position={[0, 0.515, 0.435]}><circleGeometry args={[0.025, 8]} /><meshStandardMaterial color="#171713" roughness={0.72} /></mesh>
         </group>
-        <Html center position={[0, 2.85, 0]}><div className={styles.serviceLabel}>{definition.name}<span>{definition.role}</span></div></Html>
+        {compact && <TownServiceBeacon color={placement.color} height={2.7} />}
+        {showLabel && <Html center position={[0, 2.85, 0]}><div className={styles.serviceLabel}>{definition.name}<span>{definition.role}</span></div></Html>}
       </group>
     );
   }
@@ -586,7 +612,8 @@ function TownNpc({
           <planeGeometry args={[1.85, 2.45]} />
           <meshBasicMaterial color="#caa554" transparent opacity={0.15} side={THREE.DoubleSide} />
         </mesh>
-        <Html center position={[0, 3.75, 0]}><div className={styles.serviceLabel}>{definition.name}<span>{definition.role}</span></div></Html>
+        {compact && <TownServiceBeacon color={placement.color} height={3.75} />}
+        {showLabel && <Html center position={[0, 3.75, 0]}><div className={styles.serviceLabel}>{definition.name}<span>{definition.role}</span></div></Html>}
       </group>
     );
   }
@@ -600,7 +627,8 @@ function TownNpc({
         leftLegRef={leftLeg}
         rightLegRef={rightLeg}
       />
-      <Html center position={[0, 2.85, 0]}><div className={styles.serviceLabel}>{definition.name}<span>{definition.role}</span></div></Html>
+      {compact && <TownServiceBeacon color={placement.color} height={2.7} />}
+      {showLabel && <Html center position={[0, 2.85, 0]}><div className={styles.serviceLabel}>{definition.name}<span>{definition.role}</span></div></Html>}
     </group>
   );
 }
@@ -657,12 +685,14 @@ function TownScene({
   heldDirections: MutableRefObject<Set<MoveDirection>>;
   onSelectService: (service: TownServiceId) => void;
 }) {
-  const { camera } = useThree();
+  const { camera, size } = useThree();
   const hero = useRef<THREE.Group | null>(null);
   const moving = useRef(false);
   const target = useRef(new THREE.Vector3(0, 0, 3.8));
   const cameraTarget = useRef(new THREE.Vector3());
   const pendingService = useRef<TownServiceId | null>(null);
+  const nearbyServiceRef = useRef<TownServiceId | null>(null);
+  const [nearbyService, setNearbyService] = useState<TownServiceId | null>(null);
   const callbackRef = useRef(onSelectService);
   callbackRef.current = onSelectService;
 
@@ -703,9 +733,41 @@ function TownScene({
       root.position.z = clamp(root.position.z + moveZ * step, -7.2, 7.4);
       root.rotation.y = Math.atan2(moveX, moveZ);
     }
+    let nextNearbyService: TownServiceId | null = null;
+    if (size.width <= 700) {
+      let nearestDistance = 4.8;
+      for (const placement of SERVICE_PLACEMENTS) {
+        const distance = Math.hypot(
+          placement.position[0] - root.position.x,
+          placement.position[2] - root.position.z,
+        );
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nextNearbyService = placement.id;
+        }
+      }
+    }
+    if (nearbyServiceRef.current !== nextNearbyService) {
+      nearbyServiceRef.current = nextNearbyService;
+      setNearbyService(nextNearbyService);
+    }
     cameraTarget.current.set(root.position.x + 8.2, 10.5, root.position.z + 8.2);
     camera.position.lerp(cameraTarget.current, 1 - Math.exp(-delta * 5.8));
     camera.lookAt(root.position.x, 0.55, root.position.z);
+
+    if (camera instanceof THREE.OrthographicCamera) {
+      const mobile = size.width <= 700;
+      const portrait = size.width / Math.max(1, size.height) < 0.9;
+      const visibleWidth = portrait ? 16.5 : 20;
+      const visibleHeight = portrait ? 18 : 13;
+      const nextZoom = mobile
+        ? Math.max(16, Math.min(size.width / visibleWidth, size.height / visibleHeight))
+        : 48;
+      if (Math.abs(camera.zoom - nextZoom) > 0.01) {
+        camera.zoom = nextZoom;
+        camera.updateProjectionMatrix();
+      }
+    }
   });
 
   const walkToGround = (event: ThreeEvent<PointerEvent>) => {
@@ -717,6 +779,7 @@ function TownScene({
     target.current.set(...placement.approach);
     pendingService.current = placement.id;
   };
+  const compactServices = size.width <= 700;
 
   return (
     <>
@@ -734,7 +797,15 @@ function TownScene({
         <meshStandardMaterial color="#756448" roughness={0.98} />
       </mesh>
       <TownBuildings />
-      {SERVICE_PLACEMENTS.map((placement) => <TownNpc key={placement.id} placement={placement} onApproach={approachService} />)}
+      {SERVICE_PLACEMENTS.map((placement) => (
+        <TownNpc
+          key={placement.id}
+          placement={placement}
+          onApproach={approachService}
+          compact={compactServices}
+          showLabel={!compactServices || nearbyService === placement.id}
+        />
+      ))}
       <TownHero classId={classId} rootRef={hero} movingRef={moving} weaponEquipped={weaponEquipped} />
     </>
   );
