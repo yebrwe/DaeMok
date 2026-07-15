@@ -4,7 +4,7 @@
       ".read": "auth != null",
 
       "$roomId": {
-        ".write": "auth != null && ((!data.exists() && newData.child('createdBy').val() === auth.uid) || (data.exists() && !newData.exists() && ((data.child('createdBy').val() === auth.uid || !data.child('lastActivity').exists() || data.child('lastActivity').val() < now - 7200000) || (data.child('gameState').child('phase').val() === 'end' && data.child('gameState').child('players').child(auth.uid).exists() && root.child('userStatus').child(data.child('createdBy').val()).child('online').val() === false)) && (data.child('gameState').child('phase').val() !== 'end' || ((!data.child('gameState').child('turnOrder').child('0').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('0').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true) && (!data.child('gameState').child('turnOrder').child('1').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('1').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true) && (!data.child('gameState').child('turnOrder').child('2').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('2').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true) && (!data.child('gameState').child('turnOrder').child('3').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('3').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true)))))",
+        ".write": "auth != null && ((!data.exists() && newData.child('createdBy').val() === auth.uid) || (data.exists() && !newData.exists() && (data.child('createdBy').val() === auth.uid || !data.child('lastActivity').exists() || data.child('lastActivity').val() < now - 7200000 || (data.child('ownerPresenceReady').val() === true && data.child('ownerDisconnectedAt').isNumber() && data.child('ownerDisconnectedAt').val() <= now - 2500 && !data.child('connections').child(data.child('createdBy').val()).hasChildren())) && (data.child('gameState').child('phase').val() !== 'end' || ((!data.child('gameState').child('turnOrder').child('0').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('0').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true) && (!data.child('gameState').child('turnOrder').child('1').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('1').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true) && (!data.child('gameState').child('turnOrder').child('2').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('2').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true) && (!data.child('gameState').child('turnOrder').child('3').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('3').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true)))))",
         ".validate": "newData.hasChildren(['createdBy', 'rulesVersion', 'ruleSnapshot', 'gameState'])",
 
         "rulesVersion": {
@@ -73,6 +73,14 @@
         "maxPlayers": {
           ".validate": "newData.isNumber() && newData.val() >= 2 && newData.val() <= 4 && newData.val() % 1 === 0 && (!data.exists() || newData.val() === data.val())"
         },
+        "ownerPresenceReady": {
+          ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').val() === auth.uid",
+          ".validate": "newData.isBoolean() && newData.val() === true"
+        },
+        "ownerDisconnectedAt": {
+          ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').val() === auth.uid",
+          ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000"
+        },
 
         "lastActivity": {
           ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting' && (root.child('rooms').child($roomId).child('createdBy').val() === auth.uid || root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).exists())",
@@ -102,6 +110,18 @@
         "playerStatus": {
           "$uid": {
             ".write": "auth != null && $uid === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
+          }
+        },
+        "connections": {
+          "$uid": {
+            "$connectionId": {
+              ".write": "auth != null && $uid === auth.uid && ($connectionId === '0' || $connectionId === '1' || $connectionId === '2' || $connectionId === '3' || $connectionId === '4' || $connectionId === '5' || $connectionId === '6' || $connectionId === '7') && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting' && (root.child('rooms').child($roomId).child('createdBy').val() === auth.uid || root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).exists() || root.child('rooms').child($roomId).child('spectators').child(auth.uid).exists() || root.child('rooms').child($roomId).child('joinedPlayers').child(auth.uid).exists() || root.child('rooms').child($roomId).child('members').child(auth.uid).exists())",
+              ".validate": "newData.hasChildren(['connectedAt', 'lastSeen', 'session'])",
+              "connectedAt": { ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000" },
+              "lastSeen": { ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000" },
+              "session": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80" },
+              "$other": { ".validate": false }
+            }
           }
         },
         "spectators": {
@@ -191,16 +211,16 @@
                 ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val()"
               },
               "isOnline": {
-                ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'",
-                ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val()"
+                ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting' && ($playerId === auth.uid || (root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).exists() && !root.child('rooms').child($roomId).child('connections').child($playerId).hasChildren() && newData.val() === false))",
+                ".validate": "newData.isBoolean() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val() || (!root.child('rooms').child($roomId).child('connections').child($playerId).hasChildren() && newData.val() === false))"
               },
               "hasLeft": {
                 ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'",
                 ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val()"
               },
               "lastSeen": {
-                ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'",
-                ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val()"
+                ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting' && ($playerId === auth.uid || (root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).exists() && !root.child('rooms').child($roomId).child('connections').child($playerId).hasChildren()))",
+                ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000 && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val() || !root.child('rooms').child($roomId).child('connections').child($playerId).hasChildren())"
               }
             }
           }
@@ -251,9 +271,12 @@
         ".write": "auth != null && $uid === auth.uid && (!newData.parent().parent().child('adventureRankings').child($uid).exists() || newData.child('adventure').child('v1').exists())",
         "adventure": {
           "v1": {
-            ".validate": "newData.hasChildren(['version', 'name', 'classId', 'level', 'exp', 'mastery', 'gold', 'hp', 'baseStats', 'statPoints', 'skillPoints', 'skillRanks', 'potions', 'currentRegionId', 'killCounts', 'bossKills', 'statistics', 'createdAt', 'updatedAt', 'lastActiveAt', 'rankingPower', 'rankingCollectionCount']) && (!newData.parent().parent().parent().parent().child('adventureRankings').child($uid).exists() || (newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('uid').val() === $uid && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('classId').val() === newData.child('classId').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('level').val() === newData.child('level').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('masteryLevel').val() === newData.child('mastery').child('level').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('power').val() === newData.child('rankingPower').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('totalKills').val() === newData.child('statistics').child('totalKills').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('bossesKilled').val() === newData.child('statistics').child('bossesKilled').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('collectionCount').val() === newData.child('rankingCollectionCount').val()))",
+            ".validate": "newData.hasChildren(['version', 'resetGeneration', 'name', 'classId', 'level', 'exp', 'mastery', 'gold', 'hp', 'baseStats', 'statPoints', 'skillPoints', 'skillRanks', 'potions', 'currentRegionId', 'killCounts', 'bossKills', 'statistics', 'createdAt', 'updatedAt', 'lastActiveAt', 'rankingPower', 'rankingCollectionCount']) && (!data.child('arenaCheckpoint').exists() || newData.child('arenaCheckpoint').exists() || (newData.child('town').exists() && newData.child('town').child('location').val() === 'town')) && (!newData.child('arenaCheckpoint').exists() || (newData.child('town').exists() && newData.child('town').child('location').val() === 'wilderness')) && (!newData.parent().parent().parent().parent().child('adventureRankings').child($uid).exists() || (newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('uid').val() === $uid && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('resetGeneration').val() === newData.child('resetGeneration').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('classId').val() === newData.child('classId').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('level').val() === newData.child('level').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('masteryLevel').val() === newData.child('mastery').child('level').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('power').val() === newData.child('rankingPower').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('totalKills').val() === newData.child('statistics').child('totalKills').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('bossesKilled').val() === newData.child('statistics').child('bossesKilled').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('collectionCount').val() === newData.child('rankingCollectionCount').val()))",
             "version": {
               ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "resetGeneration": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0 && ((newData.parent().parent().parent().child('adventureGeneration').exists() && newData.val() === newData.parent().parent().parent().child('adventureGeneration').val()) || (!newData.parent().parent().parent().child('adventureGeneration').exists() && newData.val() === 0))"
             },
             "name": {
               ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 16"
@@ -305,15 +328,145 @@
               "skill2": {
                 ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
               },
+              "skill3": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
+              },
+              "skill4": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
+              },
+              "skill5": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
+              },
+              "skill6": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
+              },
               "$other": {
                 ".validate": false
+              }
+            },
+            "skillLoadout": {
+              ".validate": "newData.hasChildren()",
+              "$index": {
+                ".validate": "($index === '0' || $index === '1' || $index === '2' || $index === '3' || $index === '4' || $index === '5') && newData.isString() && (newData.val() === 'skill1' || newData.val() === 'skill2' || newData.val() === 'skill3' || newData.val() === 'skill4' || newData.val() === 'skill5' || newData.val() === 'skill6')"
+              }
+            },
+            "equipment": {
+              "$slot": {
+                ".validate": "($slot === 'weapon' || $slot === 'armor' || $slot === 'accessory') && newData.hasChildren(['instanceId', 'itemKey', 'definitionId', 'materialId', 'prefixId', 'suffixId', 'rarity', 'quality', 'level', 'enhance', 'stats', 'acquiredAt']) && ((!newData.child('tier').exists() && !newData.child('itemLevel').exists() && !newData.child('socketCount').exists() && !newData.child('socketedRunes').exists() && !newData.child('setId').exists() && !newData.child('uniqueId').exists()) || (newData.child('tier').exists() && newData.child('itemLevel').exists() && newData.child('socketCount').exists() && ((newData.child('tier').val() === 'set' && newData.child('setId').exists() && !newData.child('uniqueId').exists()) || (newData.child('tier').val() === 'unique' && newData.child('uniqueId').exists() && !newData.child('setId').exists()) || ((newData.child('tier').val() === 'normal' || newData.child('tier').val() === 'magic' || newData.child('tier').val() === 'rare') && !newData.child('setId').exists() && !newData.child('uniqueId').exists()))))",
+                "tier": {
+                  ".validate": "newData.isString() && ((newData.val() === 'normal' && newData.parent().child('rarity').val() === 'common') || (newData.val() === 'magic' && newData.parent().child('rarity').val() === 'uncommon') || (newData.val() === 'rare' && newData.parent().child('rarity').val() === 'rare') || (newData.val() === 'set' && newData.parent().child('rarity').val() === 'epic') || (newData.val() === 'unique' && newData.parent().child('rarity').val() === 'legendary'))"
+                },
+                "itemLevel": {
+                  ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 99 && newData.val() % 1 === 0 && newData.val() === newData.parent().child('level').val()"
+                },
+                "socketCount": {
+                  ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 4 && newData.val() % 1 === 0"
+                },
+                "socketedRunes": {
+                  ".validate": "newData.parent().child('socketCount').exists()",
+                  "$index": {
+                    ".validate": "(($index === '0' && newData.parent().parent().child('socketCount').val() >= 1) || ($index === '1' && newData.parent().parent().child('socketCount').val() >= 2) || ($index === '2' && newData.parent().parent().child('socketCount').val() >= 3) || ($index === '3' && newData.parent().parent().child('socketCount').val() >= 4)) && newData.isString() && (newData.val() === 'ember' || newData.val() === 'tide' || newData.val() === 'gale' || newData.val() === 'stone' || newData.val() === 'thorn' || newData.val() === 'dawn' || newData.val() === 'dusk' || newData.val() === 'blood' || newData.val() === 'ward' || newData.val() === 'echo' || newData.val() === 'void' || newData.val() === 'storm' || newData.val() === 'frost' || newData.val() === 'venom' || newData.val() === 'crown')"
+                  }
+                },
+                "setId": {
+                  ".validate": "newData.parent().child('tier').val() === 'set' && newData.isString() && (newData.val() === 'ironCovenant' || newData.val() === 'windstalker' || newData.val() === 'astralRite' || newData.val() === 'ashenPilgrim' || newData.val() === 'graveborn' || newData.val() === 'tempest')"
+                },
+                "uniqueId": {
+                  ".validate": "newData.parent().child('tier').val() === 'unique' && newData.isString() && (newData.val() === 'oathbreaker' || newData.val() === 'nightpiercer' || newData.val() === 'cinderOracle' || newData.val() === 'plagueEdge' || newData.val() === 'bloodforgedAegis' || newData.val() === 'frostboundCarapace' || newData.val() === 'stormhide' || newData.val() === 'graveward' || newData.val() === 'executionersHourglass' || newData.val() === 'seraphTear' || newData.val() === 'voidEye' || newData.val() === 'emberCrown')"
+                }
+              }
+            },
+            "inventory": {
+              "$index": {
+                ".validate": "$index.matches(/^([0-9]|[1-5][0-9])$/) && newData.hasChildren(['instanceId', 'itemKey', 'definitionId', 'materialId', 'prefixId', 'suffixId', 'rarity', 'quality', 'level', 'enhance', 'stats', 'acquiredAt']) && ((!newData.child('tier').exists() && !newData.child('itemLevel').exists() && !newData.child('socketCount').exists() && !newData.child('socketedRunes').exists() && !newData.child('setId').exists() && !newData.child('uniqueId').exists()) || (newData.child('tier').exists() && newData.child('itemLevel').exists() && newData.child('socketCount').exists() && ((newData.child('tier').val() === 'set' && newData.child('setId').exists() && !newData.child('uniqueId').exists()) || (newData.child('tier').val() === 'unique' && newData.child('uniqueId').exists() && !newData.child('setId').exists()) || ((newData.child('tier').val() === 'normal' || newData.child('tier').val() === 'magic' || newData.child('tier').val() === 'rare') && !newData.child('setId').exists() && !newData.child('uniqueId').exists()))))",
+                "tier": {
+                  ".validate": "newData.isString() && ((newData.val() === 'normal' && newData.parent().child('rarity').val() === 'common') || (newData.val() === 'magic' && newData.parent().child('rarity').val() === 'uncommon') || (newData.val() === 'rare' && newData.parent().child('rarity').val() === 'rare') || (newData.val() === 'set' && newData.parent().child('rarity').val() === 'epic') || (newData.val() === 'unique' && newData.parent().child('rarity').val() === 'legendary'))"
+                },
+                "itemLevel": {
+                  ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 99 && newData.val() % 1 === 0 && newData.val() === newData.parent().child('level').val()"
+                },
+                "socketCount": {
+                  ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 4 && newData.val() % 1 === 0"
+                },
+                "socketedRunes": {
+                  ".validate": "newData.parent().child('socketCount').exists()",
+                  "$index": {
+                    ".validate": "(($index === '0' && newData.parent().parent().child('socketCount').val() >= 1) || ($index === '1' && newData.parent().parent().child('socketCount').val() >= 2) || ($index === '2' && newData.parent().parent().child('socketCount').val() >= 3) || ($index === '3' && newData.parent().parent().child('socketCount').val() >= 4)) && newData.isString() && (newData.val() === 'ember' || newData.val() === 'tide' || newData.val() === 'gale' || newData.val() === 'stone' || newData.val() === 'thorn' || newData.val() === 'dawn' || newData.val() === 'dusk' || newData.val() === 'blood' || newData.val() === 'ward' || newData.val() === 'echo' || newData.val() === 'void' || newData.val() === 'storm' || newData.val() === 'frost' || newData.val() === 'venom' || newData.val() === 'crown')"
+                  }
+                },
+                "setId": {
+                  ".validate": "newData.parent().child('tier').val() === 'set' && newData.isString() && (newData.val() === 'ironCovenant' || newData.val() === 'windstalker' || newData.val() === 'astralRite' || newData.val() === 'ashenPilgrim' || newData.val() === 'graveborn' || newData.val() === 'tempest')"
+                },
+                "uniqueId": {
+                  ".validate": "newData.parent().child('tier').val() === 'unique' && newData.isString() && (newData.val() === 'oathbreaker' || newData.val() === 'nightpiercer' || newData.val() === 'cinderOracle' || newData.val() === 'plagueEdge' || newData.val() === 'bloodforgedAegis' || newData.val() === 'frostboundCarapace' || newData.val() === 'stormhide' || newData.val() === 'graveward' || newData.val() === 'executionersHourglass' || newData.val() === 'seraphTear' || newData.val() === 'voidEye' || newData.val() === 'emberCrown')"
+                }
+              }
+            },
+            "runeInventory": {
+              ".validate": "newData.hasChildren(['ember', 'tide', 'gale', 'stone', 'thorn', 'dawn', 'dusk', 'blood', 'ward', 'echo', 'void', 'storm', 'frost', 'venom', 'crown'])",
+              "$runeId": {
+                ".validate": "($runeId === 'ember' || $runeId === 'tide' || $runeId === 'gale' || $runeId === 'stone' || $runeId === 'thorn' || $runeId === 'dawn' || $runeId === 'dusk' || $runeId === 'blood' || $runeId === 'ward' || $runeId === 'echo' || $runeId === 'void' || $runeId === 'storm' || $runeId === 'frost' || $runeId === 'venom' || $runeId === 'crown') && newData.isNumber() && newData.val() >= 0 && newData.val() <= 999 && newData.val() % 1 === 0"
               }
             },
             "potions": {
               ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
             },
             "currentRegionId": {
-              ".validate": "newData.isString() && (newData.val() === 'sunnyField' || newData.val() === 'mistForest' || newData.val() === 'ancientRuins' || newData.val() === 'dragonCrater')"
+              ".validate": "newData.isString() && (newData.val() === 'sunnyField' || (newData.val() === 'mistForest' && newData.parent().child('level').val() >= 5) || (newData.val() === 'ancientRuins' && newData.parent().child('level').val() >= 12) || (newData.val() === 'dragonCrater' && newData.parent().child('level').val() >= 22))"
+            },
+            "town": {
+              ".validate": "newData.hasChildren(['location', 'townId', 'lastFieldRegionId', 'merchantSoldOut', 'merchantRefreshAt']) && newData.child('lastFieldRegionId').val() === newData.parent().child('currentRegionId').val() && newData.child('townId').val() === newData.child('lastFieldRegionId').val() + '-town' && ((newData.child('merchantSoldOut').val() === true && !newData.child('merchantStock').exists()) || (newData.child('merchantSoldOut').val() === false && newData.child('merchantStock').exists()))",
+              "location": {
+                ".validate": "newData.isString() && (newData.val() === 'town' || newData.val() === 'wilderness')"
+              },
+              "townId": {
+                ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 48"
+              },
+              "lastFieldRegionId": {
+                ".validate": "newData.isString() && (newData.val() === 'sunnyField' || newData.val() === 'mistForest' || newData.val() === 'ancientRuins' || newData.val() === 'dragonCrater')"
+              },
+              "stash": {
+                ".validate": "newData.hasChildren()",
+                "$index": {
+                  ".validate": "$index.matches(/^([0-9]|[1-9][0-9]|1[01][0-9])$/) && newData.hasChildren(['instanceId', 'itemKey', 'definitionId', 'materialId', 'prefixId', 'suffixId', 'rarity', 'quality', 'level', 'enhance', 'stats', 'acquiredAt']) && newData.child('instanceId').isString() && newData.child('instanceId').val().length > 0 && newData.child('instanceId').val().length <= 120 && newData.child('itemKey').isString() && newData.child('itemKey').val().length > 0 && newData.child('itemKey').val().length <= 320 && newData.child('definitionId').isString() && newData.child('definitionId').val().length > 0 && newData.child('definitionId').val().length <= 80 && newData.child('materialId').isString() && newData.child('materialId').val().length > 0 && newData.child('materialId').val().length <= 80 && newData.child('prefixId').isString() && newData.child('prefixId').val().length > 0 && newData.child('prefixId').val().length <= 80 && newData.child('suffixId').isString() && newData.child('suffixId').val().length > 0 && newData.child('suffixId').val().length <= 80 && newData.child('rarity').isString() && (newData.child('rarity').val() === 'common' || newData.child('rarity').val() === 'uncommon' || newData.child('rarity').val() === 'rare' || newData.child('rarity').val() === 'epic' || newData.child('rarity').val() === 'legendary') && newData.child('quality').isString() && (newData.child('quality').val() === 'standard' || newData.child('quality').val() === 'refined' || newData.child('quality').val() === 'masterwork') && newData.child('level').isNumber() && newData.child('level').val() >= 1 && newData.child('level').val() <= 99 && newData.child('level').val() % 1 === 0 && newData.child('enhance').isNumber() && newData.child('enhance').val() >= 0 && newData.child('enhance').val() <= 10 && newData.child('enhance').val() % 1 === 0 && newData.child('stats').hasChildren(['maxHp', 'attack', 'defense', 'crit']) && newData.child('stats').child('maxHp').isNumber() && newData.child('stats').child('maxHp').val() >= 0 && newData.child('stats').child('maxHp').val() % 1 === 0 && newData.child('stats').child('attack').isNumber() && newData.child('stats').child('attack').val() >= 0 && newData.child('stats').child('attack').val() % 1 === 0 && newData.child('stats').child('defense').isNumber() && newData.child('stats').child('defense').val() >= 0 && newData.child('stats').child('defense').val() % 1 === 0 && newData.child('stats').child('crit').isNumber() && newData.child('stats').child('crit').val() >= 0 && newData.child('stats').child('crit').val() % 1 === 0 && newData.child('acquiredAt').isNumber() && newData.child('acquiredAt').val() >= 0 && newData.child('acquiredAt').val() <= now + 60000"
+                }
+              },
+              "merchantStock": {
+                ".validate": "newData.hasChildren()",
+                "$index": {
+                  ".validate": "$index.matches(/^[0-7]$/) && newData.hasChildren(['instanceId', 'itemKey', 'definitionId', 'materialId', 'prefixId', 'suffixId', 'rarity', 'quality', 'level', 'enhance', 'stats', 'acquiredAt']) && newData.child('instanceId').isString() && newData.child('instanceId').val().length > 0 && newData.child('instanceId').val().length <= 120 && newData.child('itemKey').isString() && newData.child('itemKey').val().length > 0 && newData.child('itemKey').val().length <= 320 && newData.child('definitionId').isString() && newData.child('definitionId').val().length > 0 && newData.child('definitionId').val().length <= 80 && newData.child('materialId').isString() && newData.child('materialId').val().length > 0 && newData.child('materialId').val().length <= 80 && newData.child('prefixId').isString() && newData.child('prefixId').val().length > 0 && newData.child('prefixId').val().length <= 80 && newData.child('suffixId').isString() && newData.child('suffixId').val().length > 0 && newData.child('suffixId').val().length <= 80 && newData.child('rarity').isString() && (newData.child('rarity').val() === 'common' || newData.child('rarity').val() === 'uncommon' || newData.child('rarity').val() === 'rare' || newData.child('rarity').val() === 'epic' || newData.child('rarity').val() === 'legendary') && newData.child('quality').isString() && (newData.child('quality').val() === 'standard' || newData.child('quality').val() === 'refined' || newData.child('quality').val() === 'masterwork') && newData.child('level').isNumber() && newData.child('level').val() >= 1 && newData.child('level').val() <= 99 && newData.child('level').val() % 1 === 0 && newData.child('enhance').isNumber() && newData.child('enhance').val() >= 0 && newData.child('enhance').val() <= 10 && newData.child('enhance').val() % 1 === 0 && newData.child('stats').hasChildren(['maxHp', 'attack', 'defense', 'crit']) && newData.child('stats').child('maxHp').isNumber() && newData.child('stats').child('maxHp').val() >= 0 && newData.child('stats').child('maxHp').val() % 1 === 0 && newData.child('stats').child('attack').isNumber() && newData.child('stats').child('attack').val() >= 0 && newData.child('stats').child('attack').val() % 1 === 0 && newData.child('stats').child('defense').isNumber() && newData.child('stats').child('defense').val() >= 0 && newData.child('stats').child('defense').val() % 1 === 0 && newData.child('stats').child('crit').isNumber() && newData.child('stats').child('crit').val() >= 0 && newData.child('stats').child('crit').val() % 1 === 0 && newData.child('acquiredAt').isNumber() && newData.child('acquiredAt').val() >= 0 && newData.child('acquiredAt').val() <= now + 60000"
+                }
+              },
+              "merchantSoldOut": {
+                ".validate": "newData.isBoolean()"
+              },
+              "merchantRefreshAt": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9007199254740991 && newData.val() % 1 === 0"
+              },
+              "$other": {
+                ".validate": false
+              }
+            },
+            "arenaCheckpoint": {
+              ".validate": "newData.parent().child('town').exists() && newData.parent().child('town').child('location').val() === 'wilderness' && newData.hasChildren(['runId', 'checkpoint', 'wave', 'totalWaves', 'outcome']) && newData.child('wave').val() <= newData.child('totalWaves').val() && (newData.child('outcome').val() === 'ongoing' || (newData.child('outcome').val() === 'victory' && newData.child('wave').val() === newData.child('totalWaves').val()) || newData.child('outcome').val() === 'defeat') && ((!data.exists() && newData.child('wave').val() <= newData.child('checkpoint').val()) || (data.exists() && ((newData.child('runId').val() === data.child('runId').val() && newData.child('checkpoint').val() === data.child('checkpoint').val() && newData.child('wave').val() === data.child('wave').val() && newData.child('totalWaves').val() === data.child('totalWaves').val() && newData.child('outcome').val() === data.child('outcome').val()) || (data.child('outcome').val() !== 'ongoing' && newData.child('runId').val() !== data.child('runId').val() && newData.child('wave').val() <= newData.child('checkpoint').val()) || (newData.child('runId').val() === data.child('runId').val() && data.child('outcome').val() === 'ongoing' && newData.child('checkpoint').val() > data.child('checkpoint').val() && newData.child('totalWaves').val() === data.child('totalWaves').val() && newData.child('wave').val() >= data.child('wave').val() && newData.child('wave').val() <= data.child('wave').val() + newData.child('checkpoint').val() - data.child('checkpoint').val()))))",
+              "runId": {
+                ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+              },
+              "checkpoint": {
+                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 1000000 && newData.val() % 1 === 0"
+              },
+              "wave": {
+                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 100 && newData.val() % 1 === 0"
+              },
+              "totalWaves": {
+                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 100 && newData.val() % 1 === 0"
+              },
+              "outcome": {
+                ".validate": "newData.isString() && (newData.val() === 'ongoing' || newData.val() === 'victory' || newData.val() === 'defeat')"
+              },
+              "$other": {
+                ".validate": false
+              }
             },
             "killCounts": {
               ".validate": "newData.hasChildren(['field_slime', 'field_boar', 'field_bandit', 'field_boss', 'forest_wolf', 'forest_spider', 'forest_treant', 'forest_boss', 'ruins_sentinel', 'ruins_gargoyle', 'ruins_mage', 'ruins_boss', 'crater_drake', 'crater_golem', 'crater_cultist', 'crater_boss'])",
@@ -349,6 +502,9 @@
               ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 66240 && newData.val() % 1 === 0"
             }
           }
+        },
+        "adventureGeneration": {
+          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 1000000 && newData.val() % 1 === 0 && ((!data.exists() && newData.val() === 1) || (data.exists() && newData.val() === data.val() + 1)) && !newData.parent().child('adventure').child('v1').exists() && !newData.parent().parent().parent().child('adventureRankings').child($uid).exists()"
         }
       }
     },
@@ -358,12 +514,15 @@
       ".indexOn": ["power"],
       "$uid": {
         ".write": "auth != null && $uid === auth.uid",
-        ".validate": "newData.hasChildren(['uid', 'displayName', 'classId', 'level', 'masteryLevel', 'power', 'totalKills', 'bossesKilled', 'collectionCount', 'updatedAt']) && newData.parent().parent().child('users').child($uid).child('adventure').child('v1').exists() && newData.child('classId').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('classId').val() && newData.child('level').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('level').val() && newData.child('masteryLevel').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('mastery').child('level').val() && newData.child('power').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('rankingPower').val() && newData.child('totalKills').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('statistics').child('totalKills').val() && newData.child('bossesKilled').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('statistics').child('bossesKilled').val() && newData.child('collectionCount').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('rankingCollectionCount').val()",
+        ".validate": "newData.hasChildren(['uid', 'displayName', 'resetGeneration', 'classId', 'level', 'masteryLevel', 'power', 'totalKills', 'bossesKilled', 'collectionCount', 'updatedAt']) && newData.parent().parent().child('users').child($uid).child('adventure').child('v1').exists() && newData.child('resetGeneration').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('resetGeneration').val() && newData.child('classId').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('classId').val() && newData.child('level').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('level').val() && newData.child('masteryLevel').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('mastery').child('level').val() && newData.child('power').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('rankingPower').val() && newData.child('totalKills').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('statistics').child('totalKills').val() && newData.child('bossesKilled').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('statistics').child('bossesKilled').val() && newData.child('collectionCount').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('rankingCollectionCount').val()",
         "uid": {
           ".validate": "newData.isString() && newData.val() === auth.uid"
         },
         "displayName": {
           ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
+        },
+        "resetGeneration": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0 && newData.val() === newData.parent().parent().parent().child('users').child($uid).child('adventure').child('v1').child('resetGeneration').val()"
         },
         "photoURL": {
           ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2048"
@@ -402,24 +561,26 @@
       ".read": "auth != null",
       "$uid": {
         ".write": "auth != null && $uid === auth.uid",
-        ".validate": "newData.hasChildren(['uid', 'displayName', 'connectedAt', 'lastSeen'])",
-        "uid": {
-          ".validate": "newData.isString() && newData.val() === auth.uid"
-        },
-        "displayName": {
-          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
-        },
-        "photoURL": {
-          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2048"
-        },
-        "connectedAt": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000"
-        },
-        "lastSeen": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000"
-        },
-        "$other": {
-          ".validate": false
+        "$connectionId": {
+          ".validate": "($connectionId === '0' || $connectionId === '1' || $connectionId === '2' || $connectionId === '3' || $connectionId === '4' || $connectionId === '5' || $connectionId === '6' || $connectionId === '7') && newData.hasChildren(['uid', 'displayName', 'connectedAt', 'lastSeen'])",
+          "uid": {
+            ".validate": "newData.isString() && newData.val() === auth.uid"
+          },
+          "displayName": {
+            ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
+          },
+          "photoURL": {
+            ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2048"
+          },
+          "connectedAt": {
+            ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000"
+          },
+          "lastSeen": {
+            ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000"
+          },
+          "$other": {
+            ".validate": false
+          }
         }
       }
     },

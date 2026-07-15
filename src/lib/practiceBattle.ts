@@ -12,11 +12,16 @@ import {
 import {
   BOARD_SIZE,
   canMove,
+  findShortestPath,
+  getMapBudgetUsed,
   getMapItems,
   getNewPosition,
+  GAME_RULES_VERSION,
+  isSameWallSegment,
   isPositionInBoard,
   isSamePosition,
   isValidMap,
+  MAX_OBSTACLES,
 } from '@/lib/gameUtils';
 import {
   getPlayerMazeSkillState,
@@ -78,14 +83,14 @@ const wormhole = (entrance: Position, exit: Position): MapItem => ({
   exit,
 });
 
-const radar = (): MapItem => ({ type: 'radar' });
-
 const smoke = (row: number, col: number): MapItem => ({
   type: 'smoke',
   position: { row, col },
 });
 
-export const PRACTICE_MAP_TEMPLATES: GameMap[] = [
+const radar = (): MapItem => ({ type: 'radar' });
+
+const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
   {
     skillLoadout: 'scoutPulse',
     startPosition: { row: 0, col: 0 },
@@ -106,12 +111,14 @@ export const PRACTICE_MAP_TEMPLATES: GameMap[] = [
       specialWall('fireWall', 0, 1, 'down'),
       specialWall('poisonWall', 2, 3, 'right'),
       specialWall('iceWall', 4, 1, 'right'),
+      specialWall('thornWall', 2, 5, 'down'),
+      specialWall('crystalWall', 0, 2, 'right'),
     ],
   },
   {
     skillLoadout: 'breach',
     startPosition: { row: 5, col: 0 },
-    endPosition: { row: 0, col: 5 },
+    endPosition: { row: 5, col: 5 },
     obstacles: [
       wall(5, 0, 'right'),
       wall(4, 0, 'right'),
@@ -132,18 +139,9 @@ export const PRACTICE_MAP_TEMPLATES: GameMap[] = [
     skillLoadout: 'dash',
     startPosition: { row: 0, col: 5 },
     endPosition: { row: 5, col: 0 },
-    obstacles: [
-      wall(0, 5, 'left'),
-      wall(1, 5, 'left'),
-      wall(2, 4, 'down'),
-      wall(2, 3, 'left'),
-      wall(3, 2, 'up'),
-      wall(4, 2, 'left'),
-    ],
+    obstacles: [],
     items: [
       oneTimeWall(5, 3, 'left'),
-      mine(3, 5),
-      radar(),
       specialWall('phaseWall', 0, 4, 'down'),
       specialWall('mirrorWall', 3, 3, 'down'),
     ],
@@ -177,6 +175,7 @@ function clonePosition(position: Position): Position {
 
 export function clonePracticeMap(map: GameMap): GameMap {
   return {
+    rulesVersion: map.rulesVersion || GAME_RULES_VERSION,
     startPosition: clonePosition(map.startPosition),
     endPosition: clonePosition(map.endPosition),
     obstacles: (map.obstacles || []).map((entry) => ({
@@ -194,20 +193,150 @@ export function clonePracticeMap(map: GameMap): GameMap {
   };
 }
 
+function canonicalWallCandidates(seed: number): Obstacle[] {
+  const candidates: Obstacle[] = [];
+  for (let row = 0; row < BOARD_SIZE; row += 1) {
+    for (let col = 0; col < BOARD_SIZE; col += 1) {
+      if (col < BOARD_SIZE - 1) candidates.push(wall(row, col, 'right'));
+      if (row < BOARD_SIZE - 1) candidates.push(wall(row, col, 'down'));
+    }
+  }
+  const offset = ((seed % candidates.length) + candidates.length) % candidates.length;
+  return [...candidates.slice(offset), ...candidates.slice(0, offset)];
+}
+
+function permanentPracticeWalls(map: GameMap): Obstacle[] {
+  const steelWalls = getMapItems(map).flatMap((item) =>
+    item.type === 'steelWall' && item.wallPosition && item.wallDirection
+      ? [{ position: item.wallPosition, direction: item.wallDirection }]
+      : []
+  );
+  return [...(map.obstacles || []), ...steelWalls];
+}
+
+export function getPracticeMapRouteLength(map: GameMap): number {
+  const path = findShortestPath(map.startPosition, map.endPosition, permanentPracticeWalls(map));
+  return path ? path.length - 1 : -1;
+}
+
+export function fillPracticeMapBudget(map: GameMap, seed = 0): GameMap {
+  let candidate = clonePracticeMap(map);
+  const wallItems = getMapItems(candidate).flatMap((item) =>
+    item.wallPosition && item.wallDirection
+      ? [{ position: item.wallPosition, direction: item.wallDirection }]
+      : []
+  );
+
+  while (getMapBudgetUsed(candidate) < MAX_OBSTACLES) {
+    let best: GameMap | null = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    const currentPath = findShortestPath(
+      candidate.startPosition,
+      candidate.endPosition,
+      permanentPracticeWalls(candidate)
+    ) || [];
+
+    canonicalWallCandidates(seed + candidate.obstacles.length).forEach((nextWall, index) => {
+      const occupied = [...candidate.obstacles, ...wallItems].some((existing) =>
+        isSameWallSegment(
+          existing.position,
+          existing.direction,
+          nextWall.position,
+          nextWall.direction
+        )
+      );
+      if (occupied) return;
+
+      const nextMap = {
+        ...candidate,
+        obstacles: [...candidate.obstacles, nextWall],
+      };
+      if (getMapBudgetUsed(nextMap) > MAX_OBSTACLES || !isValidMap(nextMap)) return;
+
+      const routeLength = getPracticeMapRouteLength(nextMap);
+      const blocksCurrentRoute = currentPath.slice(0, -1).some((position, pathIndex) => {
+        const direction = directionBetween(position, currentPath[pathIndex + 1]);
+        return !!direction && isSameWallSegment(
+          position,
+          direction,
+          nextWall.position,
+          nextWall.direction
+        );
+      });
+      const score = routeLength * 1_000_000 + (blocksCurrentRoute ? 10_000 : 0) - index;
+      if (score > bestScore) {
+        best = nextMap;
+        bestScore = score;
+      }
+    });
+
+    if (!best) break;
+    candidate = best;
+  }
+
+  return candidate;
+}
+
+export const PRACTICE_MAP_TEMPLATES: GameMap[] = BASE_PRACTICE_MAP_TEMPLATES.map(
+  (map, index) => fillPracticeMapBudget(map, index * 17 + 3)
+);
+
 export function createQuickPracticeMap(): GameMap {
   return clonePracticeMap(PRACTICE_MAP_TEMPLATES[3]);
 }
 
 export function createAiPracticeMap(index: number): GameMap {
   const candidate = clonePracticeMap(PRACTICE_MAP_TEMPLATES[index % 3]);
-  return isValidMap(candidate)
+  return isValidMap(candidate) && getMapBudgetUsed(candidate) === MAX_OBSTACLES
     ? candidate
-    : {
+    : fillPracticeMapBudget({
         startPosition: { row: 0, col: 0 },
         endPosition: { row: 5, col: 5 },
         obstacles: [],
-        items: [radar()],
-      };
+        items: [],
+        skillLoadout: 'scoutPulse',
+      }, index + 101);
+}
+
+export function createMapTestGameState(playerMap: GameMap): GameState {
+  const map = clonePracticeMap(playerMap);
+  if (!isValidMap(map) || getMapBudgetUsed(map) !== MAX_OBSTACLES) {
+    throw new Error(`Map test requires a valid ${MAX_OBSTACLES}/${MAX_OBSTACLES} map.`);
+  }
+  const player: Player = {
+    id: PRACTICE_USER_ID,
+    displayName: '나',
+    position: clonePosition(map.startPosition),
+    positionHistory: [clonePosition(map.startPosition)],
+    moves: 0,
+    isReady: true,
+    isOnline: true,
+    finished: false,
+    forfeited: false,
+  };
+
+  return {
+    phase: GamePhase.PLAY,
+    players: { [PRACTICE_USER_ID]: player },
+    maps: { [PRACTICE_USER_ID]: map },
+    assignments: { [PRACTICE_USER_ID]: PRACTICE_USER_ID },
+    currentTurn: PRACTICE_USER_ID,
+    turnOrder: [PRACTICE_USER_ID],
+    turnNumber: 1,
+    winner: null,
+    draw: null,
+    collisionWalls: {},
+    itemState: {
+      [PRACTICE_USER_ID]: {
+        consumed: {},
+        mazeSkill: createMazeSkillState(map.skillLoadout),
+      },
+    },
+    revealedWallsByPlayer: {},
+    visionEffectsByPlayer: {},
+    turnMessage: '내 맵 테스트를 시작합니다.',
+    turnMessageTimestamp: Date.now(),
+  };
 }
 
 export function createPracticeGameState(playerMap: GameMap, requestedAiCount: number): GameState {
@@ -461,8 +590,4 @@ export function getPracticeStandings(state: GameState): PracticeStanding[] {
       rank,
     };
   });
-}
-
-export function didRunnerMove(from: Position, to: Position): boolean {
-  return !isSamePosition(from, to);
 }

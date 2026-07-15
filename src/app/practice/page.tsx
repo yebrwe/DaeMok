@@ -6,7 +6,9 @@ import {
   Bot,
   ChevronLeft,
   Map,
+  Pencil,
   RotateCcw,
+  Route,
   Settings2,
   Swords,
   Trophy,
@@ -18,24 +20,34 @@ import { GameMap } from '@/types/game';
 import { createQuickPracticeMap, PRACTICE_USER_ID } from '@/lib/practiceBattle';
 
 type PracticeStage = 'configure' | 'setup' | 'battle';
+type PracticeMode = 'race' | 'mapTest';
 
 export default function PracticePage() {
   const [stage, setStage] = useState<PracticeStage>('configure');
+  const [mode, setMode] = useState<PracticeMode>('race');
   const [aiCount, setAiCount] = useState(3);
   const [playerMap, setPlayerMap] = useState<GameMap | null>(null);
   const [result, setResult] = useState<PracticeBattleResult | null>(null);
   const [matchKey, setMatchKey] = useState(0);
 
   const startQuickMatch = () => {
+    setMode('race');
     setPlayerMap(createQuickPracticeMap());
     setResult(null);
     setMatchKey((current) => current + 1);
     setStage('battle');
   };
 
-  const startCustomSetup = () => {
+  const startCustomSetup = (nextMode: PracticeMode) => {
+    setMode(nextMode);
     setPlayerMap(null);
     setResult(null);
+    setStage('setup');
+  };
+
+  const editCurrentMap = () => {
+    setResult(null);
+    setMatchKey((current) => current + 1);
     setStage('setup');
   };
 
@@ -67,12 +79,16 @@ export default function PracticePage() {
     : result?.winnerId === PRACTICE_USER_ID
       ? '연습 대전 승리'
       : `${result?.standings.find((entry) => entry.id === result?.winnerId)?.name || 'AI'} 승리`;
+  const mapTestMoves = result?.standings.find((entry) => entry.id === PRACTICE_USER_ID)?.moves;
+  const finalResultTitle = mode === 'mapTest'
+    ? `테스트 완료 · ${mapTestMoves ?? 0}턴`
+    : resultTitle;
 
   const subtitle = stage === 'configure'
-    ? 'AI 대전 설정'
+    ? '연습 방식 선택'
     : stage === 'setup'
-      ? `AI ${aiCount}명 · 내 맵 제작`
-      : `나 + AI ${aiCount}명 · 교대 대전`;
+      ? mode === 'mapTest' ? '24벽 · 내 맵 제작' : `AI ${aiCount}명 · 24벽 맵 제작`
+      : mode === 'mapTest' ? '제작자 시점 · 단독 주행' : `나 + AI ${aiCount}명 · 교대 대전`;
 
   return (
     <main className="fixed inset-0 h-[100dvh] overflow-hidden bg-slate-950">
@@ -84,7 +100,7 @@ export default function PracticePage() {
           <div className="flex min-w-0 items-center gap-2">
             <Bot size={19} className="shrink-0 text-amber-300" aria-hidden="true" />
             <div className="min-w-0 leading-tight">
-              <h1 className="text-sm font-black text-amber-300">AI 연습</h1>
+              <h1 className="text-sm font-black text-amber-300">{mode === 'mapTest' ? '내 맵 테스트' : 'AI 연습'}</h1>
               <p className="hidden truncate text-[9px] text-slate-500 min-[390px]:block">{subtitle}</p>
             </div>
           </div>
@@ -94,12 +110,12 @@ export default function PracticePage() {
               <button
                 type="button"
                 className="btn-sub flex h-11 min-w-11 items-center justify-center gap-1 !rounded-md px-2 text-[10px]"
-                onClick={startCustomSetup}
-                title="새 맵 만들기"
-                aria-label="새 맵 만들기"
+                onClick={editCurrentMap}
+                title="현재 맵 수정"
+                aria-label="현재 맵 수정"
               >
-                <Map size={14} aria-hidden="true" />
-                <span className="hidden sm:inline">새 맵</span>
+                <Pencil size={14} aria-hidden="true" />
+                <span className="hidden sm:inline">맵 수정</span>
               </button>
             )}
             {stage !== 'configure' && (
@@ -107,11 +123,11 @@ export default function PracticePage() {
                 type="button"
                 className="btn-sub flex h-11 min-w-11 items-center justify-center gap-1 !rounded-md px-2 text-[10px]"
                 onClick={returnToSettings}
-                title="AI 설정"
-                aria-label="AI 설정"
+                title="연습 설정"
+                aria-label="연습 설정"
               >
                 <Settings2 size={14} aria-hidden="true" />
-                <span className="hidden sm:inline">AI 설정</span>
+                <span className="hidden sm:inline">설정</span>
               </button>
             )}
             <Link
@@ -175,23 +191,39 @@ export default function PracticePage() {
                 <button
                   type="button"
                   className="btn-sub flex h-12 items-center justify-center gap-2 !rounded-md px-3 text-sm font-bold"
-                  onClick={startCustomSetup}
+                  onClick={() => startCustomSetup('race')}
                 >
                   <Map size={17} aria-hidden="true" />
                   맵 만들기
+                </button>
+                <button
+                  type="button"
+                  className="btn-sub col-span-2 flex h-12 items-center justify-center gap-2 !rounded-md px-3 text-sm font-bold"
+                  onClick={() => startCustomSetup('mapTest')}
+                >
+                  <Route size={17} aria-hidden="true" />
+                  내 맵 테스트
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {stage === 'setup' && <GameSetup onMapComplete={handleMapComplete} />}
+        {stage === 'setup' && (
+          <GameSetup
+            key={`practice-setup-${matchKey}`}
+            onMapComplete={handleMapComplete}
+            initialMap={playerMap}
+            requireFullBudget
+          />
+        )}
 
         {stage === 'battle' && playerMap && (
           <PracticeBattle
             key={matchKey}
             playerMap={playerMap}
-            aiCount={aiCount}
+            aiCount={mode === 'mapTest' ? 0 : aiCount}
+            mode={mode}
             onComplete={handleBattleComplete}
           />
         )}
@@ -208,7 +240,7 @@ export default function PracticePage() {
           <div className="game-panel w-full max-w-sm !rounded-lg p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-center gap-2 text-center">
               <Trophy size={22} className="text-amber-300" aria-hidden="true" />
-              <h2 id="practice-result-title" className="text-lg font-black text-amber-300">{resultTitle}</h2>
+              <h2 id="practice-result-title" className="text-lg font-black text-amber-300">{finalResultTitle}</h2>
             </div>
 
             <ol className="space-y-1.5">
@@ -230,15 +262,15 @@ export default function PracticePage() {
             <div className="mt-4 grid grid-cols-2 gap-2">
               <button type="button" autoFocus className="btn-game flex h-11 items-center justify-center gap-1.5 !rounded-md text-xs" onClick={restartMatch}>
                 <RotateCcw size={15} aria-hidden="true" />
-                재대결
+                {mode === 'mapTest' ? '다시 테스트' : '재대결'}
               </button>
-              <button type="button" className="btn-sub flex h-11 items-center justify-center gap-1.5 !rounded-md text-xs" onClick={startCustomSetup}>
-                <Map size={15} aria-hidden="true" />
-                새 맵
+              <button type="button" className="btn-sub flex h-11 items-center justify-center gap-1.5 !rounded-md text-xs" onClick={editCurrentMap}>
+                <Pencil size={15} aria-hidden="true" />
+                맵 수정
               </button>
               <button type="button" className="btn-sub col-span-2 flex h-11 items-center justify-center gap-1.5 !rounded-md text-xs" onClick={returnToSettings}>
                 <Settings2 size={15} aria-hidden="true" />
-                AI 설정
+                연습 설정
               </button>
             </div>
           </div>

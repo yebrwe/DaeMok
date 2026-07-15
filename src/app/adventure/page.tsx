@@ -8,30 +8,32 @@ import {
   Backpack,
   ChartNoAxesColumnIncreasing,
   Check,
-  FlaskConical,
-  Footprints,
+  DoorOpen,
+  Gem,
   Hammer,
-  Heart,
   Library,
   LockKeyhole,
   LogOut,
   Map,
   PackageOpen,
-  Pause,
-  Play,
   Plus,
   RotateCcw,
-  ShieldCheck,
   Sparkles,
   Swords,
-  Target,
   Trash2,
   Trophy,
   Zap,
 } from 'lucide-react';
 import AdventureIcon from '@/components/adventure/AdventureIcon';
+import AdventureTownHub3D from '@/components/adventure/AdventureTownHub3D';
+import AdventureTownServicePanel from '@/components/adventure/AdventureTownServicePanel';
+import HackSlashArena, {
+  type ArenaDefeatEvent,
+  type ArenaKillEvent,
+} from '@/components/adventure/HackSlashArena';
 import { useAuth } from '@/hooks/useAuth';
 import {
+  loadAdventureGeneration,
   loadAdventureState,
   resetAdventureStateAndRanking,
   saveAdventureStateAndRanking,
@@ -40,24 +42,28 @@ import {
   subscribeAdventureRankings,
   subscribeAdventureState,
   type AdventureRankingEntry,
+  type AdventureUser,
 } from '@/lib/adventureFirebase';
 import {
   BOSS_KILLS_REQUIRED,
   CLASS_DEFINITIONS,
   CLASS_IDS,
   CORE_STAT_LABELS,
-  ENEMY_DEFINITIONS,
   EQUIPMENT_SLOT_LABELS,
   MAX_ENHANCE,
   MAX_SKILL_RANK,
   REGION_DEFINITIONS,
   REGION_IDS,
+  RUNE_DEFINITIONS,
+  RUNE_IDS,
+  RUNE_WORD_BY_ID,
+  RUNE_WORD_RECIPES,
+  SET_ITEM_DEFINITIONS,
+  SKILL_SLOTS,
   TOTAL_ITEM_VARIETIES,
+  UNIQUE_ITEM_DEFINITIONS,
   allocateStat,
-  applyOfflineProgress,
-  changeRegion,
   claimQuest,
-  combatAction,
   createInitialState,
   deriveStats,
   enhanceGear,
@@ -69,26 +75,32 @@ import {
   getGearDisplayFromItemKey,
   getLevelProgress,
   getMasteryProgress,
-  getRestCost,
   getSkillUpgradeCost,
-  isRegionUnlocked,
-  restAtTown,
+  insertRuneIntoItem,
+  resolveAdventureCombatModifiers,
   sanitizeAdventureState,
   sellItem,
-  startEncounter,
+  setSkillLoadoutSlot,
   upgradeSkill,
   type AdventureResult,
+  type AdventureSpecialEffect,
   type AdventureState,
   type CharacterClassId,
-  type CombatAction,
   type CoreStatId,
   type EquipmentInstance,
   type EquipmentRarity,
   type EquipmentSlot,
-  type OfflineProgress,
-  type RegionId,
+  type RuneId,
   type SkillSlot,
 } from '@/lib/adventure';
+import {
+  resolveWildernessArenaDefeat,
+  resolveWildernessArenaKill,
+  returnToTown,
+  withAdventureTownState,
+  type TownAdventureState,
+  type TownServiceId,
+} from '@/lib/adventureTown';
 import styles from './adventure.module.css';
 
 type MainTab = 'hunt' | 'equipment' | 'growth' | 'collection' | 'ranking';
@@ -96,6 +108,8 @@ type SideTab = 'quests' | 'inventory' | 'log';
 type CollectionFilter = 'all' | EquipmentSlot;
 
 const SAVE_KEY_PREFIX = 'daemok-adventure-v1';
+const ARENA_SKILL_HOTKEYS = ['KeyQ', 'KeyE', 'KeyR', 'KeyF', 'Digit1', 'Digit2'] as const;
+const ARENA_SKILL_KEY_LABELS = ['Q', 'E', 'R', 'F', '1', '2'] as const;
 
 const STAT_DESCRIPTIONS: Record<CoreStatId, string> = {
   strength: '공격력이 2씩 증가합니다.',
@@ -135,6 +149,43 @@ function itemStats(item: EquipmentInstance) {
   return values.join(' · ');
 }
 
+function describeSpecialEffect(effect: AdventureSpecialEffect) {
+  if (effect.kind === 'onHit') {
+    const extras = [
+      `${Math.round(effect.chance * 100)}% 확률`,
+      `${Math.round(effect.damageMultiplier * 100)}% ${effect.element} 피해`,
+      effect.chainTargets ? `${effect.chainTargets}대상 연쇄` : '',
+      effect.lifeStealPercent ? `피해의 ${(effect.lifeStealPercent * 100).toFixed(1)}% 회복` : '',
+    ].filter(Boolean);
+    return extras.join(' · ');
+  }
+  if (effect.kind === 'onKill') {
+    return [
+      `${Math.round(effect.chance * 100)}% 확률`,
+      effect.healPercent ? `최대 생명력 ${(effect.healPercent * 100).toFixed(1)}% 회복` : '',
+      effect.explosionDamageMultiplier ? `${Math.round(effect.explosionDamageMultiplier * 100)}% 처치 폭발` : '',
+      effect.cooldownReductionSeconds ? `재사용 ${effect.cooldownReductionSeconds}초 환급` : '',
+    ].filter(Boolean).join(' · ');
+  }
+  if (effect.kind === 'onCast') {
+    return [
+      `${Math.round(effect.chance * 100)}% 확률`,
+      effect.echoDamageMultiplier ? `${Math.round(effect.echoDamageMultiplier * 100)}% 위력 복창` : '',
+      effect.cooldownRefundSeconds ? `재사용 ${effect.cooldownRefundSeconds}초 환급` : '',
+    ].filter(Boolean).join(' · ');
+  }
+  if (effect.kind === 'lowLife') {
+    return `생명력 ${Math.round(effect.threshold * 100)}% 이하 · 피해 ${Math.round((effect.damageMultiplier - 1) * 100)}% 증가 · 받는 피해 ${Math.round((1 - effect.damageTakenMultiplier) * 100)}% 감소`;
+  }
+  if (effect.kind === 'projectile') {
+    return `투사체 +${effect.additionalProjectiles} · 관통 +${effect.pierce} · 속도 ${Math.round((effect.speedMultiplier - 1) * 100)}%`;
+  }
+  if (effect.kind === 'elemental') {
+    return `${effect.element} 피해 ${Math.round((effect.damageMultiplier - 1) * 100)}% 증가 · 관통 ${Math.round(effect.penetration * 100)}%`;
+  }
+  return `${effect.skill} 피해 ${Math.round((effect.damageMultiplier - 1) * 100)}% · 재사용 ${Math.round((1 - effect.cooldownMultiplier) * 100)}% 감소 · 범위 ${Math.round((effect.rangeMultiplier - 1) * 100)}%`;
+}
+
 function rankFor(level: number) {
   if (level >= 30) return '대목의 수호자';
   if (level >= 20) return '황금 모험가';
@@ -143,9 +194,25 @@ function rankFor(level: number) {
   return '새싹 모험가';
 }
 
+function townPayload(raw: unknown) {
+  return typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+    ? (raw as { town?: unknown }).town
+    : undefined;
+}
+
+function normalizeTownAdventureState(
+  state: AdventureState,
+  fallback?: TownAdventureState | null,
+): TownAdventureState {
+  return withAdventureTownState(
+    { ...state, combat: null },
+    townPayload(state) ?? fallback?.town,
+  );
+}
+
 export default function AdventurePage() {
   const { user, loading: authLoading } = useAuth();
-  const [game, setGame] = useState<AdventureState | null>(null);
+  const [game, setGame] = useState<TownAdventureState | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [saveStatus, setSaveStatus] = useState('불러오는 중');
   const [activeTab, setActiveTab] = useState<MainTab>('hunt');
@@ -153,25 +220,81 @@ export default function AdventurePage() {
   const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>('all');
   const [selectedClass, setSelectedClass] = useState<CharacterClassId>('vanguard');
   const [characterName, setCharacterName] = useState('');
-  const [selectedEnemyId, setSelectedEnemyId] = useState('field_slime');
-  const [autoHunt, setAutoHunt] = useState(false);
+  const [runeTargetId, setRuneTargetId] = useState<string | null>(null);
+  const [editingSkillSlot, setEditingSkillSlot] = useState<number | null>(null);
+  const [selectedTownService, setSelectedTownService] = useState<TownServiceId | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [offlineSummary, setOfflineSummary] = useState<OfflineProgress | null>(null);
   const [rankings, setRankings] = useState<AdventureRankingEntry[]>([]);
   const [rankingLoading, setRankingLoading] = useState(true);
   const [onlineCount, setOnlineCount] = useState(0);
+  const [resetSyncPending, setResetSyncPending] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const gameRef = useRef<AdventureState | null>(null);
+  const gameRef = useRef<TownAdventureState | null>(null);
+  const saveEpochRef = useRef(0);
+  const savingRef = useRef(false);
+  const resetPendingRef = useRef(false);
+  const resetGenerationRef = useRef(0);
+  const resetGenerationUidRef = useRef<string | null>(null);
+  const hydratedUidRef = useRef<string | null>(null);
+  const currentUserUidRef = useRef<string | null>(user?.uid ?? null);
+  const resetOperationRef = useRef(0);
+  const subscribedAdventureRef = useRef<{
+    uid: string;
+    state: TownAdventureState | null;
+    generation: number;
+  } | null>(null);
+  const pendingSaveRef = useRef<{ user: AdventureUser; state: TownAdventureState; epoch: number } | null>(null);
+  const activeSaveRef = useRef<Promise<void>>(Promise.resolve());
 
   const uid = user?.uid ?? 'guest';
   const localSaveKey = `${SAVE_KEY_PREFIX}:${uid}`;
-  const gameReady = game !== null;
-  const currentRegionId = game?.currentRegionId;
+  currentUserUidRef.current = user?.uid ?? null;
 
   const showNotice = useCallback((text: string) => {
     setNotice(text);
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
     noticeTimer.current = setTimeout(() => setNotice(null), 2600);
+  }, []);
+
+  const adoptResetGeneration = useCallback((userId: string, generation: number) => {
+    if (resetGenerationUidRef.current !== userId) {
+      resetGenerationUidRef.current = userId;
+      resetGenerationRef.current = generation;
+    } else {
+      resetGenerationRef.current = Math.max(resetGenerationRef.current, generation);
+    }
+    return resetGenerationRef.current;
+  }, []);
+
+  const queueAdventureSave = useCallback((saveUser: AdventureUser, state: TownAdventureState) => {
+    const epoch = saveEpochRef.current;
+    pendingSaveRef.current = { user: saveUser, state, epoch };
+    if (savingRef.current) return;
+
+    savingRef.current = true;
+    const drain = async () => {
+      while (pendingSaveRef.current) {
+        const pending = pendingSaveRef.current;
+        pendingSaveRef.current = null;
+        try {
+          await saveAdventureStateAndRanking(pending.user, pending.state);
+          if (
+            pending.epoch === saveEpochRef.current
+            && !pendingSaveRef.current
+            && gameRef.current?.updatedAt === pending.state.updatedAt
+          ) setSaveStatus('저장됨');
+        } catch {
+          if (
+            pending.epoch === saveEpochRef.current
+            && !pendingSaveRef.current
+            && gameRef.current?.updatedAt === pending.state.updatedAt
+          ) setSaveStatus('로컬 저장됨');
+        }
+      }
+      savingRef.current = false;
+    };
+    const operation = drain();
+    activeSaveRef.current = operation;
   }, []);
 
   useEffect(() => () => {
@@ -187,60 +310,98 @@ export default function AdventurePage() {
     let cancelled = false;
 
     const loadSave = async () => {
+      const loadingUid = user?.uid ?? null;
+      if (hydratedUidRef.current !== loadingUid) {
+        resetOperationRef.current += 1;
+        resetPendingRef.current = false;
+        setResetSyncPending(false);
+        saveEpochRef.current += 1;
+        pendingSaveRef.current = null;
+      }
+      hydratedUidRef.current = null;
       setHydrated(false);
       setSaveStatus('불러오는 중');
-      let candidate: AdventureState | null = null;
-      let localCandidate: AdventureState | null = null;
+      let candidate: TownAdventureState | null = null;
+      let localCandidate: TownAdventureState | null = null;
 
       if (user) {
         try {
           const localRaw = window.localStorage.getItem(localSaveKey);
-          if (localRaw) localCandidate = sanitizeAdventureState(JSON.parse(localRaw));
+          if (localRaw) {
+            const parsed = JSON.parse(localRaw) as unknown;
+            localCandidate = withAdventureTownState(sanitizeAdventureState(parsed), townPayload(parsed));
+          }
         } catch {
           window.localStorage.removeItem(localSaveKey);
         }
         try {
-          const remote = await loadAdventureState(user.uid);
-          candidate = remote ?? localCandidate;
+          const [remote, resetGeneration] = await Promise.all([
+            loadAdventureState(user.uid),
+            loadAdventureGeneration(user.uid),
+          ]);
+          if (cancelled) return;
+          const subscribed = subscribedAdventureRef.current;
+          const userSubscription = subscribed?.uid === user.uid ? subscribed : null;
+          const authoritativeGeneration = adoptResetGeneration(
+            user.uid,
+            Math.max(resetGeneration, userSubscription?.generation ?? 0),
+          );
+          if (localCandidate && localCandidate.resetGeneration !== authoritativeGeneration) localCandidate = null;
+          const fetchedRemote = remote?.resetGeneration === authoritativeGeneration ? remote : null;
+          const subscribedRemote = userSubscription?.state?.resetGeneration === authoritativeGeneration
+            ? userSubscription.state
+            : null;
+          const validRemote = subscribedRemote && (!fetchedRemote || subscribedRemote.updatedAt > fetchedRemote.updatedAt)
+            ? subscribedRemote
+            : fetchedRemote;
+          candidate = localCandidate && (!validRemote || localCandidate.updatedAt > validRemote.updatedAt)
+            ? localCandidate
+            : validRemote ?? localCandidate;
         } catch {
-          candidate = localCandidate;
+          const subscribed = subscribedAdventureRef.current;
+          const userSubscription = subscribed?.uid === user.uid ? subscribed : null;
+          if (userSubscription) {
+            const authoritativeGeneration = adoptResetGeneration(user.uid, userSubscription.generation);
+            if (localCandidate?.resetGeneration !== authoritativeGeneration) localCandidate = null;
+            const subscribedRemote = userSubscription.state?.resetGeneration === authoritativeGeneration
+              ? userSubscription.state
+              : null;
+            candidate = localCandidate && (!subscribedRemote || localCandidate.updatedAt > subscribedRemote.updatedAt)
+              ? localCandidate
+              : subscribedRemote ?? localCandidate;
+          } else {
+            if (
+              resetGenerationUidRef.current === user.uid
+              && localCandidate?.resetGeneration !== resetGenerationRef.current
+            ) localCandidate = null;
+            candidate = localCandidate;
+          }
           setSaveStatus('로컬 저장');
         }
       }
 
       if (cancelled) return;
       if (candidate) {
-        const offline = applyOfflineProgress(candidate);
-        setGame(offline.state);
-        if (offline.offlineProgress && offline.offlineProgress.estimatedKills > 0) {
-          setOfflineSummary(offline.offlineProgress);
-        }
+        setGame(normalizeTownAdventureState(candidate));
       } else {
         setGame(null);
         setCharacterName(user?.displayName?.slice(0, 16) ?? '');
       }
       setHydrated(true);
+      hydratedUidRef.current = user?.uid ?? null;
       setSaveStatus(user ? '클라우드 연결' : '로컬 저장');
     };
 
     loadSave();
     return () => { cancelled = true; };
-  }, [authLoading, localSaveKey, user]);
+  }, [adoptResetGeneration, authLoading, localSaveKey, user]);
 
   useEffect(() => {
-    if (!hydrated || !game || !user) return;
+    if (!hydrated || !game || !user || hydratedUidRef.current !== user.uid) return;
     window.localStorage.setItem(localSaveKey, JSON.stringify(game));
     setSaveStatus('저장 중');
-    const timer = setTimeout(async () => {
-      try {
-        await saveAdventureStateAndRanking(user, game);
-        setSaveStatus('저장됨');
-      } catch {
-        setSaveStatus('로컬 저장됨');
-      }
-    }, 450);
-    return () => clearTimeout(timer);
-  }, [game, hydrated, localSaveKey, user]);
+    queueAdventureSave(user, game);
+  }, [game, hydrated, localSaveKey, queueAdventureSave, user]);
 
   useEffect(() => {
     if (!user) {
@@ -256,9 +417,29 @@ export default function AdventurePage() {
     });
     const stopOnlineCount = subscribeAdventureOnlineCount(setOnlineCount);
     const stopPresence = startAdventurePresence(user);
-    const stopState = subscribeAdventureState(user.uid, (remoteState) => {
+    const stopState = subscribeAdventureState(user.uid, (remoteState, resetGeneration) => {
+      const adoptedGeneration = adoptResetGeneration(user.uid, resetGeneration);
+      if (resetGeneration < adoptedGeneration) return;
+      subscribedAdventureRef.current = {
+        uid: user.uid,
+        state: remoteState,
+        generation: resetGeneration,
+      };
       const current = gameRef.current;
-      if (remoteState && current && remoteState.updatedAt > current.updatedAt) setGame(remoteState);
+      if (current && current.resetGeneration !== resetGeneration) {
+        saveEpochRef.current += 1;
+        pendingSaveRef.current = null;
+        window.localStorage.removeItem(`${SAVE_KEY_PREFIX}:${user.uid}`);
+        gameRef.current = null;
+        setGame(null);
+        return;
+      }
+      if (resetPendingRef.current) return;
+      if (
+        remoteState
+        && remoteState.resetGeneration === resetGeneration
+        && (!current || remoteState.updatedAt > current.updatedAt)
+      ) setGame(normalizeTownAdventureState(remoteState, current));
     });
     return () => {
       stopRanking();
@@ -266,66 +447,135 @@ export default function AdventurePage() {
       stopPresence();
       stopState();
     };
-  }, [user]);
-
-  useEffect(() => {
-    if (!currentRegionId) return;
-    const region = REGION_DEFINITIONS[currentRegionId];
-    const currentEnemy = ENEMY_DEFINITIONS[selectedEnemyId];
-    if (!currentEnemy || currentEnemy.regionId !== region.id) setSelectedEnemyId(region.enemyIds[0]);
-  }, [currentRegionId, selectedEnemyId]);
+  }, [adoptResetGeneration, user]);
 
   const applyResult = useCallback((result: AdventureResult) => {
-    setGame(result.state);
+    setGame((current) => normalizeTownAdventureState(result.state, current));
     if (!result.ok && result.message) showNotice(result.message);
   }, [showNotice]);
 
-  useEffect(() => {
-    if (!autoHunt || !gameReady) return;
-    const timer = setInterval(() => {
-      setGame((current) => {
-        if (!current) return current;
-        if (!current.combat) {
-          const started = startEncounter(current, { enemyId: selectedEnemyId, boss: ENEMY_DEFINITIONS[selectedEnemyId]?.boss });
-          return started.ok ? started.state : current;
-        }
-
-        const stats = deriveStats(current);
-        let action: CombatAction = 'attack';
-        if (current.hp / stats.maxHp < 0.32 && current.potions > 0) action = 'potion';
-        else if (current.level >= CLASS_DEFINITIONS[current.classId].skills.skill2.unlockLevel && current.skillRanks.skill2 > 0 && current.combat.cooldowns.skill2 === 0) action = 'skill2';
-        else if (current.combat.cooldowns.skill1 === 0) action = 'skill1';
-        const result = combatAction(current, action);
-        return result.state;
+  const settleArenaKill = useCallback((event: ArenaKillEvent) => {
+    setGame((current) => {
+      if (!current || current.town.location !== 'wilderness') return current;
+      const result = resolveWildernessArenaKill(current, event.enemyId, {
+        runId: event.runId,
+        checkpoint: event.checkpoint,
+        wave: event.wave,
+        totalWaves: event.totalWaves,
+        damageTaken: event.damageTaken,
+        damageDealt: event.damageDealt,
+        remainingHp: event.remainingHp,
+        elite: event.elite,
+        affixes: event.affixes,
+        continuous: true,
+        expeditionComplete: event.expeditionComplete,
       });
-    }, 820);
-    return () => clearInterval(timer);
-  }, [autoHunt, gameReady, selectedEnemyId]);
+      if (!result.ok) {
+        if (result.message) queueMicrotask(() => showNotice(result.message!));
+        return current;
+      }
+      return normalizeTownAdventureState(result.state, current);
+    });
+  }, [showNotice]);
+
+  const settleArenaDefeat = useCallback((event: ArenaDefeatEvent) => {
+    setGame((current) => {
+      if (!current || current.town.location !== 'wilderness') return current;
+      const result = resolveWildernessArenaDefeat(current, {
+        runId: event.runId,
+        checkpoint: event.checkpoint,
+        wave: event.wave,
+        totalWaves: event.totalWaves,
+        damageTaken: event.damageTaken,
+        damageDealt: event.damageDealt,
+      });
+      if (!result.ok) {
+        if (result.message) queueMicrotask(() => showNotice(result.message!));
+        return current;
+      }
+      return normalizeTownAdventureState(result.state, current);
+    });
+  }, [showNotice]);
 
   const createCharacter = () => {
+    if (resetSyncPending) {
+      showNotice('Firebase 초기화 동기화를 기다리고 있습니다.');
+      return;
+    }
     const trimmed = characterName.trim();
     if (!trimmed) {
       showNotice('모험가 이름을 입력해 주세요.');
       return;
     }
-    setGame(createInitialState(selectedClass, trimmed));
+    setGame(withAdventureTownState({
+      ...createInitialState(selectedClass, trimmed),
+      resetGeneration: resetGenerationRef.current,
+    }));
     setHydrated(true);
   };
 
   const resetCharacter = async () => {
     if (!window.confirm('현재 캐릭터의 레벨, 장비, 도감 기록을 모두 삭제할까요?')) return;
-    setAutoHunt(false);
-    if (user) {
+    const resetUid = user?.uid ?? null;
+    const resetOperation = resetOperationRef.current + 1;
+    resetOperationRef.current = resetOperation;
+    const isCurrentReset = () => (
+      resetOperationRef.current === resetOperation
+      && currentUserUidRef.current === resetUid
+    );
+    setSelectedTownService(null);
+    saveEpochRef.current += 1;
+    pendingSaveRef.current = null;
+    resetPendingRef.current = true;
+    setResetSyncPending(true);
+    const previousGame = gameRef.current;
+    gameRef.current = null;
+    setGame(null);
+    await Promise.race([
+      activeSaveRef.current.catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+    ]);
+    if (resetUid) {
+      const slowResetNotice = window.setTimeout(() => {
+        if (isCurrentReset()) showNotice('Firebase 초기화 동기화를 기다리고 있습니다.');
+      }, 3_000);
       try {
-        await resetAdventureStateAndRanking(user.uid);
+        const generation = await resetAdventureStateAndRanking(resetUid);
+        if (!isCurrentReset()) return;
+        adoptResetGeneration(resetUid, generation);
       } catch {
-        showNotice('Firebase 캐릭터 초기화에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+        if (!isCurrentReset()) return;
+        let currentGeneration = resetGenerationRef.current;
+        try {
+          currentGeneration = adoptResetGeneration(resetUid, await loadAdventureGeneration(resetUid));
+        } catch {
+          // Keep the latest generation observed by the live subscription.
+        }
+        resetPendingRef.current = false;
+        setResetSyncPending(false);
+        if (previousGame?.resetGeneration === currentGeneration) {
+          gameRef.current = previousGame;
+          setGame(previousGame);
+          showNotice('Firebase 캐릭터 초기화에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+        } else {
+          window.localStorage.removeItem(localSaveKey);
+          showNotice('다른 화면에서 완료된 초기화를 반영했습니다.');
+        }
         return;
+      } finally {
+        window.clearTimeout(slowResetNotice);
       }
+    } else {
+      if (!isCurrentReset()) return;
+      resetGenerationRef.current += 1;
     }
+    if (!isCurrentReset()) return;
     window.localStorage.removeItem(localSaveKey);
+    gameRef.current = null;
     setGame(null);
     setCharacterName(user?.displayName?.slice(0, 16) ?? '');
+    resetPendingRef.current = false;
+    setResetSyncPending(false);
   };
 
   if (authLoading || !hydrated) {
@@ -362,7 +612,7 @@ export default function AdventurePage() {
         <section className={styles.creationContent} aria-labelledby="creation-title">
           <p className={styles.creationEyebrow}>대목 모험가 길드</p>
           <h1 id="creation-title" className={styles.creationTitle}>오래 키울 첫 캐릭터를 선택하세요</h1>
-          <p className={styles.creationCopy}>사냥과 오프라인 활동으로 레벨과 직업 숙련도를 쌓고, 발견한 장비는 {formatNumber(TOTAL_ITEM_VARIETIES)}종 도감에 영구 기록됩니다.</p>
+          <p className={styles.creationCopy}>필드 탐험과 전투로 레벨과 직업 숙련도를 쌓고, 발견한 장비는 {formatNumber(TOTAL_ITEM_VARIETIES)}종 도감에 영구 기록됩니다.</p>
           <label className={styles.nameField}>
             <span className={styles.nameLabel}>모험가 이름</span>
             <input className={styles.nameInput} value={characterName} maxLength={16} placeholder="이름을 입력하세요" onChange={(event) => setCharacterName(event.target.value)} />
@@ -383,7 +633,7 @@ export default function AdventurePage() {
           </div>
           <div className={styles.creationFooter}>
             <p className={styles.creationNote}>직업은 성장 방식과 전투 기술이 다릅니다. 진행 상황은 이 브라우저와 로그인 계정에 자동 저장됩니다.</p>
-            <button className={styles.primaryButton} onClick={createCharacter}><Swords size={16} /> 모험 시작</button>
+            <button className={styles.primaryButton} onClick={createCharacter} disabled={resetSyncPending}><Swords size={16} /> 모험 시작</button>
           </div>
         </section>
         {notice && <div className={styles.notice}>{notice}</div>}
@@ -392,144 +642,361 @@ export default function AdventurePage() {
   }
 
   const derived = deriveStats(game);
+  const combatModifiers = resolveAdventureCombatModifiers(game, { hpRatio: 1 });
+  const activePowerNames = [
+    ...combatModifiers.uniqueItems.map((id) => UNIQUE_ITEM_DEFINITIONS[id].name),
+    ...combatModifiers.activeRuneWords.map((id) => RUNE_WORD_BY_ID[id].name),
+    ...combatModifiers.activeSetBonuses.map(({ setId, pieces }) => `${SET_ITEM_DEFINITIONS[setId].name} ${pieces}세트`),
+  ];
   const levelProgress = getLevelProgress(game);
   const masteryProgress = getMasteryProgress(game);
   const classDefinition = CLASS_DEFINITIONS[game.classId];
   const region = REGION_DEFINITIONS[game.currentRegionId];
   const bossProgress = getBossProgress(game);
-  const selectedEnemy = ENEMY_DEFINITIONS[selectedEnemyId] ?? ENEMY_DEFINITIONS[region.enemyIds[0]];
   const questProgress = getAllQuestProgress(game);
   const claimableQuests = questProgress.filter((quest) => quest.completed && !quest.claimed).length;
-  const restCost = getRestCost(game);
   const nextRegion = REGION_IDS.map((id) => REGION_DEFINITIONS[id]).find((candidate) => candidate.unlockLevel > game.level);
   const myRankIndex = user ? rankings.findIndex((entry) => entry.uid === user.uid) : -1;
   const myRank = myRankIndex >= 0 ? myRankIndex + 1 : null;
-  const performAction = (action: CombatAction) => applyResult(combatAction(game, action));
-
-  const beginEncounter = (automatic: boolean) => {
-    const result = startEncounter(game, { enemyId: selectedEnemy.id, boss: selectedEnemy.boss });
+  const updateSkillLoadout = (index: number, skill: SkillSlot | null) => {
+    const result = setSkillLoadoutSlot(game, index, skill);
     applyResult(result);
-    if (result.ok) setAutoHunt(automatic);
+    if (result.ok) setEditingSkillSlot(null);
   };
 
-  const travel = (regionId: RegionId) => {
-    if (regionId === game.currentRegionId) return;
-    setAutoHunt(false);
-    const result = changeRegion(game, regionId);
-    applyResult(result);
-    if (result.ok) setSelectedEnemyId(REGION_DEFINITIONS[regionId].enemyIds[0]);
+  const renderSkillLoadout = () => {
+    const availableSkills = SKILL_SLOTS.filter((slot) => (
+      game.level >= classDefinition.skills[slot].unlockLevel
+      && game.skillRanks[slot] > 0
+    ));
+    const activeCount = game.skillLoadout.filter(Boolean).length;
+    return (
+      <section className={styles.skillLoadout} aria-label="전투 기술 슬롯">
+        <header className={styles.skillLoadoutHeader}>
+          <span><Zap size={13} /> 전투 기술</span>
+          <small>{activeCount}/6</small>
+        </header>
+        <div className={styles.skillLoadoutSlots}>
+          {Array.from({ length: 6 }, (_, index) => {
+            const skillSlot = game.skillLoadout[index] ?? null;
+            const skill = skillSlot ? classDefinition.skills[skillSlot] : null;
+            return (
+              <button
+                key={index}
+                type="button"
+                className={`${styles.skillLoadoutSlot} ${editingSkillSlot === index ? styles.skillLoadoutSlotEditing : ''}`}
+                aria-pressed={editingSkillSlot === index}
+                title={skill ? `${skill.name} 슬롯 변경` : `전투 기술 슬롯 ${index + 1} 선택`}
+                onClick={() => setEditingSkillSlot((current) => current === index ? null : index)}
+              >
+                <span className={styles.skillLoadoutKey}>{ARENA_SKILL_KEY_LABELS[index]}</span>
+                <Zap size={14} />
+                <strong>{skill?.name ?? '빈 슬롯'}</strong>
+                <small>{skillSlot ? `${game.skillRanks[skillSlot]}단계` : '선택'}</small>
+              </button>
+            );
+          })}
+        </div>
+        {editingSkillSlot !== null && (
+          <div className={styles.skillLoadoutPicker} role="group" aria-label={`${editingSkillSlot + 1}번 슬롯 기술 선택`}>
+            {availableSkills.map((slot) => {
+              const skill = classDefinition.skills[slot];
+              const equippedAt = game.skillLoadout.indexOf(slot);
+              return (
+                <button
+                  key={slot}
+                  type="button"
+                  className={styles.skillLoadoutChoice}
+                  aria-pressed={equippedAt === editingSkillSlot}
+                  onClick={() => equippedAt === editingSkillSlot ? setEditingSkillSlot(null) : updateSkillLoadout(editingSkillSlot, slot)}
+                >
+                  {equippedAt === editingSkillSlot ? <Check size={12} /> : <Zap size={12} />}
+                  <span>{skill.name}</span>
+                  <small>{equippedAt >= 0 ? `${equippedAt + 1}번` : `${game.skillRanks[slot]}단계`}</small>
+                </button>
+              );
+            })}
+            {game.skillLoadout[editingSkillSlot] && (
+              <button
+                type="button"
+                className={`${styles.skillLoadoutChoice} ${styles.skillLoadoutRemove}`}
+                disabled={activeCount <= 1}
+                onClick={() => updateSkillLoadout(editingSkillSlot, null)}
+              >
+                <RotateCcw size={12} /> 해제
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+    );
   };
 
   const renderItemRow = (item: EquipmentInstance, equipped = false) => {
     const display = getEquipmentDisplay(item);
     const enhanceCost = getEnhancementCost(item);
+    const unique = display.uniqueId ? UNIQUE_ITEM_DEFINITIONS[display.uniqueId] : null;
+    const set = display.setId ? SET_ITEM_DEFINITIONS[display.setId] : null;
+    const runeWord = display.runeWordId ? RUNE_WORD_BY_ID[display.runeWordId] : null;
+    const specialEffects = [
+      ...(unique?.effects.map((effect) => `${effect.name} · ${describeSpecialEffect(effect)}`) ?? []),
+      ...(set?.bonuses.flatMap((bonus) => bonus.effects.map((effect) => `${bonus.pieces}세트 · ${effect.name} · ${describeSpecialEffect(effect)}`)) ?? []),
+      ...(runeWord?.effects.map((effect) => `${effect.name} · ${describeSpecialEffect(effect)}`) ?? []),
+    ];
+    const hasOpenSocket = item.socketCount > item.socketedRunes.length;
     return (
       <div className={styles.inventoryRow} key={item.instanceId}>
         <div className={styles.itemTop}>
-          <div>
+          <div className={styles.itemIdentity}>
             <p className={`${styles.itemName} ${RARITY_CLASS[item.rarity]}`}><AdventureIcon name={display.icon} size={14} /> {display.name} {item.enhance > 0 && `+${item.enhance}`}</p>
-            <p className={styles.itemStats}>Lv.{item.level} · {display.rarityLabel} {display.qualityLabel} · {itemStats(item)}</p>
+            <p className={styles.itemStats}>아이템 Lv.{item.itemLevel} · {display.tierLabel} · {display.qualityLabel} · {itemStats(item)}</p>
           </div>
           <span className={styles.price}>{formatNumber(display.value)} G</span>
         </div>
+        <p className={styles.itemDescription}>{display.description}</p>
+        {(unique || set || runeWord) && (
+          <div className={styles.itemMarkers} aria-label="특수 장비 속성">
+            {unique && <span className={styles.itemMarker} data-kind="unique">유니크 · {unique.name}</span>}
+            {set && <span className={styles.itemMarker} data-kind="set">세트 · {set.name}</span>}
+            {runeWord && <span className={styles.itemMarker} data-kind="runeword">룬어 · {runeWord.name}</span>}
+          </div>
+        )}
+        {specialEffects.length > 0 && (
+          <div className={styles.itemEffectList} aria-label="특수 효과">
+            {specialEffects.map((effect, index) => <span className={styles.itemEffect} key={`${effect}-${index}`}>{effect}</span>)}
+          </div>
+        )}
+        <div className={styles.socketSequence} aria-label={`${display.name} 룬 소켓`}>
+          <span className={styles.socketLabel}><Gem size={12} /> 룬 소켓</span>
+          {item.socketCount > 0 ? Array.from({ length: item.socketCount }, (_, index) => {
+            const runeId = item.socketedRunes[index];
+            return (
+              <span className={`${styles.socketSlot} ${runeId ? styles.socketSlotFilled : ''}`} key={`${item.instanceId}-socket-${index}`}>
+                <small>{index + 1}</small>
+                {runeId ? RUNE_DEFINITIONS[runeId].name : '빈 소켓'}
+              </span>
+            );
+          }) : <span className={styles.socketEmpty}>없음</span>}
+        </div>
         <div className={styles.itemActions}>
-          {!equipped && <button className={styles.smallButton} disabled={Boolean(game.combat)} onClick={() => applyResult(equipItem(game, item.instanceId))}><Check size={12} /> 장착</button>}
-          <button className={styles.smallButton} disabled={Boolean(game.combat) || item.enhance >= MAX_ENHANCE || game.gold < enhanceCost} onClick={() => applyResult(enhanceGear(game, item.instanceId))}><Hammer size={12} /> +{item.enhance + 1} 강화 {formatNumber(enhanceCost)}G</button>
-          {!equipped && <button className={styles.smallButton} disabled={Boolean(game.combat)} onClick={() => applyResult(sellItem(game, item.instanceId))}><Trash2 size={12} /> 판매</button>}
+          {!equipped && <button className={styles.smallButton} onClick={() => applyResult(equipItem(game, item.instanceId))}><Check size={12} /> 장착</button>}
+          <button className={styles.smallButton} disabled={item.enhance >= MAX_ENHANCE || game.gold < enhanceCost} onClick={() => applyResult(enhanceGear(game, item.instanceId))}><Hammer size={12} /> +{item.enhance + 1} 강화 {formatNumber(enhanceCost)}G</button>
+          {hasOpenSocket && <button className={styles.smallButton} aria-pressed={runeTargetId === item.instanceId} onClick={() => setRuneTargetId((current) => current === item.instanceId ? null : item.instanceId)}><Gem size={12} /> 룬 장착</button>}
+          {!equipped && <button className={styles.smallButton} onClick={() => {
+            const result = sellItem(game, item.instanceId);
+            applyResult(result);
+            if (result.ok && runeTargetId === item.instanceId) setRuneTargetId(null);
+          }}><Trash2 size={12} /> 판매</button>}
         </div>
       </div>
     );
   };
 
   const renderHunt = () => {
-    if (game.combat) {
-      const enemy = game.combat.enemy;
-      const enemyDefinition = ENEMY_DEFINITIONS[enemy.definitionId];
+    const enemyIds = [...region.enemyIds, region.bossId];
+    const latestLoot = game.inventory.at(-1);
+    const latestLootDisplay = latestLoot ? getEquipmentDisplay(latestLoot) : null;
+
+    if (game.town.location === 'town') {
+      const townName = `${region.name} 거점`;
       return (
-        <section className={`${styles.panel} ${styles.battlePanel}`}>
-          <div className={styles.autoStrip}>
-            <span className={styles.autoState}><span className={`${styles.autoDot} ${autoHunt ? styles.autoDotOn : ''}`} />{autoHunt ? '자동 사냥 진행 중' : '수동 전투'}</span>
-            <button className={styles.smallButton} onClick={() => setAutoHunt((value) => !value)}>{autoHunt ? <Pause size={12} /> : <Play size={12} />}{autoHunt ? '자동 중지' : '자동 전환'}</button>
-          </div>
-          <div className={styles.battleStage}>
-            <div className={styles.combatant}>
-              <div className={styles.combatantIcon}><AdventureIcon name={classDefinition.icon} size={44} /></div>
-              <p className={styles.combatantName}>{game.name}</p>
-              <p className={styles.combatantLevel}>Lv.{game.level} {classDefinition.name}</p>
-              <div className={styles.battleHp}><Meter ratio={game.hp / derived.maxHp} variant="hp" label="플레이어 체력" /></div>
-              <p className={styles.battleHpText}>{formatNumber(game.hp)} / {formatNumber(derived.maxHp)}</p>
+        <section className={styles.townExperience} data-testid="adventure-town">
+          <header className={styles.townHeader}>
+            <div>
+              <p className={styles.arenaEyebrow}>안전 지역</p>
+              <h2 className={styles.hackSlashTitle}>{townName}</h2>
+              <p className={styles.hackSlashRegionCopy}>황혼의 성채에는 대장간 불꽃과 귀환한 모험가들의 발걸음이 이어집니다.</p>
             </div>
-            <div className={styles.versus}>VS</div>
-            <div className={styles.combatant}>
-              <div className={styles.combatantIcon}><AdventureIcon name={enemyDefinition?.icon ?? 'swords'} size={44} /></div>
-              <p className={styles.combatantName}>{enemy.name}</p>
-              <p className={styles.combatantLevel}>Lv.{enemy.level} {enemy.boss ? '지역 우두머리' : '야생 몬스터'}</p>
-              <div className={styles.battleHp}><Meter ratio={enemy.hp / enemy.maxHp} variant="hp" label="적 체력" /></div>
-              <p className={styles.battleHpText}>{formatNumber(enemy.hp)} / {formatNumber(enemy.maxHp)}</p>
+            <div className={styles.townStatus}>
+              <span>생명력 <strong>{formatNumber(game.hp)}/{formatNumber(derived.maxHp)}</strong></span>
+              <span>골드 <strong>{formatNumber(game.gold)}G</strong></span>
+              <button type="button" className={styles.returnTownButton} onClick={() => setSelectedTownService('waypoint')}>
+                <DoorOpen size={15} /> 성문
+              </button>
             </div>
-          </div>
-          <div className={styles.combatActions}>
-            <button className={styles.actionButton} disabled={autoHunt} onClick={() => performAction('attack')}><Swords size={17} />기본 공격<span className={styles.actionSub}>안정적인 피해</span></button>
-            {(['skill1', 'skill2'] as SkillSlot[]).map((slot) => {
-              const skill = classDefinition.skills[slot];
-              const locked = game.level < skill.unlockLevel || game.skillRanks[slot] <= 0;
-              const cooldown = game.combat?.cooldowns[slot] ?? 0;
-              return <button key={slot} className={styles.actionButton} disabled={autoHunt || locked || cooldown > 0} onClick={() => performAction(slot)}><Zap size={17} />{skill.name}<span className={styles.actionSub}>{game.level < skill.unlockLevel ? `Lv.${skill.unlockLevel} 해금` : game.skillRanks[slot] <= 0 ? '미습득' : cooldown > 0 ? `${cooldown}턴 대기` : `${game.skillRanks[slot]}단계`}</span></button>;
-            })}
-            <button className={styles.actionButton} disabled={autoHunt} onClick={() => performAction('guard')}><ShieldCheck size={17} />방어<span className={styles.actionSub}>피해 감소</span></button>
-            <button className={styles.actionButton} disabled={autoHunt || game.potions < 1} onClick={() => performAction('potion')}><FlaskConical size={17} />물약<span className={styles.actionSub}>{game.potions}개 보유</span></button>
-            <button className={styles.actionButton} disabled={autoHunt} onClick={() => performAction('flee')}><Footprints size={17} />후퇴<span className={styles.actionSub}>전투 종료</span></button>
-          </div>
+          </header>
+          <AdventureTownHub3D
+            classId={game.classId}
+            playerName={game.name}
+            townName={townName}
+            weaponEquipped={Boolean(game.equipment.weapon)}
+            onSelectService={setSelectedTownService}
+          />
+          <AdventureTownServicePanel
+            game={game}
+            service={selectedTownService}
+            onApply={applyResult}
+            onClose={() => setSelectedTownService(null)}
+          />
         </section>
       );
     }
 
-    const enemyIds = [...region.enemyIds, region.bossId];
+    const equippedWeapon = game.equipment.weapon;
+    const activeEnemyIds = bossProgress.available ? enemyIds : region.enemyIds;
+    const arenaSkills = game.skillLoadout.flatMap((slot, index) => {
+        if (!slot || game.level < classDefinition.skills[slot].unlockLevel || game.skillRanks[slot] <= 0) return [];
+        const skill = classDefinition.skills[slot];
+        return [{
+          id: skill.id,
+          name: skill.name,
+          ...skill.arena,
+          damageMultiplier: skill.arena.damageMultiplier
+            * (1 + Math.max(0, game.skillRanks[slot] - 1) * 0.08)
+            * combatModifiers.skillDamageMultipliers[slot],
+          range: skill.arena.range * combatModifiers.skillRangeMultipliers[slot],
+          cooldown: skill.cooldown * combatModifiers.skillCooldownMultipliers[slot],
+          hotkey: ARENA_SKILL_HOTKEYS[index],
+        }];
+      });
     return (
-      <section className={`${styles.panel} ${styles.huntPanel}`}>
-        <div className={styles.panelHeader}><h2 className={styles.panelTitle}><Target size={14} /> 사냥 대상</h2><span className={styles.panelMeta}>처치 {formatNumber(game.statistics.totalKills)}</span></div>
-        <div className={styles.enemyList}>
-          {enemyIds.map((enemyId) => {
-            const enemy = ENEMY_DEFINITIONS[enemyId];
-            const bossLocked = enemy.boss && !bossProgress.available;
-            return (
-              <button key={enemy.id} className={`${styles.enemyRow} ${selectedEnemy.id === enemy.id ? styles.enemySelected : ''}`} onClick={() => setSelectedEnemyId(enemy.id)} aria-pressed={selectedEnemy.id === enemy.id}>
-                <span className={styles.enemyIcon}><AdventureIcon name={enemy.icon} size={22} /></span>
-                <span>
-                  <span className={`${styles.enemyName} ${enemy.boss ? styles.bossText : ''}`}>{enemy.name} · Lv.{enemy.level}</span>
-                  <span className={styles.enemyDetail}>{enemy.boss && bossLocked ? `토벌 자격 ${bossProgress.current}/${bossProgress.required}` : enemy.description}</span>
-                </span>
-                <span className={styles.enemyReward}>EXP {formatNumber(enemy.exp)}<br />{formatNumber(enemy.goldMin)}-{formatNumber(enemy.goldMax)} G</span>
-              </button>
-            );
-          })}
-        </div>
-        <div className={styles.huntFooter}>
-          <p className={styles.huntHint}>{selectedEnemy.boss && !bossProgress.available ? `일반 몬스터를 ${bossProgress.required - bossProgress.current}마리 더 처치하면 우두머리가 열립니다.` : `${selectedEnemy.name}을 사냥해 경험치, 숙련도와 절차 생성 장비를 획득합니다.`}</p>
-          <div className={styles.buttonGroup}>
-            <button className={styles.ghostButton} disabled={selectedEnemy.boss && !bossProgress.available} onClick={() => beginEncounter(false)}><Swords size={14} /> 전투 시작</button>
-            <button className={styles.primaryButton} disabled={selectedEnemy.boss && !bossProgress.available} onClick={() => beginEncounter(true)}><Play size={14} /> 자동 사냥</button>
+      <section className={styles.hackSlashExperience} data-testid="adventure-battlefield">
+        <header className={styles.hackSlashHeader}>
+          <div>
+            <p className={styles.arenaEyebrow}>현재 전장 · Lv.{region.unlockLevel} 이상</p>
+            <h2 className={styles.hackSlashTitle}>{region.name}</h2>
+            <p className={styles.hackSlashRegionCopy}>{region.description}</p>
           </div>
-        </div>
+          <div className={styles.hackSlashMeta}>
+            <span>전투력 <strong>{formatNumber(derived.power)}</strong></span>
+            <span>우두머리 추적 <strong>{bossProgress.current}/{bossProgress.required}</strong></span>
+            <button
+              type="button"
+              className={styles.returnTownButton}
+              onClick={() => {
+                const result = returnToTown(game);
+                applyResult(result);
+                if (result.ok) setSelectedTownService(null);
+              }}
+            >
+              <DoorOpen size={15} /> 마을 귀환
+            </button>
+          </div>
+        </header>
+        {activePowerNames.length > 0 && (
+          <div className={styles.activePowers} aria-label="활성 장비 효과">
+            <Sparkles size={12} />
+            {activePowerNames.map((name) => <span key={name}>{name}</span>)}
+          </div>
+        )}
+        {renderSkillLoadout()}
+        <HackSlashArena
+          classId={game.classId}
+          playerName={game.name}
+          level={game.level}
+          hp={game.hp}
+          maxHp={derived.maxHp}
+          attack={derived.attack}
+          defense={derived.defense}
+          crit={derived.crit}
+          attackSpeed={1}
+          castSpeed={1}
+          moveSpeed={1}
+          combatModifiers={combatModifiers}
+          regionId={region.id}
+          enemyIds={activeEnemyIds}
+          skills={arenaSkills}
+          initialCheckpoint={game.arenaCheckpoint}
+          equippedWeapon={equippedWeapon ? {
+            itemKey: equippedWeapon.itemKey,
+            rarity: equippedWeapon.rarity,
+            classId: game.classId,
+          } : null}
+          onEnemyDefeated={settleArenaKill}
+          onPlayerDefeated={settleArenaDefeat}
+          onRunExited={settleArenaDefeat}
+        />
+        <footer className={styles.hackSlashFooter}>
+          <span>{bossProgress.available ? '지역 우두머리가 필드 어딘가에 출현했습니다.' : `일반 몬스터 ${bossProgress.required - bossProgress.current}마리 처치 시 우두머리의 흔적이 드러납니다.`}</span>
+          {latestLootDisplay && <span className={styles.hackSlashLoot}><AdventureIcon name={latestLootDisplay.icon} size={15} /><strong className={RARITY_CLASS[latestLoot!.rarity]}>{latestLootDisplay.name}</strong></span>}
+        </footer>
       </section>
     );
   };
 
-  const renderEquipment = () => (
-    <div className={styles.equipmentLayout}>
-      <section className={styles.panel}>
-        <div className={styles.sectionIntro}><h2 className={styles.sectionTitle}>착용 장비</h2><p className={styles.sectionCopy}>강화는 실패하지 않으며 +10까지 누적됩니다. 장비 교체 전후 전투력은 즉시 반영됩니다.</p></div>
-        {(Object.keys(game.equipment) as EquipmentSlot[]).map((slot) => {
-          const item = game.equipment[slot];
-          return item ? renderItemRow(item, true) : <div className={styles.inventoryRow} key={slot}><p className={styles.itemName}>{EQUIPMENT_SLOT_LABELS[slot]}</p><p className={styles.itemStats}>장착한 장비가 없습니다.</p></div>;
-        })}
-      </section>
-      <section className={styles.panel}>
-        <div className={styles.panelHeader}><h2 className={styles.panelTitle}><Backpack size={14} /> 가방</h2><span className={styles.panelMeta}>{game.inventory.length}/60</span></div>
-        <div className={styles.scrollBody}>{game.inventory.length ? game.inventory.slice().reverse().map((item) => renderItemRow(item)) : <div className={styles.emptyState}>사냥에서 획득한 장비가 이곳에 보관됩니다.</div>}</div>
-      </section>
-    </div>
-  );
+  const renderEquipment = () => {
+    const equippedItems = Object.values(game.equipment).filter(
+      (item): item is EquipmentInstance => item !== null,
+    );
+    const socketTarget = [...equippedItems, ...game.inventory]
+      .find((item) => item.instanceId === runeTargetId) ?? null;
+    const socketTargetDisplay = socketTarget ? getEquipmentDisplay(socketTarget) : null;
+    const targetIsFull = Boolean(
+      socketTarget && socketTarget.socketedRunes.length >= socketTarget.socketCount,
+    );
+    const totalRunes = RUNE_IDS.reduce((total, runeId) => total + (game.runeInventory[runeId] ?? 0), 0);
+
+    const socketSelectedRune = (runeId: RuneId) => {
+      if (!socketTarget) return;
+      const result = insertRuneIntoItem(game, socketTarget.instanceId, runeId);
+      applyResult(result);
+      if (!result.ok) return;
+      const nextTarget = [
+        ...Object.values(result.state.equipment).filter(
+          (item): item is EquipmentInstance => item !== null,
+        ),
+        ...result.state.inventory,
+      ].find((item) => item.instanceId === socketTarget.instanceId);
+      if (!nextTarget || nextTarget.socketedRunes.length >= nextTarget.socketCount) setRuneTargetId(null);
+    };
+
+    return (
+      <div className={styles.equipmentLayout}>
+        <section className={styles.panel}>
+          <div className={styles.sectionIntro}><h2 className={styles.sectionTitle}>착용 장비</h2><p className={styles.sectionCopy}>강화는 실패하지 않으며 +10까지 누적됩니다. 장비 교체 전후 전투력은 즉시 반영됩니다.</p></div>
+          {(Object.keys(game.equipment) as EquipmentSlot[]).map((slot) => {
+            const item = game.equipment[slot];
+            return item ? renderItemRow(item, true) : <div className={styles.inventoryRow} key={slot}><p className={styles.itemName}>{EQUIPMENT_SLOT_LABELS[slot]}</p><p className={styles.itemStats}>장착한 장비가 없습니다.</p></div>;
+          })}
+        </section>
+        <section className={styles.panel}>
+          <div className={styles.panelHeader}><h2 className={styles.panelTitle}><Backpack size={14} /> 가방</h2><span className={styles.panelMeta}>{game.inventory.length}/60</span></div>
+          <div className={styles.scrollBody}>{game.inventory.length ? game.inventory.slice().reverse().map((item) => renderItemRow(item)) : <div className={styles.emptyState}>사냥에서 획득한 장비가 이곳에 보관됩니다.</div>}</div>
+        </section>
+        <section className={`${styles.panel} ${styles.runeVaultPanel}`}>
+          <div className={styles.panelHeader}><h2 className={styles.panelTitle}><Gem size={14} /> 룬 보관함</h2><span className={styles.panelMeta}>{formatNumber(totalRunes)}개</span></div>
+          <div className={`${styles.runeTarget} ${socketTarget ? styles.runeTargetActive : ''}`}>
+            <span>장착 대상</span>
+            <strong>{socketTargetDisplay?.name ?? '선택 안 됨'}</strong>
+            <small>{socketTarget ? `${socketTarget.socketedRunes.length}/${socketTarget.socketCount} 소켓` : '대상 없음'}</small>
+          </div>
+          <div className={styles.runeInventoryGrid}>
+            {RUNE_IDS.map((runeId) => {
+              const rune = RUNE_DEFINITIONS[runeId];
+              const count = game.runeInventory[runeId] ?? 0;
+              return (
+                <button
+                  className={styles.runeButton}
+                  type="button"
+                  key={runeId}
+                  disabled={!socketTarget || targetIsFull || count < 1 || socketTarget.itemLevel < rune.minItemLevel}
+                  onClick={() => socketSelectedRune(runeId)}
+                  aria-label={`${rune.name} ${count}개${socketTargetDisplay ? `, ${socketTargetDisplay.name}에 장착` : ''}`}
+                >
+                  <span className={styles.runeGlyph}><Gem size={16} /></span>
+                  <span className={styles.runeButtonName}>{rune.name}<small>요구 iLv.{rune.minItemLevel}</small></span>
+                  <span className={styles.runeButtonCount}>{count}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className={styles.runeRecipeHeader}>
+            <strong>룬어 기록</strong>
+            <span>{RUNE_WORD_RECIPES.length}종</span>
+          </div>
+          <div className={styles.runeRecipeGrid}>
+            {RUNE_WORD_RECIPES.map((recipe) => (
+              <div className={styles.runeRecipe} key={recipe.id}>
+                <div><strong>{recipe.name}</strong><span>{recipe.slots.map((slot) => EQUIPMENT_SLOT_LABELS[slot]).join(' · ')}</span></div>
+                <p>{recipe.runes.map((runeId, index) => `${index + 1}. ${RUNE_DEFINITIONS[runeId].name}`).join('  >  ')}</p>
+                <small>{recipe.effects.map((effect) => `${effect.name}: ${describeSpecialEffect(effect)}`).join(' / ')}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    );
+  };
 
   const renderGrowth = () => (
     <div className={styles.growthLayout}>
@@ -538,14 +1005,14 @@ export default function AdventurePage() {
         {(Object.keys(CORE_STAT_LABELS) as CoreStatId[]).map((stat) => (
           <div className={styles.attributeRow} key={stat}>
             <div><p className={styles.attributeLabel}>{CORE_STAT_LABELS[stat]}</p><p className={styles.attributeEffect}>{STAT_DESCRIPTIONS[stat]}</p></div>
-            <div className={styles.attributeControls}><span className={styles.attributeValue}>{game.baseStats[stat]}</span><button className={styles.iconButton} title={`${CORE_STAT_LABELS[stat]} 1 올리기`} disabled={game.statPoints < 1 || Boolean(game.combat)} onClick={() => applyResult(allocateStat(game, stat))}><Plus size={15} /></button></div>
+            <div className={styles.attributeControls}><span className={styles.attributeValue}>{game.baseStats[stat]}</span><button className={styles.iconButton} title={`${CORE_STAT_LABELS[stat]} 1 올리기`} disabled={game.statPoints < 1} onClick={() => applyResult(allocateStat(game, stat))}><Plus size={15} /></button></div>
           </div>
         ))}
       </section>
       <section className={styles.panel}>
         <div className={styles.sectionIntro}><h2 className={styles.sectionTitle}>{classDefinition.name} 기술</h2><p className={styles.sectionCopy}>보유 기술 포인트 {game.skillPoints} · 숙련도가 오를 때마다 기술 포인트를 얻습니다.</p></div>
         <div className={styles.skillList}>
-          {(['skill1', 'skill2'] as SkillSlot[]).map((slot) => {
+          {SKILL_SLOTS.map((slot) => {
             const skill = classDefinition.skills[slot];
             const rank = game.skillRanks[slot];
             const locked = game.level < skill.unlockLevel;
@@ -553,7 +1020,7 @@ export default function AdventurePage() {
             return (
               <div className={styles.skillRow} key={slot}>
                 <div className={styles.skillTop}><div><p className={styles.skillName}><Sparkles size={13} /> {skill.name}</p><p className={styles.skillDesc}>{skill.description}</p></div><span className={styles.slotEnhance}>{locked ? `Lv.${skill.unlockLevel}` : `${rank}/${MAX_SKILL_RANK}`}</span></div>
-                <div className={styles.itemActions}><button className={styles.smallButton} disabled={locked || rank >= MAX_SKILL_RANK || game.skillPoints < cost || Boolean(game.combat)} onClick={() => applyResult(upgradeSkill(game, slot))}><Plus size={12} /> 강화 {cost}P</button></div>
+                <div className={styles.itemActions}><button className={styles.smallButton} disabled={locked || rank >= MAX_SKILL_RANK || game.skillPoints < cost} onClick={() => applyResult(upgradeSkill(game, slot))}><Plus size={12} /> 강화 {cost}P</button></div>
               </div>
             );
           })}
@@ -642,7 +1109,7 @@ export default function AdventurePage() {
     if (sideTab === 'inventory') {
       return game.inventory.length ? <div className={styles.inventoryList}>{game.inventory.slice(-12).reverse().map((item) => {
         const display = getEquipmentDisplay(item);
-        return <div className={styles.inventoryRow} key={item.instanceId}><div className={styles.itemTop}><div><p className={`${styles.itemName} ${RARITY_CLASS[item.rarity]}`}>{display.name}</p><p className={styles.itemStats}>{itemStats(item)}</p></div></div><div className={styles.itemActions}><button className={styles.smallButton} disabled={Boolean(game.combat)} onClick={() => applyResult(equipItem(game, item.instanceId))}><Check size={11} /> 장착</button></div></div>;
+        return <div className={styles.inventoryRow} key={item.instanceId}><div className={styles.itemTop}><div><p className={`${styles.itemName} ${RARITY_CLASS[item.rarity]}`}>{display.name}</p><p className={styles.itemStats}>{itemStats(item)}</p></div></div><div className={styles.itemActions}><button className={styles.smallButton} onClick={() => applyResult(equipItem(game, item.instanceId))}><Check size={11} /> 장착</button></div></div>;
       })}</div> : <div className={styles.emptyState}><PackageOpen size={25} /><br />가방이 비어 있습니다.</div>;
     }
     if (sideTab === 'log') {
@@ -652,38 +1119,44 @@ export default function AdventurePage() {
   };
 
   return (
-    <main className={styles.page}>
+    <main
+      className={styles.page}
+      data-battlefield={activeTab === 'hunt' && game.town.location === 'wilderness' ? 'true' : undefined}
+    >
       <header className={styles.topbar}>
         <div className={styles.topbarInner}>
-          <Link className={styles.brand} href="/rooms"><span className={styles.brandMark}><Swords size={20} /></span><span><h1 className={styles.brandTitle}>대목 모험가 길드</h1><p className={styles.brandSub}>영구 성장형 브라우저 RPG</p></span></Link>
-          <div className={styles.accountSummary}>
+          <Link className={styles.brand} href="/rooms"><span className={styles.brandMark}><Swords size={20} /></span><span><h1 className={styles.brandTitle}>대목 모험가 길드</h1>{activeTab !== 'hunt' && <p className={styles.brandSub}>영구 성장형 브라우저 RPG</p>}</span></Link>
+          {activeTab !== 'hunt' && <div className={styles.accountSummary}>
             <div className={styles.summaryItem}><span className={styles.summaryLabel}>캐릭터</span><span className={styles.summaryValue}>Lv.{game.level} {game.name}</span></div>
             <div className={styles.summaryItem}><span className={styles.summaryLabel}>전투력</span><span className={styles.summaryValue}>{formatNumber(derived.power)}</span></div>
             <div className={styles.summaryItem}><span className={styles.summaryLabel}>보유 골드</span><span className={`${styles.summaryValue} ${styles.summaryValueGold}`}>{formatNumber(game.gold)} G</span></div>
             <div className={styles.summaryItem}><span className={styles.summaryLabel}>장비 도감</span><span className={styles.summaryValue}>{formatNumber(game.discoveredItemKeys.length)} / {formatNumber(TOTAL_ITEM_VARIETIES)}</span></div>
-          </div>
-          <div className={styles.topActions}><span className={styles.saveStatus}>{saveStatus}</span><button className={styles.iconButton} title="캐릭터 초기화" onClick={resetCharacter}><RotateCcw size={15} /></button><Link className={styles.iconButton} href="/rooms" title="로비로 나가기"><LogOut size={16} /></Link></div>
+          </div>}
+          <div className={styles.topActions}><span className={styles.saveStatus}>{saveStatus}</span>{activeTab === 'hunt' && <button className={styles.iconButton} type="button" title="장비 열기" aria-label="장비 열기" onClick={() => setActiveTab('equipment')}><Backpack size={16} /></button>}<button className={styles.iconButton} type="button" title="캐릭터 초기화" aria-label="캐릭터 초기화" onClick={resetCharacter}><RotateCcw size={15} /></button><Link className={styles.iconButton} href="/rooms" title="로비로 나가기" aria-label="로비로 나가기"><LogOut size={16} /></Link></div>
         </div>
       </header>
 
-      <nav className={styles.nav} aria-label="모험 메뉴"><div className={styles.navInner}>
+      {activeTab !== 'hunt' && <nav className={styles.nav} aria-label="모험 메뉴"><div className={styles.navInner}>
         {([
           ['hunt', Map, '사냥터'],
           ['equipment', Backpack, '장비'],
           ['growth', ChartNoAxesColumnIncreasing, '성장'],
           ['collection', Library, '아이템 도감'],
           ['ranking', Trophy, '랭킹'],
-        ] as const).map(([tab, Icon, label]) => <button key={tab} className={`${styles.navButton} ${activeTab === tab ? styles.navButtonActive : ''}`} title={label} onClick={() => setActiveTab(tab)}><Icon size={15} /><span>{label}</span></button>)}
-      </div></nav>
+        ] as const).map(([tab, Icon, label]) => <button key={tab} className={`${styles.navButton} ${activeTab === tab ? styles.navButtonActive : ''}`} title={label} onClick={() => {
+          setActiveTab(tab);
+          if (tab !== 'hunt') setSelectedTownService(null);
+        }}><Icon size={15} /><span>{label}</span></button>)}
+      </div></nav>}
 
-      <div className={styles.mobileSummary} aria-label="캐릭터 요약">
+      {activeTab !== 'hunt' && <div className={styles.mobileSummary} aria-label="캐릭터 요약">
         <div className={styles.mobileSummaryItem}><span className={styles.mobileSummaryLabel}>캐릭터</span><span className={styles.mobileSummaryValue}>Lv.{game.level} {game.name}</span></div>
         <div className={styles.mobileSummaryItem}><span className={styles.mobileSummaryLabel}>전투력</span><span className={styles.mobileSummaryValue}>{formatNumber(derived.power)}</span></div>
         <div className={styles.mobileSummaryItem}><span className={styles.mobileSummaryLabel}>골드</span><span className={`${styles.mobileSummaryValue} ${styles.summaryValueGold}`}>{formatNumber(game.gold)} G</span></div>
-      </div>
+      </div>}
 
-      <div className={styles.shell}>
-        <aside className={styles.leftRail}>
+      <div className={`${styles.shell} ${activeTab === 'hunt' ? styles.shellImmersive : ''}`}>
+        {activeTab !== 'hunt' && <aside className={styles.leftRail}>
           <section className={styles.panel}>
             <div className={styles.characterHead}><div className={styles.portrait}><AdventureIcon name={classDefinition.icon} size={30} /></div><div><p className={styles.characterName}>{game.name}</p><p className={styles.characterClass}>Lv.{game.level} {classDefinition.name}</p><span className={styles.rankBadge}>{rankFor(game.level)}</span></div></div>
             <div className={styles.meterBlock}><div className={styles.meterLabels}><span>체력</span><span>{formatNumber(game.hp)} / {formatNumber(derived.maxHp)}</span></div><Meter ratio={game.hp / derived.maxHp} variant="hp" label="체력" /></div>
@@ -691,34 +1164,26 @@ export default function AdventurePage() {
             <div className={styles.meterBlock}><div className={styles.meterLabels}><span>직업 숙련 {game.mastery.level}</span><span>{formatNumber(masteryProgress.exp)} / {formatNumber(masteryProgress.needed)}</span></div><Meter ratio={masteryProgress.ratio} variant="mastery" label="직업 숙련도" /></div>
             <div className={styles.combatPower}><span className={styles.combatPowerLabel}>종합 전투력</span><strong className={styles.combatPowerValue}>{formatNumber(derived.power)}</strong></div>
             <div className={styles.statGrid}><div className={styles.statCell}><span className={styles.statName}>공격</span><span className={styles.statValue}>{derived.attack}</span></div><div className={styles.statCell}><span className={styles.statName}>방어</span><span className={styles.statValue}>{derived.defense}</span></div><div className={styles.statCell}><span className={styles.statName}>치명타</span><span className={styles.statValue}>{derived.crit}%</span></div><div className={styles.statCell}><span className={styles.statName}>물약</span><span className={styles.statValue}>{game.potions}개</span></div></div>
-            <div className={styles.nextGoal}><p className={styles.goalEyebrow}>다음 성장 목표</p><p className={styles.goalTitle}>{nextRegion ? `Lv.${nextRegion.unlockLevel} ${nextRegion.name} 해금` : `${region.name} 우두머리 반복 토벌`}</p><p className={styles.goalCopy}>{nextRegion ? `새 지역까지 ${nextRegion.unlockLevel - game.level}레벨 남았습니다.` : '최고 지역에서 희귀 조합 장비를 수집하세요.'}</p><div className={styles.itemActions}><button className={styles.smallButton} disabled={Boolean(game.combat) || game.hp >= derived.maxHp} onClick={() => applyResult(restAtTown(game, game.hp < derived.maxHp * 0.5 ? 'free' : 'gold'))}><Heart size={11} /> 회복 {game.hp < derived.maxHp * 0.5 ? '무료' : `${formatNumber(restCost)}G`}</button></div></div>
+            <div className={styles.nextGoal}><p className={styles.goalEyebrow}>다음 성장 목표</p><p className={styles.goalTitle}>{nextRegion ? `Lv.${nextRegion.unlockLevel} ${nextRegion.name} 해금` : `${region.name} 우두머리 반복 토벌`}</p><p className={styles.goalCopy}>{nextRegion ? `새 지역까지 ${nextRegion.unlockLevel - game.level}레벨 남았습니다.` : '최고 지역에서 희귀 조합 장비를 수집하세요.'}</p></div>
           </section>
           <section className={styles.panel}><div className={styles.panelHeader}><h2 className={styles.panelTitle}><Backpack size={14} /> 착용 장비</h2></div><div className={styles.equipmentSlots}>{(Object.keys(game.equipment) as EquipmentSlot[]).map((slot) => { const item = game.equipment[slot]; const display = item ? getEquipmentDisplay(item) : null; return <div className={styles.equipmentSlot} key={slot}><span className={styles.slotIcon}>{display ? <AdventureIcon name={display.icon} size={16} /> : <LockKeyhole size={14} />}</span><span><span className={styles.slotName}>{EQUIPMENT_SLOT_LABELS[slot]}</span><span className={`${styles.slotItem} ${item ? RARITY_CLASS[item.rarity] : ''}`}>{display?.name ?? '비어 있음'}</span></span>{item && <span className={styles.slotEnhance}>+{item.enhance}</span>}</div>; })}</div></section>
-        </aside>
+        </aside>}
 
-        <section className={styles.mainColumn}>
-          {activeTab === 'hunt' && <>
-            <section className={styles.hero}>
-              <Image className={styles.heroImage} src="/adventure-assets/frontier.webp" alt={`${region.name}으로 이어지는 모험 지역`} fill priority sizes="(max-width: 760px) 100vw, 70vw" />
-              <div className={styles.heroShade} />
-              <div className={styles.heroContent}><div className={styles.locationTop}><div><p className={styles.locationEyebrow}>현재 사냥터 · Lv.{region.unlockLevel} 이상</p><h2 className={styles.locationName}>{region.name}</h2><p className={styles.locationDesc}>{region.description}</p></div><span className={styles.recommendedBadge}>권장 전투력 {formatNumber(region.recommendedPower)}</span></div><div className={styles.zoneNav}>{REGION_IDS.map((regionId) => { const zone = REGION_DEFINITIONS[regionId]; const unlocked = isRegionUnlocked(game, regionId); return <button key={regionId} className={`${styles.zoneButton} ${regionId === region.id ? styles.zoneButtonActive : ''}`} disabled={!unlocked || Boolean(game.combat)} onClick={() => travel(regionId)}><span className={styles.zoneLevel}>{unlocked ? `Lv.${zone.unlockLevel}` : `Lv.${zone.unlockLevel} 잠김`}</span><span className={styles.zoneName}>{zone.name}</span></button>; })}</div></div>
-            </section>
-            {renderHunt()}
-          </>}
+        <section className={`${styles.mainColumn} ${activeTab === 'hunt' ? styles.mainColumnImmersive : ''}`}>
+          {activeTab === 'hunt' && renderHunt()}
           {activeTab === 'equipment' && renderEquipment()}
           {activeTab === 'growth' && renderGrowth()}
           {activeTab === 'collection' && renderCollection()}
           {activeTab === 'ranking' && renderRanking()}
         </section>
 
-        <aside className={styles.rightRail}>
+        {activeTab !== 'hunt' && <aside className={styles.rightRail}>
           <section className={styles.panel}><div className={styles.rightTabs}><button className={`${styles.rightTab} ${sideTab === 'quests' ? styles.rightTabActive : ''}`} onClick={() => setSideTab('quests')}>임무 {claimableQuests > 0 && `(${claimableQuests})`}</button><button className={`${styles.rightTab} ${sideTab === 'inventory' ? styles.rightTabActive : ''}`} onClick={() => setSideTab('inventory')}>가방</button><button className={`${styles.rightTab} ${sideTab === 'log' ? styles.rightTabActive : ''}`} onClick={() => setSideTab('log')}>기록</button></div><div className={styles.scrollBody}>{renderSideContent()}</div></section>
-          <section className={styles.panel}><div className={styles.panelHeader}><h2 className={styles.panelTitle}><Activity size={14} /> 모험 기록</h2></div><div className={styles.statGrid}><div className={styles.statCell}><span className={styles.statName}>승리</span><span className={styles.statValue}>{formatNumber(game.statistics.battlesWon)}</span></div><div className={styles.statCell}><span className={styles.statName}>우두머리</span><span className={styles.statValue}>{formatNumber(game.statistics.bossesKilled)}</span></div><div className={styles.statCell}><span className={styles.statName}>장비 발견</span><span className={styles.statValue}>{formatNumber(game.statistics.equipmentFound)}</span></div><div className={styles.statCell}><span className={styles.statName}>오프라인 사냥</span><span className={styles.statValue}>{formatNumber(game.statistics.offlineKills)}</span></div></div><div className={styles.nextGoal}><p className={styles.goalEyebrow}>우두머리 토벌 자격</p><p className={styles.goalTitle}>{bossProgress.current} / {bossProgress.required} 처치</p><p className={styles.goalCopy}>각 지역의 일반 몬스터를 {BOSS_KILLS_REQUIRED}마리씩 처치할 때마다 토벌 기회가 열립니다.</p></div></section>
-        </aside>
+          <section className={styles.panel}><div className={styles.panelHeader}><h2 className={styles.panelTitle}><Activity size={14} /> 모험 기록</h2></div><div className={styles.statGrid}><div className={styles.statCell}><span className={styles.statName}>승리</span><span className={styles.statValue}>{formatNumber(game.statistics.battlesWon)}</span></div><div className={styles.statCell}><span className={styles.statName}>우두머리</span><span className={styles.statValue}>{formatNumber(game.statistics.bossesKilled)}</span></div><div className={styles.statCell}><span className={styles.statName}>장비 발견</span><span className={styles.statValue}>{formatNumber(game.statistics.equipmentFound)}</span></div><div className={styles.statCell}><span className={styles.statName}>총 처치</span><span className={styles.statValue}>{formatNumber(game.statistics.totalKills)}</span></div></div><div className={styles.nextGoal}><p className={styles.goalEyebrow}>우두머리 토벌 자격</p><p className={styles.goalTitle}>{bossProgress.current} / {bossProgress.required} 처치</p><p className={styles.goalCopy}>각 지역의 일반 몬스터를 {BOSS_KILLS_REQUIRED}마리씩 처치할 때마다 토벌 기회가 열립니다.</p></div></section>
+        </aside>}
       </div>
 
       {notice && <div className={styles.notice}>{notice}</div>}
-      {offlineSummary && <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="offline-title"><div className={styles.modal}><div className={styles.modalHead}><h2 id="offline-title" className={styles.modalTitle}>돌아온 모험가의 정산</h2><p className={styles.modalCopy}>{REGION_DEFINITIONS[offlineSummary.regionId].name}에서 최대 8시간까지 자동으로 활동한 결과입니다.</p></div><div className={styles.modalStats}><div className={styles.modalStat}><span className={styles.modalStatLabel}>사냥 시간</span><span className={styles.modalStatValue}>{offlineSummary.hours.toFixed(1)}시간</span></div><div className={styles.modalStat}><span className={styles.modalStatLabel}>처치</span><span className={styles.modalStatValue}>{formatNumber(offlineSummary.estimatedKills)}</span></div><div className={styles.modalStat}><span className={styles.modalStatLabel}>골드</span><span className={styles.modalStatValue}>{formatNumber(offlineSummary.gold)}</span></div></div><div className={styles.modalFooter}><button className={styles.primaryButton} onClick={() => setOfflineSummary(null)}><Check size={14} /> 확인</button></div></div></div>}
     </main>
   );
 }

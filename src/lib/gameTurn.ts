@@ -891,7 +891,7 @@ function resolveMazeSkill(
     nextSkillState = resolved.state;
     position = resolved.position;
     via = resolved.via.length > 1 ? [resolved.via[0]] : undefined;
-    resolved.via.forEach((target, pathIndex) => {
+    resolved.via.forEach((_, pathIndex) => {
       const from = pathIndex === 0 ? origin : resolved.via[pathIndex - 1];
       mapItems.forEach((item, index) => {
         if (

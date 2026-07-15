@@ -23,8 +23,8 @@ import { createMazeSkillState } from '@/lib/mazeSkills';
 import { shouldPreserveGamePlayerOnLeave } from '@/lib/roomLifecycle';
 
 // Firebase 인스턴스를 저장할 변수들  
-export let auth;
-export let database;
+let auth;
+let database;
 
 // Firebase 설정
 const firebaseConfig = {
@@ -135,14 +135,66 @@ export const getRooms = (callback: (rooms: Room[]) => void) => {
 
   console.log('방 목록 조회 시도...');
   const roomsRef = ref(database, 'rooms');
-  
-  return onValue(roomsRef, (snapshot) => {
+  const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const unsubscribe = onValue(roomsRef, (snapshot) => {
     const data = snapshot.val();
     let roomsList: Room[] = [];
-    
+
     if (data) {
+      const visibleRooms = Object.entries(data).filter(([roomId, room]) => {
+        const typedRoom = room as Room & {
+          connections?: Record<string, Record<string, unknown> | null>;
+        };
+        const ownerConnections = typedRoom.createdBy
+          ? typedRoom.connections?.[typedRoom.createdBy]
+          : null;
+        const disconnectedAt = typedRoom.ownerDisconnectedAt;
+        const orphaned =
+          typedRoom.ownerPresenceReady === true
+          && typeof disconnectedAt === 'number'
+          && !ownerConnections;
+
+        // END 방은 삭제를 시도하되, 정산 전 규칙이 거부하면 로비에 계속 보여
+        // 기존 참가자가 재입장해 멱등 정산을 복구할 수 있게 한다.
+        const preserveEndedRoom = orphaned && typedRoom.gameState?.phase === GamePhase.END;
+
+        if (!orphaned) {
+          const pending = cleanupTimers.get(roomId);
+          if (pending) clearTimeout(pending);
+          cleanupTimers.delete(roomId);
+          return true;
+        }
+
+        if (!cleanupTimers.has(roomId)) {
+          const delay = Math.max(0, ROOM_OWNER_DISCONNECT_GRACE_MS - (Date.now() - disconnectedAt));
+          cleanupTimers.set(roomId, setTimeout(() => {
+            cleanupTimers.delete(roomId);
+            void get(ref(database, `rooms/${roomId}`)).then((latestSnapshot) => {
+              if (!latestSnapshot.exists()) return;
+              const latest = latestSnapshot.val() as Room & {
+                connections?: Record<string, Record<string, unknown> | null>;
+              };
+              const latestOwnerConnections = latest.createdBy
+                ? latest.connections?.[latest.createdBy]
+                : null;
+              if (
+                latest.ownerPresenceReady === true
+                && typeof latest.ownerDisconnectedAt === 'number'
+                && Date.now() - latest.ownerDisconnectedAt >= ROOM_OWNER_DISCONNECT_GRACE_MS
+                && !latestOwnerConnections
+              ) {
+                return remove(ref(database, `rooms/${roomId}`));
+              }
+            }).catch(() => {});
+          }, delay));
+        }
+
+        return preserveEndedRoom || Date.now() - disconnectedAt < ROOM_OWNER_DISCONNECT_GRACE_MS;
+      });
+
       // 객체를 배열로 변환하고 id 속성이 없으면 키를 id로 추가
-      roomsList = Object.entries(data).map(([key, room]) => {
+      roomsList = visibleRooms.map(([key, room]) => {
         const typedRoom = room as Room;
         const roomSummary = { ...typedRoom };
         roomSummary.players = Object.values(typedRoom.players || {})
@@ -161,54 +213,146 @@ export const getRooms = (callback: (rooms: Room[]) => void) => {
     console.error('방 목록 조회 오류:', error);
     callback([]);
   });
+  return () => {
+    unsubscribe();
+    cleanupTimers.forEach((timer) => clearTimeout(timer));
+  };
 };
 
 // 방 생성에 디바운싱 추가
 let roomCreationInProgress = false;
 
-const roomPresencePaths = (roomId: string, userId: string) => [
-  `rooms/${roomId}/playerStatus/${userId}`,
-  `rooms/${roomId}/members/${userId}`,
-  `rooms/${roomId}/joinedPlayers/${userId}`,
-  `rooms/${roomId}/gameState/players/${userId}`,
-  `rooms/${roomId}/spectators/${userId}`,
-];
+export const ROOM_OWNER_DISCONNECT_GRACE_MS = 2_500;
 
-// 방장 연결이 끊기면 Firebase 서버가 방 전체를 제거한다. 방 하위의
-// onDisconnect 쓰기는 root 삭제 뒤 유령 방을 만들 수 있어 먼저 취소한다.
-export const armOwnerRoomDisconnectCleanup = async (roomId: string, userId: string): Promise<boolean> => {
+interface RoomConnectionRegistry {
+  ids: Map<string, string>;
+  tokens: Map<string, string>;
+  armPromises: Map<string, Promise<boolean>>;
+  clearPromises: Map<string, Promise<void>>;
+}
+
+const fallbackRoomConnectionRegistry: RoomConnectionRegistry = {
+  ids: new Map(),
+  tokens: new Map(),
+  armPromises: new Map(),
+  clearPromises: new Map(),
+};
+
+const getRoomConnectionRegistry = (): RoomConnectionRegistry => {
+  if (typeof window === 'undefined') return fallbackRoomConnectionRegistry;
+  const browserWindow = window as typeof window & {
+    __DAEMOK_ROOM_CONNECTIONS__?: RoomConnectionRegistry;
+  };
+  browserWindow.__DAEMOK_ROOM_CONNECTIONS__ ??= {
+    ids: new Map(),
+    tokens: new Map(),
+    armPromises: new Map(),
+    clearPromises: new Map(),
+  };
+  return browserWindow.__DAEMOK_ROOM_CONNECTIONS__;
+};
+
+const getRoomConnectionToken = (key: string) => {
+  const registry = getRoomConnectionRegistry();
+  const existing = registry.tokens.get(key);
+  if (existing) return existing;
+  const token = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  registry.tokens.set(key, token);
+  return token;
+};
+
+const getRoomConnectionSlot = (key: string) => {
+  return getRoomConnectionRegistry().ids.get(key) || null;
+};
+
+const roomConnectionPath = (roomId: string, userId: string) => {
+  const key = `${roomId}:${userId}`;
+  const slot = getRoomConnectionSlot(key);
+  return slot ? `rooms/${roomId}/connections/${userId}/${slot}` : null;
+};
+
+const roomPresencePaths = (roomId: string, userId: string, capturedConnectionPath?: string | null) => {
+  const connectionPath = capturedConnectionPath === undefined
+    ? roomConnectionPath(roomId, userId)
+    : capturedConnectionPath;
+  return [
+    `rooms/${roomId}/playerStatus/${userId}`,
+    `rooms/${roomId}/members/${userId}`,
+    `rooms/${roomId}/joinedPlayers/${userId}`,
+    `rooms/${roomId}/gameState/players/${userId}`,
+    `rooms/${roomId}/spectators/${userId}`,
+    `rooms/${roomId}/ownerDisconnectedAt`,
+    ...(connectionPath ? [connectionPath] : []),
+  ];
+};
+
+const armRoomConnectionPresenceOnce = async (roomId: string, userId: string): Promise<boolean> => {
   if (!roomId || !userId) return false;
 
   try {
     const db = getDatabase();
-    const roomRef = ref(db, `rooms/${roomId}`);
-    const ownerSnapshot = await get(ref(db, `rooms/${roomId}/createdBy`));
+    const roomSnapshot = await get(ref(db, `rooms/${roomId}/createdBy`));
+    if (!roomSnapshot.exists()) return false;
+    const isOwner = roomSnapshot.val() === userId;
+    const ownerDisconnectedRef = ref(db, `rooms/${roomId}/ownerDisconnectedAt`);
+    const ownerDisconnectSignal = isOwner ? onDisconnect(ownerDisconnectedRef) : null;
+    if (ownerDisconnectSignal) await ownerDisconnectSignal.set(serverTimestamp());
 
-    if (!ownerSnapshot.exists() || ownerSnapshot.val() !== userId) return false;
+    const key = `${roomId}:${userId}`;
+    const connectionToken = getRoomConnectionToken(key);
+    const existingSlot = getRoomConnectionSlot(key);
+    const start = existingSlot ? Number(existingSlot) : Math.floor(Math.random() * 8);
+    const slots = Array.from({ length: 8 }, (_, index) => String((start + index) % 8));
 
-    await Promise.all(
-      roomPresencePaths(roomId, userId).map((path) =>
-        onDisconnect(ref(db, path)).cancel().catch(() => {})
-      )
-    );
+    for (const slot of slots) {
+      const connectionRef = ref(db, `rooms/${roomId}/connections/${userId}/${slot}`);
+      const disconnect = onDisconnect(connectionRef);
+      await disconnect.remove();
+      const result = await runTransaction(connectionRef, (current) =>
+        current == null || current.session === connectionToken ? {
+          connectedAt: Date.now(),
+          lastSeen: Date.now(),
+          session: connectionToken,
+        } : undefined,
+      { applyLocally: false });
+      if (result.committed) {
+        getRoomConnectionRegistry().ids.set(key, slot);
+        if (isOwner) await remove(ownerDisconnectedRef);
+        return true;
+      }
+      await disconnect.cancel();
+    }
 
-    // remove 등록 승인을 기다린 뒤에만 온라인 상태를 기록해야 생성 직후 종료도 정리된다.
-    await onDisconnect(roomRef).remove();
-    await Promise.all([
-      onDisconnect(ref(db, `userStatus/${userId}`)).update({
-        online: false,
-        currentRoom: null,
-        lastSeen: serverTimestamp(),
-        lastActivity: serverTimestamp(),
-      }),
-      onDisconnect(ref(db, `userRooms/${userId}/${roomId}`)).remove(),
-    ]);
-
-    return true;
+    if (ownerDisconnectSignal) await ownerDisconnectSignal.cancel();
+    getRoomConnectionRegistry().ids.delete(key);
+    console.error('방 연결 슬롯이 모두 사용 중입니다:', roomId, userId);
+    return false;
   } catch (error) {
-    console.error('방장 연결 종료 정리 등록 오류:', error);
+    const roomStillExists = await get(ref(getDatabase(), `rooms/${roomId}/createdBy`))
+      .then((snapshot) => snapshot.exists())
+      .catch(() => true);
+    if (!roomStillExists) return false;
+    console.error('방 연결 등록 오류:', error);
     return false;
   }
+};
+
+export const armRoomConnectionPresence = (roomId: string, userId: string): Promise<boolean> => {
+  const key = `${roomId}:${userId}`;
+  const registry = getRoomConnectionRegistry();
+  const clearing = registry.clearPromises.get(key);
+  if (clearing) {
+    return clearing.catch(() => {}).then(() => armRoomConnectionPresence(roomId, userId));
+  }
+  const pending = registry.armPromises.get(key);
+  if (pending) return pending;
+  const operation = armRoomConnectionPresenceOnce(roomId, userId).finally(() => {
+    if (registry.armPromises.get(key) === operation) registry.armPromises.delete(key);
+  });
+  registry.armPromises.set(key, operation);
+  return operation;
 };
 
 export const createRoom = async (name: string, creatorId: string, maxPlayers: number = 2): Promise<string | null> => {
@@ -295,13 +439,15 @@ export const createRoom = async (name: string, creatorId: string, maxPlayers: nu
     await set(newRoomRef, roomData);
     console.log('방 생성 성공:', roomId);
 
-    // 다음 화면이 뜨기 전에 창이 닫혀도 방이 남지 않도록 즉시 등록한다.
-    const disconnectCleanupArmed = await armOwnerRoomDisconnectCleanup(roomId, creatorId);
-    if (!disconnectCleanupArmed) {
+    // 방 페이지로 이동하기 전에 연결 종료 예약을 먼저 등록한다. 같은 탭의
+    // 브라우저 전역 레지스트리를 이어받아 방 페이지가 중복 슬롯을 만들지 않는다.
+    const connectionArmed = await armRoomConnectionPresence(roomId, creatorId);
+    if (!connectionArmed) {
       await remove(newRoomRef).catch(() => {});
       throw new Error('방 연결 종료 처리를 등록하지 못했습니다. 다시 시도해주세요.');
     }
-    
+    await update(newRoomRef, { ownerPresenceReady: true });
+
     // 방 생성자를 방 참여자로 추가
     await set(ref(database, `rooms/${roomId}/joinedPlayers/${creatorId}`), {
       joined: true,
@@ -947,17 +1093,35 @@ export const rejoinRoom = async (userId: string, roomId: string): Promise<boolea
 // 방 관련 onDisconnect 등록 취소 + 내 접속 상태 정리
 // 방이 삭제된 뒤 서버측 onDisconnect나 언마운트 정리 코드가
 // 삭제된 방 경로에 데이터를 다시 써서 유령 방이 생기는 것을 방지한다
-export const clearRoomPresence = async (roomId: string, userId: string) => {
+const clearRoomPresenceOnce = async (roomId: string, userId: string) => {
   if (!roomId || !userId) return;
 
   try {
     const db = getDatabase();
+    const key = `${roomId}:${userId}`;
+    const registry = getRoomConnectionRegistry();
+    const connectionPath = roomConnectionPath(roomId, userId);
+    registry.ids.delete(key);
+    registry.tokens.delete(key);
+
     // 서버에 등록된 onDisconnect 작업 취소
     await Promise.all(
-      roomPresencePaths(roomId, userId).map((path) =>
+      roomPresencePaths(roomId, userId, connectionPath).map((path) =>
         onDisconnect(ref(db, path)).cancel().catch(() => {})
       )
     );
+
+    const roomSnapshot = await get(ref(db, `rooms/${roomId}`));
+    if (!roomSnapshot.exists() || roomSnapshot.child('status').val() === 'deleting') return;
+
+    if (connectionPath) await remove(ref(db, connectionPath)).catch(() => {});
+
+    const remainingConnections = await get(ref(db, `rooms/${roomId}/connections/${userId}`));
+    if (remainingConnections.hasChildren()) return;
+
+    if (roomSnapshot.child('createdBy').val() === userId) {
+      await update(ref(db, `rooms/${roomId}`), { ownerDisconnectedAt: serverTimestamp() });
+    }
 
     // 노드가 아직 존재하는 경우에만 오프라인 표시 (삭제된 방에 스텁 생성 금지)
     const psRef = ref(db, `rooms/${roomId}/playerStatus/${userId}`);
@@ -972,12 +1136,31 @@ export const clearRoomPresence = async (roomId: string, userId: string) => {
       await update(gpRef, { isOnline: false, lastSeen: serverTimestamp() });
     }
   } catch (error) {
+    const roomSnapshot = await get(ref(getDatabase(), `rooms/${roomId}`)).catch(() => null);
+    if (!roomSnapshot?.exists() || roomSnapshot.child('status').val() === 'deleting') return;
     console.error('방 접속 상태 정리 오류:', error);
   }
 };
 
+export const clearRoomPresence = (roomId: string, userId: string): Promise<void> => {
+  const key = `${roomId}:${userId}`;
+  const registry = getRoomConnectionRegistry();
+  const existing = registry.clearPromises.get(key);
+  if (existing) return existing;
+
+  const operation = (async () => {
+    const arming = registry.armPromises.get(key);
+    if (arming) await arming.catch(() => false);
+    await clearRoomPresenceOnce(roomId, userId);
+  })().finally(() => {
+    if (registry.clearPromises.get(key) === operation) registry.clearPromises.delete(key);
+  });
+  registry.clearPromises.set(key, operation);
+  return operation;
+};
+
 // 방 활동 시각 갱신 (유령 방 판정 기준)
-export const touchRoomActivity = async (roomId: string) => {
+const touchRoomActivity = async (roomId: string) => {
   if (!database || !roomId) return;
   try {
     await update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() });
@@ -998,15 +1181,40 @@ export const cleanupGhostRooms = async (userId: string): Promise<number> => {
     const snapshot = await get(ref(database, 'rooms'));
     const rooms = (snapshot.val() || {}) as Record<string, {
       playerStatus?: Record<string, { isOnline?: boolean } | null>;
+      connections?: Record<string, Record<string, unknown> | null>;
       createdBy?: string;
       lastActivity?: number;
+      ownerPresenceReady?: boolean;
+      ownerDisconnectedAt?: number;
     } | null>;
     let removed = 0;
 
     for (const [roomId, room] of Object.entries(rooms)) {
       if (!room) continue;
 
-      // 누군가(나 포함, 다른 탭일 수도 있음) 온라인이면 유지
+      const ownerConnections = room.createdBy ? room.connections?.[room.createdBy] : null;
+      const ownerDisconnectExpired =
+        room.ownerPresenceReady === true
+        && typeof room.ownerDisconnectedAt === 'number'
+        && Date.now() - room.ownerDisconnectedAt >= ROOM_OWNER_DISCONNECT_GRACE_MS
+        && !ownerConnections;
+      if (ownerDisconnectExpired) {
+        try {
+          await remove(ref(database, `rooms/${roomId}`));
+          removed++;
+        } catch {
+          // 방장이 재연결됐거나 다른 클라이언트가 먼저 정리했다.
+        }
+        continue;
+      }
+
+      // 탭별 연결이 하나라도 있으면 공유 상태 값과 무관하게 방을 유지한다.
+      const anyoneConnected = Object.values(room.connections || {}).some((connections) =>
+        connections && Object.values(connections).some(Boolean)
+      );
+      if (anyoneConnected) continue;
+
+      // 이전 규칙 버전 방의 호환 상태도 함께 확인한다.
       const statuses = room.playerStatus || {};
       const anyoneOnline = Object.values(statuses).some((status) => status?.isOnline === true);
       if (anyoneOnline) continue;
@@ -1047,8 +1255,6 @@ export const updateRoomUserStatus = async (roomId: string, userId: string, isOnl
     // 방이 없으면 아무것도 쓰지 않음 (삭제된 방에 잔여 데이터 생성 방지)
     const roomOwnerSnapshot = await get(ref(db, `rooms/${roomId}/createdBy`));
     if (!roomOwnerSnapshot.exists()) return false;
-    const isRoomOwner = roomOwnerSnapshot.val() === userId;
-
     const userStatusRef = ref(db, `rooms/${roomId}/playerStatus/${userId}`);
     
     const userData = {
@@ -1066,30 +1272,6 @@ export const updateRoomUserStatus = async (roomId: string, userId: string, isOnl
       const playerRef = ref(db, `rooms/${roomId}/gameState/players/${userId}`);
       const playerSnap = await get(playerRef);
       const isPlayer = playerSnap.exists();
-
-      // 온라인 표시보다 연결 종료 예약을 먼저 서버에 등록한다.
-      if (isRoomOwner) {
-        const armed = await armOwnerRoomDisconnectCleanup(roomId, userId);
-        if (!armed) return false;
-      } else {
-        const disconnectOperations: Promise<void>[] = [
-          onDisconnect(userStatusRef).update({
-            isOnline: false,
-            lastSeen: serverTimestamp()
-          })
-        ];
-
-        if (isPlayer) {
-          disconnectOperations.push(
-            onDisconnect(playerRef).update({
-              isOnline: false,
-              lastSeen: serverTimestamp()
-            })
-          );
-        }
-
-        await Promise.all(disconnectOperations);
-      }
 
       // 방이 예약 등록 도중 삭제됐으면 하위 경로를 다시 만들지 않는다.
       const currentOwnerSnapshot = await get(ref(db, `rooms/${roomId}/createdBy`));

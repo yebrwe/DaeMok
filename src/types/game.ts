@@ -178,6 +178,8 @@ export interface Room {
   ruleSnapshot?: GameRuleSnapshot;
   createdAt?: number | null;
   createdBy?: string;
+  ownerPresenceReady?: boolean;
+  ownerDisconnectedAt?: number;
   status?: 'waiting' | 'playing' | 'ended';
   lastActivity?: number | null;
 }

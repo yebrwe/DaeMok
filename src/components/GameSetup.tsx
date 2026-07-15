@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Direction, GameMap, GamePhase, ItemType, MapItem, MazeSkillId, Obstacle, Position } from '@/types/game';
+import { Direction, GameMap, GamePhase, ItemType, MapItem, MazeSkillId, Obstacle, Position, WallItemType } from '@/types/game';
 import {
   Anchor,
   Aperture,
@@ -28,6 +28,7 @@ import {
   X,
 } from 'lucide-react';
 import GameBoard from './GameBoard';
+import WallEffectPreview from './WallEffectPreview';
 import {
   isValidMap,
   BOARD_SIZE,
@@ -46,6 +47,8 @@ import { MAZE_SKILL_DEFINITIONS, MAZE_SKILL_IDS } from '@/lib/mazeSkills';
 
 interface GameSetupProps {
   onMapComplete: (map: GameMap) => void;
+  initialMap?: GameMap | null;
+  requireFullBudget?: boolean;
 }
 
 type PlaceMode = 'wall' | ItemType;
@@ -123,19 +126,45 @@ const findWormholeSafetyError = (map: GameMap): string | null => {
   return null;
 };
 
-const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
-  const [startPosition, setStartPosition] = useState<Position | undefined>();
-  const [endPosition, setEndPosition] = useState<Position | undefined>();
-  const [obstacles, setObstacles] = useState<Obstacle[]>([]);
-  const [setupPhase, setSetupPhase] = useState<'start' | 'end' | 'obstacles'>('start');
+const GameSetup: React.FC<GameSetupProps> = ({
+  onMapComplete,
+  initialMap = null,
+  requireFullBudget = false,
+}) => {
+  const [startPosition, setStartPosition] = useState<Position | undefined>(() =>
+    initialMap?.startPosition ? { ...initialMap.startPosition } : undefined
+  );
+  const [endPosition, setEndPosition] = useState<Position | undefined>(() =>
+    initialMap?.endPosition ? { ...initialMap.endPosition } : undefined
+  );
+  const [obstacles, setObstacles] = useState<Obstacle[]>(() =>
+    (initialMap?.obstacles || []).map((entry) => ({
+      position: { ...entry.position },
+      direction: entry.direction,
+    }))
+  );
+  const [setupPhase, setSetupPhase] = useState<'start' | 'end' | 'obstacles'>(
+    initialMap ? 'obstacles' : 'start'
+  );
   const [isMapValid, setIsMapValid] = useState<boolean>(false);
   // 아이템 배치 (공용 벽 예산과 종류별 최대 수량 적용)
   const [placeMode, setPlaceMode] = useState<PlaceMode>('wall');
-  const [items, setItems] = useState<MapItem[]>([]);
+  const [items, setItems] = useState<MapItem[]>(() =>
+    (initialMap?.items || []).map((item) => ({
+      ...item,
+      position: item.position ? { ...item.position } : undefined,
+      wallPosition: item.wallPosition ? { ...item.wallPosition } : undefined,
+      entrance: item.entrance ? { ...item.entrance } : undefined,
+      exit: item.exit ? { ...item.exit } : undefined,
+    }))
+  );
   const [wormholeEntrance, setWormholeEntrance] = useState<Position | null>(null);
   const [paletteTab, setPaletteTab] = useState<'traps' | 'walls' | 'skills'>('traps');
   const [windDirection, setWindDirection] = useState<Direction>('right');
-  const [skillLoadout, setSkillLoadout] = useState<MazeSkillId>(DEFAULT_MAZE_SKILL);
+  const [skillLoadout, setSkillLoadout] = useState<MazeSkillId>(
+    initialMap?.skillLoadout || DEFAULT_MAZE_SKILL
+  );
+  const [previewWallType, setPreviewWallType] = useState<WallItemType | null>(null);
 
   const itemsCost = items.reduce((sum, it) => sum + ITEM_COSTS[it.type], 0);
 
@@ -398,6 +427,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
 
       addItem(item);
       setPlaceMode('wall');
+      setPreviewWallType(null);
       return;
     }
 
@@ -508,6 +538,8 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
     }
     setWormholeEntrance(null);
 
+    if (isWallItemType(type)) setPreviewWallType(type);
+
     // 탐지기는 배치가 필요 없는 자기용 아이템 - 선택 즉시 확보
     if (type === 'radar') {
       addItem({ type: 'radar' });
@@ -527,6 +559,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
     setPaletteTab(tab);
     setPlaceMode('wall');
     setWormholeEntrance(null);
+    setPreviewWallType(null);
   };
   
   // 맵 완성 및 제출
@@ -544,6 +577,14 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
       items,
       skillLoadout,
     };
+
+    if (requireFullBudget && usedBudget !== MAX_OBSTACLES) {
+      alert(
+        `연습 맵은 벽과 아이템 비용을 합쳐 ${MAX_OBSTACLES}/${MAX_OBSTACLES}를 모두 사용해야 합니다. ` +
+        `현재 ${usedBudget}/${MAX_OBSTACLES}, ${MAX_OBSTACLES - usedBudget} 남음`
+      );
+      return;
+    }
 
     const safetyError = findWormholeSafetyError(map);
     if (safetyError) {
@@ -578,6 +619,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
   // 사용한 벽 예산 (아이템 총비용 포함)
   const usedBudget = countUniqueObstacles(obstacles) + itemsCost;
   const remainingObstacles = MAX_OBSTACLES - usedBudget;
+  const canSubmit = isMapValid && (!requireFullBudget || usedBudget === MAX_OBSTACLES);
   const wormholeSafetyError = startPosition && endPosition
     ? findWormholeSafetyError({ startPosition, endPosition, obstacles, items })
     : null;
@@ -612,6 +654,10 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
         />
       </div>
 
+      {setupPhase === 'obstacles' && previewWallType && (
+        <WallEffectPreview type={previewWallType} onClose={() => setPreviewWallType(null)} />
+      )}
+
       {/* 상단 HUD: 맵 제작 단계 스테퍼 */}
       <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 w-[96%] max-w-3xl">
         <div className="game-panel !rounded-xl px-3 py-2">
@@ -637,9 +683,14 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
             </div>
             <div className="flex items-center gap-2">
               {setupPhase === 'obstacles' && (
-                <span className={`inline-flex items-center gap-1 text-xs font-bold ${remainingObstacles <= 5 ? 'text-red-400' : 'text-amber-300'}`}>
+                <span
+                  className={`inline-flex items-center gap-1 text-xs font-bold ${remainingObstacles === 0 ? 'text-emerald-300' : remainingObstacles <= 5 ? 'text-red-400' : 'text-amber-300'}`}
+                  data-testid="setup-budget"
+                  data-budget-complete={usedBudget === MAX_OBSTACLES ? 'true' : 'false'}
+                >
                   <BrickWall size={14} aria-hidden="true" /> {usedBudget}/{MAX_OBSTACLES}
                   {items.length > 0 && <span className="text-purple-300 ml-1">(아이템 -{itemsCost})</span>}
+                  {requireFullBudget && remainingObstacles > 0 && <span>· {remainingObstacles} 남음</span>}
                 </span>
               )}
             </div>
@@ -660,6 +711,11 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
         {setupPhase === 'obstacles' && !isMapValid && (obstacles.length > 0 || items.length > 0) && (
           <p className="text-red-300 text-xs px-3 py-1 rounded-full bg-red-500/20 border border-red-500/50 backdrop-blur-sm">
             {wormholeSafetyError || '현재 맵 구성으로는 시작점에서 도착점까지 도달할 수 없습니다.'}
+          </p>
+        )}
+        {setupPhase === 'obstacles' && requireFullBudget && isMapValid && remainingObstacles > 0 && (
+          <p className="rounded-full border border-amber-400/50 bg-slate-950/90 px-3 py-1 text-xs font-bold text-amber-200" data-testid="full-budget-required">
+            연습 맵은 {MAX_OBSTACLES}/{MAX_OBSTACLES}를 모두 사용해야 합니다 · {remainingObstacles} 남음
           </p>
         )}
 
@@ -747,31 +803,33 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
               })}
             </div>
 
-            <div className="flex min-h-8 items-center justify-between gap-2 border-t border-slate-700/80 pt-1.5">
+            <div className="flex min-h-8 flex-col items-stretch gap-1.5 border-t border-slate-700/80 pt-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
               {paletteTab === 'skills' ? (
-                <div className="flex min-w-0 items-center gap-1.5 text-[10px] text-slate-300">
+                <div id="active-palette-description" className="flex min-w-0 items-start gap-1.5 text-[10px] text-slate-300 sm:items-center" data-testid="active-palette-description">
                   <SelectedSkillIcon className="shrink-0 text-emerald-300" size={14} aria-hidden="true" />
-                  <span className="truncate">
+                  <span className="whitespace-normal break-words leading-[1.35]">
                     {MAZE_SKILL_DEFINITIONS[skillLoadout].label}: {MAZE_SKILL_DEFINITIONS[skillLoadout].description}
                   </span>
                 </div>
               ) : (
-                <div className="flex min-w-0 items-center gap-1.5 text-[10px] text-slate-300">
+                <div id="active-palette-description" className="flex min-w-0 items-start gap-1.5 text-[10px] text-slate-300 sm:items-center" data-testid="active-palette-description">
                   <ActiveItemIcon className="shrink-0 text-amber-300" size={14} aria-hidden="true" />
-                  <span className="truncate">
+                  <span className="whitespace-normal break-words leading-[1.35]">
                     {activeItem ? `${ITEM_LABELS[activeItem]}: ${ITEM_DESCRIPTIONS[activeItem]}` : '일반벽 배치'}
                   </span>
                 </div>
               )}
               {paletteTab !== 'skills' && placeMode === 'windWall' && (
-                <div className="flex shrink-0 rounded-md border border-slate-600 bg-slate-900 p-0.5" aria-label="바람 방향">
+                <div className="grid w-full shrink-0 grid-cols-4 rounded-md border border-slate-600 bg-slate-900 p-0.5 sm:flex sm:w-auto" role="group" aria-label="바람 방향">
                   {DIRECTIONS.map(({ direction, label, Icon }) => (
                     <button
                       key={direction}
-                      className={`flex size-11 items-center justify-center rounded ${windDirection === direction ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}
+                      className={`flex h-11 min-w-11 items-center justify-center rounded sm:w-11 ${windDirection === direction ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}
                       onClick={() => setWindDirection(direction)}
                       title={`바람 ${label}`}
                       aria-label={`바람 ${label}`}
+                      aria-pressed={windDirection === direction}
+                      aria-describedby="active-palette-description"
                     >
                       <Icon size={16} aria-hidden="true" />
                     </button>
@@ -855,7 +913,7 @@ const GameSetup: React.FC<GameSetupProps> = ({ onMapComplete }) => {
               <button
                 className="btn-game h-11 px-10 text-sm"
                 onClick={handleSubmit}
-                disabled={!isMapValid}
+                disabled={!canSubmit}
               >
                 완료
               </button>

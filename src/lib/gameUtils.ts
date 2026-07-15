@@ -384,7 +384,7 @@ export function findShortestPath(
   return null;
 }
 
-function countUniqueMapWalls(obstacles: Obstacle[]): number {
+export function countUniqueMapWalls(obstacles: Obstacle[]): number {
   const unique: Obstacle[] = [];
   for (const obstacle of obstacles || []) {
     if (
@@ -396,6 +396,16 @@ function countUniqueMapWalls(obstacles: Obstacle[]): number {
     }
   }
   return unique.length;
+}
+
+export function getMapBudgetUsed(
+  map: Pick<GameMap, 'obstacles' | 'items' | 'item'>
+): number {
+  const itemCost = getMapItems(map).reduce(
+    (total, item) => total + (ITEM_COSTS[item.type] || 0),
+    0
+  );
+  return countUniqueMapWalls(map.obstacles || []) + itemCost;
 }
 
 // 게임맵이 유효한지 확인 (시작점에서 끝점까지 경로가 존재하는지)

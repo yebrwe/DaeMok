@@ -1150,7 +1150,7 @@ function WormholeVisual({ entrance, exit, consumed }: { entrance: Position; exit
 }
 
 // ===== 보드 내용물 =====
-export interface GameBoard3DProps {
+interface GameBoard3DProps {
   gamePhase: GamePhase;
   startPosition?: Position;
   endPosition?: Position;

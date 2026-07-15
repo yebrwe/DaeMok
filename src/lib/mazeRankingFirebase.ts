@@ -219,14 +219,9 @@ export function getMazeRankingSettlementKey(roomId: string, matchNumber: number)
   return `${roomId}:${matchNumber}`;
 }
 
-/**
- * Atomically settles only the authenticated user's persistent ranking entry.
- * The room result must be derived by the caller from a completed GameState.
- */
 async function settleMazeRanking(
   user: MazeRankingUser,
   settlement: MazeRankingSettlement,
-  requireOwnUser: boolean,
 ): Promise<MazeRankingSettlementResult> {
   assertValidFirebaseKey(user.uid, 'Firebase 사용자 ID');
   if (!(['win', 'draw', 'loss'] as MazeMatchResult[]).includes(settlement.result)) {
@@ -239,7 +234,7 @@ async function settleMazeRanking(
   const key = getMazeRankingSettlementKey(settlement.roomId, settlement.matchNumber);
   const initialized = await firebaseInitPromise;
   const actorId = initialized?.auth.currentUser?.uid;
-  if (!initialized?.database || !actorId || (requireOwnUser && actorId !== user.uid)) {
+  if (!initialized?.database || !actorId) {
     throw new Error('인증된 경기 참가자만 랭킹을 정산할 수 있습니다.');
   }
 
@@ -291,13 +286,6 @@ async function settleMazeRanking(
   };
 }
 
-export function settleOwnMazeRanking(
-  user: MazeRankingUser,
-  settlement: MazeRankingSettlement,
-): Promise<MazeRankingSettlementResult> {
-  return settleMazeRanking(user, settlement, true);
-}
-
 /**
  * Settles a terminal participant from any authenticated participant's client.
  * Database Rules derive the exact outcome from the immutable END state.
@@ -306,7 +294,7 @@ export function settleMazeRankingParticipant(
   user: MazeRankingUser,
   settlement: MazeRankingSettlement,
 ): Promise<MazeRankingSettlementResult> {
-  return settleMazeRanking(user, settlement, false);
+  return settleMazeRanking(user, settlement);
 }
 
 function subscribeAfterInitialization(

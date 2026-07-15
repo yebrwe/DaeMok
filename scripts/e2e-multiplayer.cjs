@@ -97,6 +97,40 @@ async function expectNonBlankCanvases(page, expected) {
   ok(`nonblank 3D canvases: ${stats.length}`);
 }
 
+async function expect2DBoardsFitted(page, expected, label) {
+  await page.waitForFunction(
+    (count) => document.querySelectorAll('[data-testid="board-2d-viewport"]').length === count,
+    expected
+  );
+  await page.waitForTimeout(150);
+  const results = await page.locator('[data-player-board]').evaluateAll((boards) => boards.map((board) => {
+    const viewport = board.querySelector('[data-testid="board-2d-viewport"]');
+    const surface = board.querySelector('[data-testid="board-2d-surface"]');
+    const grid = surface?.querySelector('.grid.border-4');
+    if (!viewport || !surface || !grid) return { missing: true };
+    const viewportRect = viewport.getBoundingClientRect();
+    const gridRect = grid.getBoundingClientRect();
+    return {
+      missing: false,
+      scale: Number(surface.getAttribute('data-board-scale')),
+      inside:
+        gridRect.left >= viewportRect.left - 1 &&
+        gridRect.right <= viewportRect.right + 1 &&
+        gridRect.top >= viewportRect.top - 1 &&
+        gridRect.bottom <= viewportRect.bottom + 1,
+      viewport: viewportRect.toJSON(),
+      grid: gridRect.toJSON(),
+    };
+  }));
+  if (
+    results.length !== expected ||
+    results.some((result) => result.missing || !result.inside || !(result.scale > 0 && result.scale <= 1))
+  ) {
+    throw new Error(`${label} 2D 보드 맞춤 오류: ${JSON.stringify(results)}`);
+  }
+  ok(`${label} 2D 보드 ${expected}개 상하좌우 전체 표시`);
+}
+
 async function expectMyBoardTurns(page, expected, timeout = 20000) {
   const myBoard = page.locator('[data-player-board][data-my-player="true"]');
   await myBoard.waitFor({ state: 'visible', timeout });
@@ -313,6 +347,13 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     step('6-1: 2D 제작자 시점만 숨은 아이템 공개 + 가짜벽 구분');
     await pageA.getByRole('button', { name: '2D 보드', exact: true }).click();
     await pageB.getByRole('button', { name: '2D 보드', exact: true }).click();
+    await pageA.setViewportSize({ width: 360, height: 640 });
+    await expect2DBoardsFitted(pageA, 2, '온라인 짧은 모바일 화면');
+    await pageA.screenshot({ path: `${OUT}/mp-2p-2d-short-portrait.png` });
+    await pageA.setViewportSize({ width: 852, height: 393 });
+    await expect2DBoardsFitted(pageA, 2, '온라인 모바일 가로 화면');
+    await pageA.screenshot({ path: `${OUT}/mp-2p-2d-landscape.png` });
+    await pageA.setViewportSize({ width: 1280, height: 900 });
     const ownerBoard = pageB.locator('[data-player-board][data-map-owner-preview="true"]');
     await ownerBoard.waitFor({ timeout: 10000 });
     for (const itemType of ['oneTimeWall', 'mine', 'wormhole', 'smoke']) {
@@ -600,7 +641,11 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     await expectNonBlankCanvases(pageA, 4);
     const mobileLayout = await pageA.evaluate(() => {
       const viewport = { width: window.innerWidth, height: window.innerHeight };
-      const selectors = ['[data-testid="online-hud"]', '[data-testid="online-controls"]'];
+      const selectors = [
+        '[data-testid="online-hud"]',
+        '[data-testid="online-controls"]',
+        '[data-testid="online-mobile-direction-pad"]',
+      ];
       const containers = selectors.map((selector) => {
         const element = document.querySelector(selector);
         if (!element) return { selector, missing: true };
@@ -611,17 +656,61 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
           inside: rect.left >= -1 && rect.right <= viewport.width + 1 && rect.top >= -1 && rect.bottom <= viewport.height + 1,
         };
       });
-      const controlSizes = Array.from(document.querySelectorAll('[data-testid="online-controls"] button')).map((button) => {
+      const controlSizes = Array.from(document.querySelectorAll(
+        '[data-testid="online-controls"] button, [data-testid="online-mobile-direction-pad"] button'
+      )).map((button) => {
         const rect = button.getBoundingClientRect();
         return { width: rect.width, height: rect.height };
-      });
-      return { viewport, containers, controlSizes };
+      }).filter((size) => size.width > 0 && size.height > 0);
+      const pad = document.querySelector('[data-testid="online-mobile-direction-pad"]');
+      const ownBoard = document.querySelector('[data-player-board][data-my-player="true"]');
+      const dpad = pad && ownBoard ? (() => {
+        const padRect = pad.getBoundingClientRect();
+        const boardRect = ownBoard.getBoundingClientRect();
+        const buttons = Object.fromEntries(Array.from(pad.querySelectorAll('button')).map((button) => [
+          button.getAttribute('aria-label'),
+          button.getBoundingClientRect().toJSON(),
+        ]));
+        return {
+          inside:
+            padRect.left >= boardRect.left - 1 && padRect.right <= boardRect.right + 1 &&
+            padRect.top >= boardRect.top - 1 && padRect.bottom <= boardRect.bottom + 1,
+          buttons,
+        };
+      })() : null;
+      const playerEntries = Array.from(document.querySelectorAll('[data-testid="room-player-strip"] [title]'))
+        .map((entry) => {
+          const rect = entry.getBoundingClientRect();
+          return {
+            title: entry.getAttribute('title'),
+            inside: rect.width === 0 || (rect.left >= -1 && rect.right <= viewport.width + 1),
+          };
+        });
+      const roomHeader = document.querySelector('[data-testid="room-game-header"]')?.getBoundingClientRect();
+      const onlineHud = document.querySelector('[data-testid="online-hud"]')?.getBoundingClientRect();
+      const headerHudSeparated = !!roomHeader && !!onlineHud && roomHeader.bottom <= onlineHud.top + 1;
+      return { viewport, containers, controlSizes, dpad, playerEntries, headerHudSeparated };
     });
     if (mobileLayout.containers.some((entry) => entry.missing || !entry.inside)) {
       throw new Error(`Galaxy S21 HUD/controls overflow: ${JSON.stringify(mobileLayout.containers)}`);
     }
     if (mobileLayout.controlSizes.some((size) => size.width < 44 || size.height < 44)) {
       throw new Error(`Galaxy S21 control target below 44px: ${JSON.stringify(mobileLayout.controlSizes)}`);
+    }
+    if (mobileLayout.playerEntries.some((entry) => !entry.inside)) {
+      throw new Error(`Galaxy S21 player strip overflow: ${JSON.stringify(mobileLayout.playerEntries)}`);
+    }
+    if (!mobileLayout.headerHudSeparated) {
+      throw new Error('Galaxy S21 room header overlaps the online turn HUD');
+    }
+    const dpadButtons = mobileLayout.dpad?.buttons || {};
+    if (
+      !mobileLayout.dpad?.inside ||
+      !(dpadButtons['위로 이동']?.y < dpadButtons['왼쪽으로 이동']?.y) ||
+      !(dpadButtons['아래로 이동']?.y > dpadButtons['오른쪽으로 이동']?.y) ||
+      !(dpadButtons['왼쪽으로 이동']?.x < dpadButtons['오른쪽으로 이동']?.x)
+    ) {
+      throw new Error(`Galaxy S21 in-board D-pad layout invalid: ${JSON.stringify(mobileLayout.dpad)}`);
     }
     await pageA.screenshot({ path: `${OUT}/mp-4p-galaxy-s21.png` });
     ok('4인 2x2 동시 보드 및 데스크톱/Galaxy S21 렌더링');

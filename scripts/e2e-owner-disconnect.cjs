@@ -137,8 +137,11 @@ async function databaseGet(path, idToken) {
   return requestJson(endpoint);
 }
 
-async function signInWithFakeGoogle(page, account) {
+async function signInWithFakeGoogle(page, account, skipRoomRestore = false) {
   await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded' });
+  if (skipRoomRestore) {
+    await page.evaluate(() => sessionStorage.setItem('skip_room_restore', 'true'));
+  }
   const googleButton = page.getByRole('button', { name: /Google 계정으로 시작하기/i });
   await googleButton.waitFor({ state: 'visible' });
 
@@ -195,6 +198,10 @@ async function waitForRoomAbsent(roomId, monitorToken) {
 
 function playerIds(room) {
   return Object.keys(room.gameState?.players || {});
+}
+
+function connectionCount(room, uid) {
+  return Object.values(room?.connections?.[uid] || {}).filter(Boolean).length;
 }
 
 async function createJoinedRoom(hostPage, guestPage, roomName, monitorToken) {
@@ -285,8 +292,11 @@ async function main() {
   });
   const hostContext = await browser.newContext();
   const guestContext = await browser.newContext();
-  const hostPage = await hostContext.newPage();
+  let hostPage = await hostContext.newPage();
   const guestPage = await guestContext.newPage();
+  let mirrorContext = null;
+  let guestMirrorContext = null;
+  let clonedOwnerPage = null;
   const permissionErrors = [];
   let hostContextClosed = false;
   let hostOffline = false;
@@ -316,9 +326,13 @@ async function main() {
 
     step('Take the non-owner context offline; the room must remain alive');
     await guestContext.setOffline(true);
-    await poll('guest playerStatus.isOnline=false', async () => {
+    await poll('guest connections removed and game player marked offline', async () => {
       const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
-      return room?.playerStatus?.[firstRoom.guestUid]?.isOnline === false && room;
+      return (
+        !room?.connections?.[firstRoom.guestUid]
+        && room?.gameState?.players?.[firstRoom.guestUid]?.isOnline === false
+        && room
+      );
     });
     await assertRoomExists(firstRoom.roomId, firstRoom.hostUid, monitorToken);
     await waitForRoomUrl(hostPage, firstRoom.roomId);
@@ -327,14 +341,129 @@ async function main() {
     step('Bring the non-owner context online; it must return to the same room');
     await guestContext.setOffline(false);
     await waitForRoomUrl(guestPage, firstRoom.roomId);
-    await poll('guest playerStatus.isOnline=true after reconnect', async () => {
+    await poll('guest connection and game player recover after reconnect', async () => {
       const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
-      return room?.playerStatus?.[firstRoom.guestUid]?.isOnline === true && room;
+      return (
+        connectionCount(room, firstRoom.guestUid) === 1
+        && room?.gameState?.players?.[firstRoom.guestUid]?.isOnline === true
+        && room
+      );
     });
     await assertRoomExists(firstRoom.roomId, firstRoom.hostUid, monitorToken);
     pass('Guest presence recovered in the original room');
 
-    step('Take the owner context offline; the room must be deleted and guest redirected');
+    step('Open the guest account in a second tab and disconnect only one tab');
+    guestMirrorContext = await browser.newContext();
+    const guestMirrorPage = await guestMirrorContext.newPage();
+    watchForPermissionErrors(guestMirrorPage, 'guest-mirror', permissionErrors);
+    guestMirrorPage.on('dialog', (dialog) => dialog.accept());
+    await signInWithFakeGoogle(guestMirrorPage, accounts.guest, true);
+    await guestMirrorPage.goto(`${BASE_URL}/rooms/${firstRoom.roomId}`, { waitUntil: 'domcontentloaded' });
+    await waitForRoomUrl(guestMirrorPage, firstRoom.roomId);
+    await poll('two active guest connections', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.guestUid) === 2 && room;
+    });
+
+    await guestContext.setOffline(true);
+    await poll('one guest connection remains online', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.guestUid) === 1 && room;
+    });
+    await sleep(1_800);
+    const guestTabRoom = await assertRoomExists(firstRoom.roomId, firstRoom.hostUid, monitorToken);
+    if (guestTabRoom.gameState?.players?.[firstRoom.guestUid]?.isOnline !== true) {
+      throw new Error('Closing one guest tab incorrectly marked the player offline.');
+    }
+    await guestContext.setOffline(false);
+    await poll('both guest connections recover', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.guestUid) === 2 && room;
+    });
+    await guestMirrorContext.close();
+    guestMirrorContext = null;
+    await poll('guest returns to one connection after mirror closes', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.guestUid) === 1 && room;
+    });
+    pass('One disconnected guest tab did not trigger offline state or turn forfeiture');
+
+    step('Open and close a same-context cloned owner tab');
+    const clonedOwnerPromise = hostPage.waitForEvent('popup');
+    await hostPage.evaluate((url) => window.open(url, '_blank'), `${BASE_URL}/rooms/${firstRoom.roomId}`);
+    clonedOwnerPage = await clonedOwnerPromise;
+    await waitForRoomUrl(clonedOwnerPage, firstRoom.roomId);
+    await poll('cloned owner tab gets an independent connection', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.hostUid) === 2 && room;
+    });
+    await clonedOwnerPage.close();
+    clonedOwnerPage = null;
+    await poll('closing the cloned tab keeps the primary owner connection', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.hostUid) === 1 && room;
+    });
+    pass('A cloned tab did not share or delete the primary owner connection slot');
+
+    step('Open the owner account in a second browser context');
+    mirrorContext = await browser.newContext();
+    const mirrorPage = await mirrorContext.newPage();
+    watchForPermissionErrors(mirrorPage, 'host-mirror', permissionErrors);
+    mirrorPage.on('dialog', (dialog) => dialog.accept());
+    await signInWithFakeGoogle(mirrorPage, accounts.host, true);
+    await mirrorPage.goto(`${BASE_URL}/rooms/${firstRoom.roomId}`, { waitUntil: 'domcontentloaded' });
+    await waitForRoomUrl(mirrorPage, firstRoom.roomId);
+    await poll('two active owner connections', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.hostUid) >= 2 && room;
+    });
+    pass('Both owner tabs registered independent Firebase connections');
+
+    step('Navigate one owner tab to the lobby without disconnecting the other');
+    await hostPage.goto(`${BASE_URL}/rooms`, { waitUntil: 'domcontentloaded' });
+    await waitForLobby(hostPage);
+    await poll('one owner connection remains after SPA unmount cleanup', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.hostUid) === 1 && room;
+    });
+    await assertRoomExists(firstRoom.roomId, firstRoom.hostUid, monitorToken);
+    await hostPage.goto(`${BASE_URL}/rooms/${firstRoom.roomId}`, { waitUntil: 'domcontentloaded' });
+    await waitForRoomUrl(hostPage, firstRoom.roomId);
+    await poll('owner primary connection returns after SPA navigation', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.hostUid) === 2 && room;
+    });
+    pass('SPA cleanup preserved the room while another owner tab stayed connected');
+
+    step('Close one owner tab; the room must stay while the second tab is online');
+    await hostPage.close();
+    await poll('one owner connection remains', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      const count = connectionCount(room, firstRoom.hostUid);
+      if (count !== 1) throw new Error(`owner connections=${count}, roomExists=${Boolean(room)}`);
+      return room;
+    });
+    await assertRoomExists(firstRoom.roomId, firstRoom.hostUid, monitorToken);
+    await waitForRoomUrl(guestPage, firstRoom.roomId);
+    pass('Closing one of multiple owner connections did not delete the room');
+
+    hostPage = await hostContext.newPage();
+    watchForPermissionErrors(hostPage, 'host-reopened', permissionErrors);
+    hostPage.on('dialog', (dialog) => dialog.accept());
+    await hostPage.goto(`${BASE_URL}/rooms/${firstRoom.roomId}`, { waitUntil: 'domcontentloaded' });
+    await waitForRoomUrl(hostPage, firstRoom.roomId);
+    await poll('owner primary connection returns', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.hostUid) >= 2 && room;
+    });
+    await mirrorContext.close();
+    mirrorContext = null;
+    await poll('only the primary owner connection remains', async () => {
+      const room = await databaseGet(`rooms/${firstRoom.roomId}`, monitorToken);
+      return connectionCount(room, firstRoom.hostUid) === 1 && room;
+    });
+
+    step('Take the last owner context offline; the room must be deleted and guest redirected');
     const guestLobbyAfterOwnerOffline = guestPage.waitForURL((url) => url.pathname === '/rooms', {
       timeout: DEFAULT_TIMEOUT,
     });
@@ -363,6 +492,29 @@ async function main() {
       waitForRoomCardAbsent(guestPage, firstRoomName),
     ]);
     pass('The deleted room stayed absent from RTDB and both lobbies for 2 seconds');
+
+    const soloRoomName = `solo-owner-${ROOM_SUFFIX}`;
+    step('Create an owner-only room, then disconnect with only a lobby observer remaining');
+    await hostPage.getByRole('button', { name: '새 게임 방 만들기' }).click();
+    await hostPage.locator('#roomName').fill(soloRoomName);
+    await hostPage.getByRole('button', { name: '방 만들기' }).click();
+    await hostPage.waitForURL((url) => /^\/rooms\/[^/]+$/.test(url.pathname), {
+      timeout: DEFAULT_TIMEOUT,
+    });
+    const soloRoomId = currentPath(hostPage).split('/').filter(Boolean).at(-1);
+    if (!soloRoomId) throw new Error('Could not read the owner-only room id.');
+    await poll('owner-only room connection to register', async () => {
+      const room = await databaseGet(`rooms/${soloRoomId}`, monitorToken);
+      return room?.connections?.[room.createdBy] && room;
+    });
+    hostOffline = true;
+    await hostContext.setOffline(true);
+    await waitForRoomAbsent(soloRoomId, monitorToken);
+    await waitForRoomCardAbsent(guestPage, soloRoomName);
+    await hostContext.setOffline(false);
+    hostOffline = false;
+    await waitForLobby(hostPage);
+    pass('A lobby observer removed the disconnected owner-only room after the grace period');
 
     const freshRoomName = `close-owner-${ROOM_SUFFIX}`;
     step('Create a fresh room for the abrupt owner context.close scenario');
@@ -394,11 +546,14 @@ async function main() {
 
     console.log('\nAll owner-disconnect emulator E2E scenarios passed.');
   } finally {
+    if (clonedOwnerPage) await clonedOwnerPage.close().catch(() => {});
+    if (guestMirrorContext) await guestMirrorContext.close().catch(() => {});
     if (!hostContextClosed) {
       if (hostOffline) await hostContext.setOffline(false).catch(() => {});
       await hostContext.close().catch(() => {});
     }
     await guestContext.close().catch(() => {});
+    if (mirrorContext) await mirrorContext.close().catch(() => {});
     await browser.close().catch(() => {});
   }
 }

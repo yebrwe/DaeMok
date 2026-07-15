@@ -156,8 +156,6 @@ export function isValidGameRuleSnapshot(value: unknown): value is GameRuleSnapsh
   return validateGameRuleSnapshot(value).valid;
 }
 
-export const isCanonicalGameRuleSnapshot = isValidGameRuleSnapshot;
-
 export function areGameRuleSnapshotsEqual(left: unknown, right: unknown): boolean {
   if (!isValidGameRuleSnapshot(left) || !isValidGameRuleSnapshot(right)) return false;
   if (

@@ -1,4 +1,3 @@
-export const MAZE_SKILL_RULES_VERSION = 1;
 export const DEFAULT_MAZE_BOARD_SIZE = 6;
 export const MAX_MAZE_SKILL_LOADOUT = 1;
 export const RANKED_MAZE_SKILL_LOADOUT = 1;
@@ -316,19 +315,6 @@ export function moveMazePosition(position: MazePosition, direction: MazeDirectio
       return { row: position.row + 1, col: position.col };
     case 'left':
       return { row: position.row, col: position.col - 1 };
-  }
-}
-
-export function oppositeMazeDirection(direction: MazeDirection): MazeDirection {
-  switch (direction) {
-    case 'up':
-      return 'down';
-    case 'right':
-      return 'left';
-    case 'down':
-      return 'up';
-    case 'left':
-      return 'right';
   }
 }
 

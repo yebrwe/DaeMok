@@ -14,6 +14,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import LiveBoardGrid, { LiveBoardEntry, LiveBoardViewMode } from '@/components/LiveBoardGrid';
+import MobileDirectionPad from '@/components/MobileDirectionPad';
 import { BoardFx } from '@/components/three/GameBoard3D';
 import { Direction, GameMap, GamePhase, GameState, MazeSkillId } from '@/types/game';
 import {
@@ -29,6 +30,7 @@ import {
 import { MAZE_SKILL_DEFINITIONS } from '@/lib/mazeSkills';
 import {
   choosePracticeAiAction,
+  createMapTestGameState,
   createPracticeGameState,
   getPracticeCollisionWalls,
   getPracticeStandings,
@@ -38,7 +40,7 @@ import {
   PracticeStanding,
   practiceWallKey,
 } from '@/lib/practiceBattle';
-import { getMapItems, getNextTurnPlayerId } from '@/lib/gameUtils';
+import { getMapItems, getNextTurnPlayerId, isSamePosition } from '@/lib/gameUtils';
 
 const MAX_AI_MOVES = 200;
 
@@ -63,6 +65,7 @@ export interface PracticeBattleResult {
 interface PracticeBattleProps {
   playerMap: GameMap;
   aiCount: number;
+  mode?: 'race' | 'mapTest';
   onComplete: (result: PracticeBattleResult) => void;
 }
 
@@ -111,7 +114,10 @@ function outcomeVisual(outcome: TurnOutcome, key: number): RacerVisualState {
   if (outcome.effect === 'bump') {
     return {
       fx: { key, type: 'bump', at: outcome.origin, dir: outcome.direction },
-      via: null,
+      via:
+        outcome.wallEffect === 'thornWall' && !isSamePosition(outcome.position, outcome.origin)
+          ? [outcome.origin]
+          : null,
     };
   }
   if (outcome.effect === 'mine') {
@@ -126,11 +132,26 @@ function outcomeVisual(outcome: TurnOutcome, key: number): RacerVisualState {
       via: [outcome.attempted],
     };
   }
+  if (
+    (outcome.wallEffect === 'iceWall' ||
+      outcome.wallEffect === 'windWall' ||
+      outcome.wallEffect === 'mirrorWall') &&
+    !isSamePosition(outcome.position, outcome.attempted)
+  ) {
+    return { fx: null, via: [outcome.attempted] };
+  }
   return { fx: null, via: null };
 }
 
-const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onComplete }) => {
-  const [gameState, setGameState] = useState<GameState>(() => createPracticeGameState(playerMap, aiCount));
+const PracticeBattle: React.FC<PracticeBattleProps> = ({
+  playerMap,
+  aiCount,
+  mode = 'race',
+  onComplete,
+}) => {
+  const [gameState, setGameState] = useState<GameState>(() =>
+    mode === 'mapTest' ? createMapTestGameState(playerMap) : createPracticeGameState(playerMap, aiCount)
+  );
   const [viewMode, setViewMode] = useState<LiveBoardViewMode>('2d');
   const [visuals, setVisuals] = useState<Record<string, RacerVisualState>>({});
   const [armedSkill, setArmedSkill] = useState<'breach' | 'dash' | null>(null);
@@ -366,26 +387,28 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
         fx: visuals[runnerId]?.fx || null,
         via: visuals[runnerId]?.via || null,
         celebrating: !!player.finished,
-        revealObstacles: !!player.finished,
+        revealObstacles: mode === 'mapTest' || !!player.finished,
+        revealMapSecrets: mode === 'mapTest',
         pawnColor: PRACTICE_PAWN_COLORS[runnerId],
         smokeAffected: isVisionObscuredForPlayer(gameState, runnerId),
         visionObscured:
+          mode === 'race' &&
           runnerId === PRACTICE_USER_ID &&
           gameState.currentTurn === runnerId &&
           isVisionObscuredForPlayer(gameState, runnerId),
       }];
     });
-  }, [gameState, visuals]);
+  }, [gameState, mode, visuals]);
 
   const currentTurnName = currentTurnId
     ? gameState.players[currentTurnId]?.displayName || '플레이어'
     : '경기 종료';
   const turnLabel = gameState.phase === GamePhase.END
-    ? '경기 종료'
+    ? mode === 'mapTest' ? '테스트 완료' : '경기 종료'
     : humanFinished
       ? `${currentTurnName} 차례 · 관전 중`
       : isHumanTurn
-        ? '내 차례'
+        ? mode === 'mapTest' ? '내 맵 테스트' : '내 차례'
         : `${currentTurnName} 차례`;
 
   const controlDisabled = !isHumanTurn || humanFinished || gameState.phase === GamePhase.END;
@@ -406,7 +429,8 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
     <div
       className="absolute inset-0 overflow-hidden bg-slate-950"
       data-testid="practice-match"
-      data-ai-count={aiCount}
+      data-practice-mode={mode}
+      data-ai-count={mode === 'mapTest' ? 0 : aiCount}
       data-ai-thinking={aiThinking ? 'true' : 'false'}
     >
       <div className="absolute inset-x-1 top-1 z-20 h-12 sm:inset-x-2">
@@ -477,6 +501,14 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
           viewMode={viewMode}
           gameEnded={gameState.phase === GamePhase.END}
           className="h-full"
+          renderOverlay={(board) => board.runnerId === PRACTICE_USER_ID && !humanFinished ? (
+            <MobileDirectionPad
+              disabled={controlDisabled}
+              active={isHumanTurn}
+              onMove={handleHumanMove}
+              testId="practice-mobile-direction-pad"
+            />
+          ) : null}
         />
       </div>
 
@@ -496,10 +528,12 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({ playerMap, aiCount, onC
         style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(58px + env(safe-area-inset-bottom))' }}
         data-testid="practice-controls"
       >
-        {moveButton('left', '왼쪽으로 이동', ArrowLeft)}
-        {moveButton('up', '위로 이동', ArrowUp)}
-        {moveButton('down', '아래로 이동', ArrowDown)}
-        {moveButton('right', '오른쪽으로 이동', ArrowRight)}
+        <div className="hidden items-center gap-1.5 sm:flex">
+          {moveButton('left', '왼쪽으로 이동', ArrowLeft)}
+          {moveButton('up', '위로 이동', ArrowUp)}
+          {moveButton('down', '아래로 이동', ArrowDown)}
+          {moveButton('right', '오른쪽으로 이동', ArrowRight)}
+        </div>
         <button
           type="button"
           className={`ml-1 flex h-11 min-w-11 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-bold sm:h-12 ${

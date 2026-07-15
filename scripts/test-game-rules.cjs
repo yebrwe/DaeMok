@@ -873,18 +873,105 @@ assert.equal(anchoredMine.outcome.skillEffect, 'anchor', 'anchor effect is repor
 assert.equal(anchoredMine.state.itemState.a.mazeSkill.consumed.anchor, true, 'anchor consumes automatically');
 assert.equal(anchoredMine.state.itemState.b.consumed[0], true, 'negated mine still consumes');
 
-const practiceSpecialTypes = new Set();
+const practiceAiItemTypes = new Set();
 for (const [index, map] of practice.PRACTICE_MAP_TEMPLATES.entries()) {
   assert.equal(utils.isValidMap(map), true, `practice template ${index + 1} remains valid`);
+  assert.equal(
+    utils.getMapBudgetUsed(map),
+    utils.MAX_OBSTACLES,
+    `practice template ${index + 1} spends the full wall budget`
+  );
+  const manhattan = Math.abs(map.startPosition.row - map.endPosition.row) +
+    Math.abs(map.startPosition.col - map.endPosition.col);
+  assert.ok(
+    practice.getPracticeMapRouteLength(map) > manhattan,
+    `practice template ${index + 1} forces a real detour to the exit`
+  );
   assert.equal(utils.isMazeSkillId(map.skillLoadout), true, `practice template ${index + 1} equips a skill`);
-  for (const item of map.items || []) {
-    if (utils.SPECIAL_WALL_TYPES.includes(item.type)) practiceSpecialTypes.add(item.type);
+}
+for (let index = 0; index < 3; index += 1) {
+  for (const item of practice.createAiPracticeMap(index).items || []) {
+    practiceAiItemTypes.add(item.type);
   }
 }
 assert.deepEqual(
-  [...practiceSpecialTypes].sort(),
-  [...utils.SPECIAL_WALL_TYPES].sort(),
-  'practice templates cover all ten special walls'
+  [...practiceAiItemTypes].sort(),
+  Object.keys(utils.ITEM_COSTS).sort(),
+  'the three AI maps collectively use every trap and all ten special walls'
 );
+
+function simulatePracticeState(initialState, label) {
+  let state = initialState;
+  const probeCounts = {};
+  for (let step = 0; step < 800 && state.phase === types.GamePhase.PLAY; step += 1) {
+    const actorId = state.currentTurn;
+    assert.ok(actorId, `${label}: current turn exists`);
+    probeCounts[actorId] ||= {};
+    const action = practice.choosePracticeAiAction(state, actorId, probeCounts[actorId]);
+    assert.ok(action, `${label}: ${actorId} finds an action`);
+    let resolved = turns.resolveTurnAction(state, actorId, action, 10_000 + step);
+    if (!resolved && action.type === 'skill' && action.direction) {
+      resolved = turns.resolveTurnAction(
+        state,
+        actorId,
+        { type: 'move', direction: action.direction },
+        10_000 + step
+      );
+    }
+    assert.ok(resolved, `${label}: ${actorId} resolves an action`);
+    if (resolved.outcome.type === 'move' && resolved.outcome.effect === 'bump') {
+      const key = practice.practiceWallKey(resolved.outcome.origin, resolved.outcome.direction);
+      probeCounts[actorId][key] = (probeCounts[actorId][key] || 0) + 1;
+    }
+    state = resolved.state;
+  }
+  assert.equal(state.phase, types.GamePhase.END, `${label}: simulation reaches END`);
+  assert.equal(
+    Object.values(state.players).every((player) => player.finished && !player.forfeited),
+    true,
+    `${label}: every runner escapes without retirement`
+  );
+  return state;
+}
+
+for (const [templateIndex, map] of practice.PRACTICE_MAP_TEMPLATES.entries()) {
+  for (const aiCount of [1, 2, 3]) {
+    simulatePracticeState(
+      practice.createPracticeGameState(map, aiCount),
+      `practice template ${templateIndex + 1} with ${aiCount} AI`
+    );
+  }
+}
+
+const mapTestState = practice.createMapTestGameState(practice.PRACTICE_MAP_TEMPLATES[0]);
+assert.deepEqual(mapTestState.turnOrder, [practice.PRACTICE_USER_ID]);
+assert.equal(mapTestState.assignments[practice.PRACTICE_USER_ID], practice.PRACTICE_USER_ID);
+assert.deepEqual(
+  mapTestState.players[practice.PRACTICE_USER_ID].position,
+  practice.PRACTICE_MAP_TEMPLATES[0].startPosition,
+  'map test starts the creator on their own map'
+);
+const mapTestMove = turns.resolveTurnAction(
+  mapTestState,
+  practice.PRACTICE_USER_ID,
+  { type: 'move', direction: 'down' },
+  301
+);
+assert.ok(mapTestMove, 'solo map test resolves through the shared turn engine');
+assert.equal(
+  mapTestMove.state.currentTurn,
+  practice.PRACTICE_USER_ID,
+  'solo map test immediately returns the next turn to the creator'
+);
+assert.throws(
+  () => practice.createMapTestGameState(baseMap()),
+  /valid 24\/24 map/,
+  'solo map test rejects incomplete maps outside the setup UI'
+);
+const completedMapTest = simulatePracticeState(
+  practice.createMapTestGameState(practice.PRACTICE_MAP_TEMPLATES[0]),
+  'solo creator map test'
+);
+assert.equal(completedMapTest.winner, practice.PRACTICE_USER_ID, 'solo map test records the creator as winner');
 
 console.log('game rule regression tests passed');

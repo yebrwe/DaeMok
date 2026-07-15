@@ -10,8 +10,8 @@ import {
   query,
   ref,
   remove,
+  runTransaction,
   serverTimestamp,
-  set,
   update,
   type Database,
   type OnDisconnect,
@@ -24,6 +24,7 @@ import {
   type AdventureState,
   type CharacterClassId,
 } from '@/lib/adventure';
+import { withAdventureTownState, type TownAdventureState } from '@/lib/adventureTown';
 import { firebaseInitPromise } from '@/lib/firebase';
 
 const ADVENTURE_STATE_PATH = 'adventure/v1';
@@ -44,6 +45,7 @@ export interface AdventureRankingEntry {
   totalKills: number;
   bossesKilled: number;
   collectionCount: number;
+  resetGeneration: number;
   updatedAt: AdventureTimestamp;
 }
 
@@ -90,11 +92,12 @@ function createRankingEntry(user: AdventureUser, state: AdventureState): Adventu
     totalKills: state.statistics.totalKills,
     bossesKilled: state.statistics.bossesKilled,
     collectionCount: state.discoveredItemKeys.length,
+    resetGeneration: state.resetGeneration,
     updatedAt: serverTimestamp(),
   };
 }
 
-export async function saveAdventureStateAndRanking(user: AdventureUser, state: AdventureState): Promise<void> {
+export async function saveAdventureStateAndRanking(user: AdventureUser, state: TownAdventureState): Promise<void> {
   assertValidUid(user.uid);
   const database = await getAdventureDatabase();
   const ranking = createRankingEntry(user, state);
@@ -110,20 +113,46 @@ export async function saveAdventureStateAndRanking(user: AdventureUser, state: A
   });
 }
 
-export async function loadAdventureState(uid: string): Promise<AdventureState | null> {
+export async function loadAdventureState(uid: string): Promise<TownAdventureState | null> {
   assertValidUid(uid);
   const database = await getAdventureDatabase();
   const snapshot = await get(ref(database, `users/${uid}/${ADVENTURE_STATE_PATH}`));
-  return snapshot.exists() ? sanitizeAdventureState(snapshot.val()) : null;
+  if (!snapshot.exists()) return null;
+  const raw = snapshot.val();
+  return withAdventureTownState(sanitizeAdventureState(raw), isRecord(raw) ? raw.town : undefined);
 }
 
-export async function resetAdventureStateAndRanking(uid: string): Promise<void> {
+export async function loadAdventureGeneration(uid: string): Promise<number> {
   assertValidUid(uid);
   const database = await getAdventureDatabase();
-  await update(ref(database), {
-    [`users/${uid}/${ADVENTURE_STATE_PATH}`]: null,
-    [`adventureRankings/${uid}`]: null,
-  });
+  const snapshot = await get(ref(database, `users/${uid}/adventureGeneration`));
+  return typeof snapshot.val() === 'number' ? snapshot.val() : 0;
+}
+
+export async function resetAdventureStateAndRanking(uid: string): Promise<number> {
+  assertValidUid(uid);
+  const database = await getAdventureDatabase();
+  let lastError: unknown = new Error('모험 초기화에 실패했습니다.');
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const generationSnapshot = await get(ref(database, `users/${uid}/adventureGeneration`));
+    const current = generationSnapshot.val();
+    const generation = typeof current === 'number' && Number.isSafeInteger(current) ? current + 1 : 1;
+    if (generation > 1_000_000) throw new Error('모험 초기화 횟수 제한을 초과했습니다.');
+
+    try {
+      await update(ref(database), {
+        [`users/${uid}/adventureGeneration`]: generation,
+        [`users/${uid}/${ADVENTURE_STATE_PATH}`]: null,
+        [`adventureRankings/${uid}`]: null,
+      });
+      return generation;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError;
 }
 
 function subscribeAfterInitialization(
@@ -162,6 +191,8 @@ function parseRankingEntry(key: string | null, value: unknown): AdventureRanking
   if (!isNonNegativeInteger(value.level) || !isNonNegativeInteger(value.masteryLevel)) return null;
   if (!isNonNegativeInteger(value.power) || !isNonNegativeInteger(value.totalKills)) return null;
   if (!isNonNegativeInteger(value.bossesKilled) || !isNonNegativeInteger(value.collectionCount)) return null;
+  const resetGeneration = value.resetGeneration == null ? 0 : value.resetGeneration;
+  if (!isNonNegativeInteger(resetGeneration)) return null;
   if (!isNonNegativeInteger(value.updatedAt)) return null;
 
   const photoURL = typeof value.photoURL === 'string' && value.photoURL ? value.photoURL : undefined;
@@ -176,6 +207,7 @@ function parseRankingEntry(key: string | null, value: unknown): AdventureRanking
     totalKills: value.totalKills,
     bossesKilled: value.bossesKilled,
     collectionCount: value.collectionCount,
+    resetGeneration,
     updatedAt: value.updatedAt,
   };
 }
@@ -221,19 +253,24 @@ export function subscribeAdventureRankings(
 
 export function subscribeAdventureState(
   uid: string,
-  callback: (state: AdventureState | null) => void,
+  callback: (state: TownAdventureState | null, generation: number) => void,
 ): Unsubscribe {
   assertValidUid(uid);
   return subscribeAfterInitialization((database) => onValue(
-    ref(database, `users/${uid}/${ADVENTURE_STATE_PATH}`),
-    (snapshot) => callback(snapshot.exists() ? sanitizeAdventureState(snapshot.val()) : null),
+    ref(database, `users/${uid}`),
+    (snapshot) => {
+      const stateSnapshot = snapshot.child(ADVENTURE_STATE_PATH);
+      const generation = snapshot.child('adventureGeneration').val();
+      const raw = stateSnapshot.val();
+      callback(stateSnapshot.exists()
+        ? withAdventureTownState(sanitizeAdventureState(raw), isRecord(raw) ? raw.town : undefined)
+        : null, typeof generation === 'number' ? generation : 0);
+    },
     (error) => {
       console.error('모험 상태 구독 오류:', error);
-      callback(null);
     },
   ), (error) => {
     console.error('모험 상태 초기화 오류:', error);
-    callback(null);
   });
 }
 
@@ -250,36 +287,64 @@ function createPresenceEntry(user: AdventureUser): AdventurePresenceEntry {
 
 export function startAdventurePresence(user: AdventureUser): Unsubscribe {
   assertValidUid(user.uid);
+  const startSlot = Math.floor(Math.random() * 8);
   let active = true;
   let connectionEpoch = 0;
   let stopConnectionListener: Unsubscribe | null = null;
   let presenceRef: ReturnType<typeof ref> | null = null;
   let disconnectRegistration: OnDisconnect | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   void getAdventureDatabase()
     .then((database) => {
       if (!active) return;
-      presenceRef = ref(database, `adventurePresence/${user.uid}`);
       const connectedRef = ref(database, '.info/connected');
 
       stopConnectionListener = onValue(connectedRef, (snapshot) => {
-        if (snapshot.val() !== true || !active || !presenceRef) return;
         const epoch = ++connectionEpoch;
-        const currentPresenceRef = presenceRef;
-        const registration = onDisconnect(currentPresenceRef);
-        disconnectRegistration = registration;
+        if (snapshot.val() !== true || !active) {
+          if (heartbeatTimer) clearInterval(heartbeatTimer);
+          heartbeatTimer = null;
+          presenceRef = null;
+          disconnectRegistration = null;
+          return;
+        }
 
-        void registration.remove()
-          .then(async () => {
+        void (async () => {
+          for (let offset = 0; offset < 8; offset += 1) {
+            const slot = String((startSlot + offset) % 8);
+            const candidateRef = ref(database, `adventurePresence/${user.uid}/${slot}`);
+            const registration = onDisconnect(candidateRef);
+            await registration.remove();
+            const now = Date.now();
+            const result = await runTransaction(candidateRef, (current) => current == null ? {
+              ...createPresenceEntry(user),
+              connectedAt: now,
+              lastSeen: now,
+            } : undefined, { applyLocally: false });
+            if (!result.committed) {
+              await registration.cancel();
+              continue;
+            }
+
             if (!active || epoch !== connectionEpoch) {
               await registration.cancel();
+              await remove(candidateRef);
               return;
             }
-            await set(currentPresenceRef, createPresenceEntry(user));
-          })
-          .catch((error: unknown) => {
-            if (active) console.error('모험 접속 상태 등록 오류:', error);
-          });
+            presenceRef = candidateRef;
+            disconnectRegistration = registration;
+            if (heartbeatTimer) clearInterval(heartbeatTimer);
+            heartbeatTimer = setInterval(() => {
+              if (!active || epoch !== connectionEpoch) return;
+              void update(candidateRef, { lastSeen: serverTimestamp() });
+            }, 25_000);
+            return;
+          }
+          throw new Error('모험 접속 슬롯 8개가 모두 사용 중입니다.');
+        })().catch((error: unknown) => {
+          if (active && epoch === connectionEpoch) console.error('모험 접속 상태 등록 오류:', error);
+        });
       }, (error) => {
         console.error('Firebase 연결 상태 구독 오류:', error);
       });
@@ -292,20 +357,41 @@ export function startAdventurePresence(user: AdventureUser): Unsubscribe {
     active = false;
     connectionEpoch += 1;
     stopConnectionListener?.();
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (disconnectRegistration) void disconnectRegistration.cancel();
     if (presenceRef) void remove(presenceRef);
   };
 }
 
 export function subscribeAdventureOnlineCount(callback: (count: number) => void): Unsubscribe {
-  return subscribeAfterInitialization((database) => onValue(
-    ref(database, 'adventurePresence'),
-    (snapshot) => callback(snapshot.size),
-    (error) => {
-      console.error('모험 접속자 수 구독 오류:', error);
-      callback(0);
-    },
-  ), (error) => {
+  return subscribeAfterInitialization((database) => {
+    let latestPresence: Record<string, Record<string, { lastSeen?: number }> | null> = {};
+    const emitCount = () => {
+      const cutoff = Date.now() - 90_000;
+      const count = Object.values(latestPresence).filter((connections) =>
+        connections && Object.values(connections).some((entry) =>
+          typeof entry?.lastSeen === 'number' && entry.lastSeen >= cutoff
+        )
+      ).length;
+      callback(count);
+    };
+    const stop = onValue(
+      ref(database, 'adventurePresence'),
+      (snapshot) => {
+        latestPresence = snapshot.val() || {};
+        emitCount();
+      },
+      (error) => {
+        console.error('모험 접속자 수 구독 오류:', error);
+        callback(0);
+      },
+    );
+    const expiryTimer = setInterval(emitCount, 30_000);
+    return () => {
+      stop();
+      clearInterval(expiryTimer);
+    };
+  }, (error) => {
     console.error('모험 접속자 수 초기화 오류:', error);
     callback(0);
   });

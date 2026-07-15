@@ -42,6 +42,7 @@ next-env.d.ts
 
 # E2E 테스트 산출물
 /e2e-artifacts/
+/.playwright-cli/
 
 # Firebase 에뮬레이터 디버그 로그
 *-debug.log

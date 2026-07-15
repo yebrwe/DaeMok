@@ -31,12 +31,13 @@ export interface LiveBoardEntry {
   via?: Position[] | null;
   celebrating?: boolean;
   revealObstacles?: boolean;
+  revealMapSecrets?: boolean;
   pawnColor?: string;
   smokeAffected?: boolean;
   visionObscured?: boolean;
 }
 
-export interface LiveBoardGridProps {
+interface LiveBoardGridProps {
   boards: LiveBoardEntry[];
   currentTurnId?: string | null;
   myPlayerId?: string | null;
@@ -53,6 +54,69 @@ function boardStatus(board: LiveBoardEntry, isCurrentTurn: boolean, isMine: bool
   if (isCurrentTurn) return isMine ? '내 턴' : '현재 턴';
   return '대기';
 }
+
+const Responsive2DBoard: React.FC<React.PropsWithChildren> = ({ children }) => {
+  const viewportRef = React.useRef<HTMLDivElement>(null);
+  const surfaceRef = React.useRef<HTMLDivElement>(null);
+  const [scale, setScale] = React.useState(1);
+
+  const fitBoard = React.useCallback(() => {
+    const viewport = viewportRef.current;
+    const surface = surfaceRef.current;
+    if (!viewport || !surface) return;
+
+    const styles = window.getComputedStyle(viewport);
+    const availableWidth = viewport.clientWidth
+      - Number.parseFloat(styles.paddingLeft)
+      - Number.parseFloat(styles.paddingRight);
+    const availableHeight = viewport.clientHeight
+      - Number.parseFloat(styles.paddingTop)
+      - Number.parseFloat(styles.paddingBottom);
+    const naturalWidth = surface.offsetWidth;
+    const naturalHeight = surface.offsetHeight;
+    if (availableWidth <= 0 || availableHeight <= 0 || naturalWidth <= 0 || naturalHeight <= 0) return;
+
+    // Round down so subpixel layout cannot crop the final border on either axis.
+    const nextScale = Math.max(
+      0.1,
+      Math.floor(Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight) * 1000) / 1000
+    );
+    setScale((current) => Math.abs(current - nextScale) < 0.001 ? current : nextScale);
+  }, []);
+
+  React.useLayoutEffect(() => {
+    fitBoard();
+    const animationFrame = window.requestAnimationFrame(fitBoard);
+    const resizeObserver = new ResizeObserver(fitBoard);
+    if (viewportRef.current) resizeObserver.observe(viewportRef.current);
+    if (surfaceRef.current) resizeObserver.observe(surfaceRef.current);
+    window.addEventListener('resize', fitBoard);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', fitBoard);
+    };
+  }, [fitBoard]);
+
+  return (
+    <div
+      ref={viewportRef}
+      className="absolute inset-x-0 bottom-0 top-7 flex min-h-0 min-w-0 items-center justify-center overflow-hidden bg-slate-900 p-1"
+      data-testid="board-2d-viewport"
+    >
+      <div
+        ref={surfaceRef}
+        className="inline-flex shrink-0 origin-center"
+        data-testid="board-2d-surface"
+        data-board-scale={scale.toFixed(3)}
+        style={{ transform: `scale(${scale})` }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+};
 
 const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
   boards,
@@ -75,17 +139,13 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
     : visibleBoards.length === 2
       ? 'grid-cols-1 grid-rows-2 sm:grid-cols-2 sm:grid-rows-1'
       : 'grid-cols-2 grid-rows-2';
-  const twoDimensionalScaleClass = visibleBoards.length <= 2
-    ? 'scale-[0.92] sm:scale-[0.82] md:scale-[0.92] lg:scale-100'
-    : 'scale-[0.56] sm:scale-[0.82] md:scale-[0.84] lg:scale-[0.9] xl:scale-100';
-
   return (
     <div className={`grid h-full w-full min-h-0 min-w-0 gap-1.5 sm:gap-2 ${layoutClass} ${className}`}>
       {visibleBoards.map((board) => {
         const isCurrentTurn = !gameEnded && currentTurnId === board.runnerId;
         const isMine = myPlayerId === board.runnerId;
         const isMapOwner = !!myPlayerId && myPlayerId === board.mapOwnerId && myPlayerId !== board.runnerId;
-        const showMapSecrets = gameEnded || isMapOwner;
+        const showMapSecrets = gameEnded || isMapOwner || !!board.revealMapSecrets;
         const revealObstacles = gameEnded || isMapOwner || !!board.revealObstacles;
         const visibleItems = showMapSecrets ? getMapItems(board.map) : [];
         const visibleCollisions = getVisibleCollisionWalls(
@@ -140,28 +200,26 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
                 compact
               />
             ) : (
-              <div className="absolute inset-0 flex items-center justify-center overflow-hidden bg-slate-900">
-                <div className={`inline-flex shrink-0 origin-center ${twoDimensionalScaleClass}`}>
-                  <GameBoard
-                    gamePhase={GamePhase.PLAY}
-                    startPosition={board.map.startPosition}
-                    endPosition={board.map.endPosition}
-                    playerPosition={board.position}
-                    obstacles={board.map.obstacles}
-                    collisionWalls={visibleCollisions}
-                    readOnly
-                    playerPhotoURL={board.runnerPhotoURL || undefined}
-                    revealObstacles={revealObstacles}
-                    revealItems={showMapSecrets}
-                    distinguishOneTimeWalls={showMapSecrets}
-                    items={visibleItems}
-                    itemsConsumed={board.itemsConsumed || {}}
-                    itemActiveWalls={board.itemActiveWalls || {}}
-                    itemPhaseOpen={board.itemPhaseOpen || {}}
-                    revealedWalls={board.revealedWalls || []}
-                  />
-                </div>
-              </div>
+              <Responsive2DBoard>
+                <GameBoard
+                  gamePhase={GamePhase.PLAY}
+                  startPosition={board.map.startPosition}
+                  endPosition={board.map.endPosition}
+                  playerPosition={board.position}
+                  obstacles={board.map.obstacles}
+                  collisionWalls={visibleCollisions}
+                  readOnly
+                  playerPhotoURL={board.runnerPhotoURL || undefined}
+                  revealObstacles={revealObstacles}
+                  revealItems={showMapSecrets}
+                  distinguishOneTimeWalls={showMapSecrets}
+                  items={visibleItems}
+                  itemsConsumed={board.itemsConsumed || {}}
+                  itemActiveWalls={board.itemActiveWalls || {}}
+                  itemPhaseOpen={board.itemPhaseOpen || {}}
+                  revealedWalls={board.revealedWalls || []}
+                />
+              </Responsive2DBoard>
             )}
 
             {board.visionObscured && (

@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { CollisionWall, Direction, GameMap, GameState, MazeSkillId, Obstacle, Position } from '@/types/game';
 import type { BoardFx } from './three/GameBoard3D';
 import LiveBoardGrid, { LiveBoardEntry } from './LiveBoardGrid';
+import MobileDirectionPad from './MobileDirectionPad';
 import { Anchor, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Box, FastForward, Grid2X2, ScanSearch, ShieldAlert } from 'lucide-react';
 import { getNewPosition, isPositionInBoard, isSamePosition, getMapItems } from '@/lib/gameUtils';
 import {
@@ -527,10 +528,12 @@ const GamePlay: React.FC<GamePlayProps> = ({
         style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(58px + env(safe-area-inset-bottom))' }}
         data-testid="online-controls"
       >
-        {moveButton('left', '왼쪽으로 이동', ArrowLeft)}
-        {moveButton('up', '위로 이동', ArrowUp)}
-        {moveButton('down', '아래로 이동', ArrowDown)}
-        {moveButton('right', '오른쪽으로 이동', ArrowRight)}
+        <div className="hidden items-center gap-1 sm:flex">
+          {moveButton('left', '왼쪽으로 이동', ArrowLeft)}
+          {moveButton('up', '위로 이동', ArrowUp)}
+          {moveButton('down', '아래로 이동', ArrowDown)}
+          {moveButton('right', '오른쪽으로 이동', ArrowRight)}
+        </div>
         <button
           className={`ml-1 flex h-11 min-w-11 items-center justify-center rounded-lg border ${
             armedSkill
@@ -561,6 +564,14 @@ const GamePlay: React.FC<GamePlayProps> = ({
         gameEnded={gameEnded}
         className={`absolute inset-0 px-2 pt-[112px] ${isFinished ? 'pb-2' : 'pb-[66px]'}`}
         emptyState={<span className="text-sm text-slate-400">보드 동기화 중</span>}
+        renderOverlay={(board) => board.runnerId === userId && !isFinished ? (
+          <MobileDirectionPad
+            disabled={!isMyTurn}
+            active={isMyTurn}
+            onMove={handleMove}
+            testId="online-mobile-direction-pad"
+          />
+        ) : null}
       />
 
       {!isFinished && renderControls()}

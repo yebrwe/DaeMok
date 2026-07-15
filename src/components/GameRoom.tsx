@@ -16,8 +16,8 @@ import {
   registerSpectator,
   tryRestoreAuth,
   updateRoomUserStatus,
-  getRoomOnlineUsers,
-  clearRoomPresence
+  clearRoomPresence,
+  ROOM_OWNER_DISCONNECT_GRACE_MS,
 } from '@/lib/firebase';
 import { getFirstTurnPlayerId, getNextTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
 import { isValidMapForRuleSnapshot } from '@/lib/gameRules';
@@ -89,16 +89,15 @@ const usePlayersActivity = (roomId: string) => {
   useEffect(() => {
     if (!roomId) return;
     
-    // 방 참여자 실시간 상태 감지 - 새로운 함수 사용
-    const unsubscribe = getRoomOnlineUsers(roomId, (users) => {
+    const connectionsRef = ref(getDatabase(), `rooms/${roomId}/connections`);
+    const unsubscribe = onValue(connectionsRef, (snapshot) => {
       const players: {[key: string]: boolean} = {};
-      
-      users.forEach(user => {
-        players[user.uid] = true;
+
+      snapshot.forEach((userConnections) => {
+        if (userConnections.hasChildren()) players[userConnections.key || ''] = true;
       });
-      
+
       setPlayersStatus(players);
-      console.log('게임방 온라인 플레이어 상태 업데이트:', players);
     });
     
     return () => unsubscribe();
@@ -154,26 +153,18 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 방 정보 가져오기
   useEffect(() => {
     if (!roomId) return;
-    
-    const fetchRoomData = async () => {
-      try {
-        const database = getDatabase();
-        const roomRef = ref(database, `rooms/${roomId}`);
-        const snapshot = await get(roomRef);
-        
-        if (snapshot.exists()) {
-          setRoomData(snapshot.val());
-        }
-      } catch (error) {
+
+    const roomRef = ref(getDatabase(), `rooms/${roomId}`);
+    return onValue(roomRef, (snapshot) => {
+      setRoomData(snapshot.exists() ? snapshot.val() : null);
+    }, (error) => {
+      if (!roomRedirectingRef.current) {
         console.error('방 정보 가져오기 오류:', error);
       }
-    };
-    
-    fetchRoomData();
+    });
   }, [roomId]);
 
-  // 방 내부 삭제와 독립적인 전역 접속 상태를 구독한다. END 정산 때문에
-  // 방장의 onDisconnect 삭제가 거절돼도 이 값은 반드시 false로 전환된다.
+  // 탭별 연결을 집계해 같은 방장 계정의 모든 탭이 끊긴 경우만 오프라인으로 본다.
   useEffect(() => {
     const ownerId = roomData?.createdBy;
     if (!ownerId) {
@@ -181,16 +172,60 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       return;
     }
 
-    const ownerOnlineRef = ref(getDatabase(), `userStatus/${ownerId}/online`);
+    const ownerOnlineRef = ref(getDatabase(), `rooms/${roomId}/connections/${ownerId}`);
     return onValue(
       ownerOnlineRef,
-      (snapshot) => setOwnerOnline(snapshot.exists() ? snapshot.val() === true : null),
+      (snapshot) => setOwnerOnline(snapshot.hasChildren()),
       (error) => {
         console.error('방장 접속 상태 구독 오류:', error);
         setOwnerOnline(null);
       }
     );
-  }, [roomData?.createdBy]);
+  }, [roomData?.createdBy, roomId]);
+
+  // 공유 isOnline 값은 탭별 connection 집계에서만 갱신한다. 다른 참가자의
+  // 마지막 탭이 사라진 경우에도 남아 있는 클라이언트가 턴 상태를 정리한다.
+  useEffect(() => {
+    if (!gameState?.players?.[userId]) return;
+
+    const database = getDatabase();
+    const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    const connectionsRef = ref(database, `rooms/${roomId}/connections`);
+    const unsubscribe = onValue(connectionsRef, (snapshot) => {
+      Object.entries(gameState.players || {}).forEach(([playerId, player]) => {
+        const online = snapshot.child(playerId).hasChildren();
+        const pending = timers.get(playerId);
+        if (online) {
+          if (pending) clearTimeout(pending);
+          timers.delete(playerId);
+          if (playerId === userId && player.isOnline !== true) {
+            void update(ref(database, `rooms/${roomId}/gameState/players/${playerId}`), {
+              isOnline: true,
+              lastSeen: serverTimestamp(),
+            }).catch(() => {});
+          }
+          return;
+        }
+
+        if (player.isOnline === false || pending) return;
+        timers.set(playerId, setTimeout(() => {
+          timers.delete(playerId);
+          void get(ref(database, `rooms/${roomId}/connections/${playerId}`)).then((latest) => {
+            if (latest.hasChildren()) return;
+            return update(ref(database, `rooms/${roomId}/gameState/players/${playerId}`), {
+              isOnline: false,
+              lastSeen: serverTimestamp(),
+            });
+          }).catch(() => {});
+        }, 1_200));
+      });
+    });
+
+    return () => {
+      unsubscribe();
+      timers.forEach((timer) => clearTimeout(timer));
+    };
+  }, [gameState?.players, roomId, userId]);
   
   // 승자 메시지 함수를 useCallback으로 메모이제이션 (다인전 인식)
   const getWinnerMessage = useCallback(() => {
@@ -482,40 +517,46 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     void settleFinalGame(gameState);
   }, [gameState, settleFinalGame, userId]);
 
-  // 방장의 onDisconnect 삭제가 END 랭킹 정산보다 먼저 실행되어 거절된 경우,
-  // 남은 참가자가 전원 정산 뒤 방장 오프라인을 재확인하고 방을 정리한다.
+  // 방장의 모든 탭 연결이 사라지면 남은 참가자가 방을 정리한다.
+  // END 상태는 멱등 랭킹 정산을 먼저 마친 뒤 같은 삭제 규칙을 사용한다.
   useEffect(() => {
     const ownerId = roomData?.createdBy;
     if (
       !ownerId
-      || ownerId === userId
-      || gameState?.phase !== GamePhase.END
-      || !gameState.players?.[userId]
+      || !gameState
       || ownerOnline !== false
+      || roomData?.ownerPresenceReady !== true
     ) return;
 
     let active = true;
 
     const cleanupOfflineOwnerRoom = async () => {
       try {
-        if (!(await settleFinalGame(gameState)) || !active) return;
+        await new Promise((resolve) => setTimeout(resolve, ROOM_OWNER_DISCONNECT_GRACE_MS));
+        if (!active) return;
+        if (
+          gameState.phase === GamePhase.END
+          && gameState.players?.[userId]
+          && !(await settleFinalGame(gameState))
+        ) return;
 
         const roomRef = ref(getDatabase(), `rooms/${roomId}`);
-        const [snapshot, ownerOnlineSnapshot] = await Promise.all([
+        const [snapshot, ownerConnectionsSnapshot] = await Promise.all([
           get(roomRef),
-          get(ref(getDatabase(), `userStatus/${ownerId}/online`)),
+          get(ref(getDatabase(), `rooms/${roomId}/connections/${ownerId}`)),
         ]);
-        if (!active || !snapshot.exists() || ownerOnlineSnapshot.val() !== false) return;
+        if (!active || !snapshot.exists() || ownerConnectionsSnapshot.hasChildren()) return;
 
         const latestRoom = snapshot.val() as Room;
         if (
           latestRoom.createdBy !== ownerId
-          || latestRoom.gameState?.phase !== GamePhase.END
-          || !latestRoom.gameState.players?.[userId]
+          || latestRoom.ownerPresenceReady !== true
+          || typeof latestRoom.ownerDisconnectedAt !== 'number'
+          || Date.now() - latestRoom.ownerDisconnectedAt < ROOM_OWNER_DISCONNECT_GRACE_MS
         ) return;
 
         await remove(roomRef);
-        console.log('오프라인 방장의 종료 방을 정리했습니다:', roomId);
+        console.log('모든 연결이 종료된 방장의 방을 정리했습니다:', roomId);
       } catch (error) {
         // 여러 참가자가 동시에 정리하면 먼저 성공한 삭제 이후 요청은 무시해도 된다.
         if (active) console.error('오프라인 방장 종료 방 정리 오류:', error);
@@ -526,7 +567,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     return () => {
       active = false;
     };
-  }, [gameState, ownerOnline, roomData?.createdBy, roomId, settleFinalGame, userId]);
+  }, [gameState, ownerOnline, roomData?.createdBy, roomData?.ownerPresenceReady, roomId, settleFinalGame, userId]);
 
   // 현재 턴 참가자의 연결이 오래 끊겼을 때만 남은 온라인 참가자가 턴을 회수한다.
   // 여러 클라이언트가 동시에 시도해도 currentTurn을 재검증하는 단일 transaction만 커밋된다.
@@ -750,9 +791,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         await settleFinalGame(gameState);
       }
 
-      // 서버에 등록된 onDisconnect 작업 취소 (삭제된 방 경로에 잔여물이 재생성되는 것 방지)
-      await clearRoomPresence(roomId, userId);
-
       const roomSnapshot = await get(roomRef);
 
       if (!roomSnapshot.exists()) {
@@ -765,22 +803,21 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
 
       if (isRoomOwner) {
         // 방장: 다른 플레이어가 남아 있어도 방을 즉시 삭제
-        // 삭제 중 상태를 먼저 브로드캐스트해 다른 클라이언트의 리디렉션을 유도
+        // 마지막 연결을 지우기 전에 삭제 상태를 알린다. 그렇지 않으면 참가자의
+        // 오프라인 방장 정리와 이 삭제가 동시에 실행될 수 있다.
         console.log('방장이 나가서 방을 삭제합니다:', roomId);
-        try {
-          await update(roomRef, {
-            status: 'deleting',
-            deletedBy: userId,
-            deletedAt: serverTimestamp()
-          });
-        } catch (e) {
-          console.error('삭제 상태 브로드캐스트 실패:', e);
-        }
+        await update(roomRef, {
+          status: 'deleting',
+          deletedBy: userId,
+          deletedAt: serverTimestamp()
+        });
+        await clearRoomPresence(roomId, userId);
 
         await remove(roomRef);
         console.log('방이 삭제되었습니다:', roomId);
       } else {
         // 일반 참여자: 자신의 흔적만 제거
+        await clearRoomPresence(roomId, userId);
         const success = await leaveRoom(roomId, userId);
         if (success) {
           await remove(ref(database, `rooms/${roomId}/members/${userId}`)).catch(() => {});
@@ -814,13 +851,15 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 방 초기화를 위한 useEffect
   useEffect(() => {
     // 방에 처음 입장했을 때 실행
-    if (roomId && userId && !gameState) {
+    if (roomId && userId && !gameState && !roomRedirectingRef.current) {
       const initRoom = async () => {
         try {
           const database = getDatabase();
           const roomRef = ref(database, `rooms/${roomId}`);
           const snapshot = await get(roomRef);
           
+          if (roomRedirectingRef.current) return;
+
           if (!snapshot.exists()) {
             console.error('방을 찾을 수 없음:', roomId);
             router.push('/rooms');
@@ -884,6 +923,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
           // 게임방 온라인 상태 업데이트 (새로운 함수 사용)
           await updateRoomUserStatus(roomId, userId, true);
         } catch (error) {
+          if (roomRedirectingRef.current) return;
           console.error('방 초기화 중 오류:', error);
           setError('방 정보를 불러오는 데 문제가 발생했습니다.');
         }
@@ -975,7 +1015,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
 
     const me = gameState.players?.[userId];
     return (
-      <div className="w-full max-w-2xl mx-auto game-panel !rounded-xl px-3 py-2 mb-2">
+      <div className="w-full max-w-2xl mx-auto game-panel !rounded-xl px-3 py-2 mb-2" data-testid="room-game-header">
         <div className="flex justify-between items-center gap-2">
           {/* 방 제목 및 단계 */}
           <div className="flex items-center gap-2 min-w-0">
@@ -1006,7 +1046,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         </div>
 
         {/* 플레이어 정보 행 */}
-        <div className="flex justify-between items-center mt-1.5 text-xs">
+        <div className="flex flex-wrap justify-between items-center gap-x-2 gap-y-1 mt-1.5 text-xs max-[420px]:flex-nowrap" data-testid="room-player-strip">
           {/* 내 정보 (관전자는 배지로 표시) */}
           {isSpectator ? (
             <div className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-400/15 text-purple-300 border border-purple-400/40">
@@ -1044,7 +1084,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
             const opponents = Object.entries(gameState.players || {}).filter(([id]) => id !== userId);
             if (isSpectator) {
               return (
-                <div className="flex items-center gap-2">
+                <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1 max-[420px]:flex-nowrap max-[420px]:gap-x-1">
                   {opponents.slice(0, 4).map(([oid, o]) => (
                     <div key={oid} className="flex items-center gap-1" title={o.displayName || '플레이어'}>
                       <span className={playersStatus[oid] ? 'text-green-400 text-[9px]' : 'text-slate-600 text-[9px]'}>
@@ -1060,18 +1100,18 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
               return <div className="text-slate-500 text-[11px] animate-pulse">상대방 대기 중...</div>;
             }
             return (
-              <div className="flex items-center gap-2">
+              <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1 max-[420px]:flex-nowrap max-[420px]:gap-x-1">
                 {opponents.slice(0, 3).map(([oid, o]) => (
                   <div key={oid} className="flex items-center gap-1" title={o.displayName || '상대'}>
                     <span className={playersStatus[oid] ? 'text-green-400 text-[9px]' : 'text-slate-600 text-[9px]'}>
                       {playersStatus[oid] ? '●' : '○'}
                     </span>
-                    {o.isReady && <span className="text-green-400 text-[10px]">✓</span>}
+                    {o.isReady && <span className="text-green-400 text-[10px] max-[420px]:hidden">✓</span>}
                     <span className="text-red-300 font-medium text-[11px]">{o.displayName?.substring(0, 5) || '상대'}</span>
                     {o.photoURL ? (
-                      <Image src={o.photoURL} alt="상대" width={20} height={20} className="w-5 h-5 rounded-full ring-1 ring-red-400" />
+                      <Image src={o.photoURL} alt="상대" width={20} height={20} className="w-5 h-5 rounded-full ring-1 ring-red-400 max-[420px]:hidden" />
                     ) : (
-                      <div className="w-5 h-5 rounded-full bg-red-500 ring-1 ring-red-400" />
+                      <div className="w-5 h-5 rounded-full bg-red-500 ring-1 ring-red-400 max-[420px]:hidden" />
                     )}
                   </div>
                 ))}

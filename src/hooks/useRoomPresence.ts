@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { getDatabase, ref, onValue, update, get, onDisconnect, serverTimestamp, set } from 'firebase/database';
 import {
-  armOwnerRoomDisconnectCleanup,
+  armRoomConnectionPresence,
   cleanupNullKeys,
   checkRoomMembership,
   rejoinRoom,
@@ -180,49 +180,13 @@ export function useRoomPresence(userId: string, roomId: string) {
               return;
             }
 
-            const currentRoomData = currentRoomSnapshot.val();
-            const isRoomOwner = currentRoomData.createdBy === userId;
-            const currentGamePlayerExists = !!currentRoomData.gameState?.players?.[userId];
-            const currentIsSpectator = currentRoomData.gameState?.phase !== 'setup' && !currentGamePlayerExists;
-
-            if (isRoomOwner) {
-              const armed = await armOwnerRoomDisconnectCleanup(roomId, userId);
-              if (!armed) {
-                setError('방 연결 상태를 설정할 수 없습니다.');
-                return;
-              }
-            } else {
-              const disconnectOperations: Promise<void>[] = [
-                onDisconnect(roomMemberRef).update({
-                  online: false,
-                  lastSeen: serverTimestamp()
-                }),
-                onDisconnect(roomPlayerStatusRef).update({
-                  isOnline: false,
-                  lastSeen: serverTimestamp()
-                })
-              ];
-
-              if (!currentIsSpectator) {
-                disconnectOperations.push(
-                  onDisconnect(roomJoinRef).update({
-                    joined: true,
-                    offline: true,
-                    lastSeen: serverTimestamp()
-                  })
-                );
-              }
-
-              if (currentGamePlayerExists) {
-                disconnectOperations.push(
-                  onDisconnect(ref(database, `rooms/${roomId}/gameState/players/${userId}`)).update({
-                    isOnline: false,
-                    lastSeen: serverTimestamp()
-                  })
-                );
-              }
-
-              await Promise.all(disconnectOperations);
+            const armed = await armRoomConnectionPresence(roomId, userId);
+            if (!armed) {
+              setError('방 연결 상태를 설정할 수 없습니다.');
+              return;
+            }
+            if (currentRoomSnapshot.child('createdBy').val() === userId) {
+              await update(roomRef, { ownerPresenceReady: true });
             }
 
             await onDisconnect(userStatusRef).update({
@@ -254,7 +218,7 @@ export function useRoomPresence(userId: string, roomId: string) {
             });
             
             // 게임 상태의 플레이어 상태도 온라인으로 업데이트
-            if (currentGamePlayerExists) {
+            if (gamePlayerExists) {
               await update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), {
                 isOnline: true,
                 lastSeen: serverTimestamp()
