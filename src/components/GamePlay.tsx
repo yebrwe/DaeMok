@@ -6,7 +6,8 @@ import { CollisionWall, Direction, GameMap, GameState, MazeSkillId, Obstacle, Po
 import type { BoardFx } from './three/GameBoard3D';
 import LiveBoardGrid, { LiveBoardEntry } from './LiveBoardGrid';
 import MobileDirectionPad from './MobileDirectionPad';
-import { Anchor, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Box, FastForward, Grid2X2, ScanSearch, ShieldAlert } from 'lucide-react';
+import { useSwipeMove } from '@/hooks/useSwipeMove';
+import { Anchor, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Box, FastForward, Gamepad2, Grid2X2, ScanSearch, ShieldAlert } from 'lucide-react';
 import { getNewPosition, isPositionInBoard, isSamePosition, getMapItems } from '@/lib/gameUtils';
 import {
   getPlayerMazeSkillState,
@@ -93,6 +94,38 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const [moveVia, setMoveVia] = useState<Position[] | null>(null);
   const [armedSkill, setArmedSkill] = useState<'breach' | 'dash' | null>(null);
   const [skillNotice, setSkillNotice] = useState<string>('');
+  // 모바일 플로팅 방향패드 표시 여부 - 보드 공간을 예약하지 않고 코너에 겹쳐 띄운다
+  const [padVisible, setPadVisible] = useState(true);
+  const boardStageRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('daemok:mobilePad');
+      if (saved === '0') setPadVisible(false);
+      // 첫 판에만 스와이프 안내 (모바일 한정)
+      if (
+        window.matchMedia('(max-width: 640px)').matches &&
+        window.localStorage.getItem('daemok:swipeHintShown') !== '1'
+      ) {
+        window.localStorage.setItem('daemok:swipeHintShown', '1');
+        setMessage('💡 보드를 밀어서(스와이프) 이동할 수 있습니다');
+      }
+    } catch {
+      /* localStorage 접근 불가 - 기본값 유지 */
+    }
+  }, []);
+
+  const togglePad = useCallback(() => {
+    setPadVisible((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem('daemok:mobilePad', next ? '1' : '0');
+      } catch {
+        /* 무시 */
+      }
+      return next;
+    });
+  }, []);
   const fxKeyRef = useRef(0);
   const fireFx = useCallback((partial: Omit<BoardFx, 'key'>) => {
     fxKeyRef.current += 1;
@@ -391,6 +424,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
   );
 
   // 키보드 이벤트 처리 - ref로 항상 최신 핸들러를 사용 (stale closure 방지)
+  // 보드 스테이지 스와이프로 이동 (내 턴 가드는 handleMove 내부에서 처리)
+  useSwipeMove(boardStageRef, handleMove, { enabled: !isFinished });
+
   const handleMoveRef = useRef(handleMove);
   handleMoveRef.current = handleMove;
 
@@ -534,6 +570,21 @@ const GamePlay: React.FC<GamePlayProps> = ({
           {moveButton('down', '아래로 이동', ArrowDown)}
           {moveButton('right', '오른쪽으로 이동', ArrowRight)}
         </div>
+        <span className="mr-1 text-[10px] font-medium text-slate-500 sm:hidden">보드를 밀어서 이동</span>
+        <button
+          className={`flex h-11 min-w-11 items-center justify-center rounded-lg border sm:hidden ${
+            padVisible
+              ? 'border-amber-400/70 bg-amber-400/15 text-amber-200'
+              : 'border-slate-600/70 bg-slate-950/90 text-slate-400'
+          }`}
+          onClick={togglePad}
+          title={padVisible ? '방향패드 숨기기 (스와이프로 이동)' : '방향패드 표시'}
+          aria-label={padVisible ? '방향패드 숨기기' : '방향패드 표시'}
+          aria-pressed={padVisible}
+          data-testid="online-pad-toggle"
+        >
+          <Gamepad2 size={18} aria-hidden="true" />
+        </button>
         <button
           className={`ml-1 flex h-11 min-w-11 items-center justify-center rounded-lg border ${
             armedSkill
@@ -556,28 +607,37 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
   return (
     <div className="absolute inset-0 overflow-hidden">
-      <LiveBoardGrid
-        boards={liveBoards}
-        currentTurnId={currentTurnId}
-        myPlayerId={userId}
-        viewMode={effectiveViewMode}
-        gameEnded={gameEnded}
+      {/* 보드 스테이지: 스와이프(밀기)로 이동 - 조작 UI가 보드 공간을 잡아먹지 않는다 */}
+      <div
+        ref={boardStageRef}
         className={`absolute inset-0 px-2 pt-[112px] ${
-          isFinished ? 'pb-2' : 'pb-[calc(206px+env(safe-area-inset-bottom))] sm:pb-[66px]'
+          isFinished ? 'pb-2' : 'pb-[calc(66px+env(safe-area-inset-bottom))]'
         }`}
-        emptyState={<span className="text-sm text-slate-400">보드 동기화 중</span>}
-      />
+        style={{ touchAction: 'none' }}
+        data-testid="online-board-stage"
+      >
+        <LiveBoardGrid
+          boards={liveBoards}
+          currentTurnId={currentTurnId}
+          myPlayerId={userId}
+          viewMode={effectiveViewMode}
+          gameEnded={gameEnded}
+          className="h-full w-full"
+          emptyState={<span className="text-sm text-slate-400">보드 동기화 중</span>}
+        />
+      </div>
 
-      {!isFinished && (
+      {/* 플로팅 방향패드 (모바일) - 공간을 예약하지 않고 우하단에 겹쳐 표시, 토글 가능 */}
+      {!isFinished && padVisible && (
         <div
-          className="absolute inset-x-0 z-30 flex h-[148px] items-center justify-center border-t border-slate-800 bg-slate-950/95 sm:hidden"
-          style={{ bottom: 'calc(58px + env(safe-area-inset-bottom))' }}
-          data-testid="online-mobile-direction-dock"
+          className="absolute right-2 z-30 sm:hidden"
+          style={{ bottom: 'calc(66px + env(safe-area-inset-bottom))' }}
+          data-testid="online-mobile-direction-float"
         >
           <MobileDirectionPad
             disabled={!isMyTurn}
             active={isMyTurn}
-            placement="dock"
+            placement="floating"
             onMove={handleMove}
             testId="online-mobile-direction-pad"
           />

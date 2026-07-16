@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import LiveBoardGrid, { LiveBoardEntry, LiveBoardViewMode } from '@/components/LiveBoardGrid';
 import MobileDirectionPad from '@/components/MobileDirectionPad';
+import { useSwipeMove } from '@/hooks/useSwipeMove';
 import { BoardFx } from '@/components/three/GameBoard3D';
 import { Direction, GameMap, GamePhase, GameState, MazeSkillId } from '@/types/game';
 import {
@@ -285,6 +286,8 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
     }
   }, [isHumanTurn]);
 
+  const boardStageRef = React.useRef<HTMLDivElement>(null);
+
   const handleHumanMove = useCallback((direction: Direction) => {
     if (!isHumanTurn || humanFinished) return;
     if (armedSkill) {
@@ -300,6 +303,9 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
     setSkillNotice('');
     dispatchAction(PRACTICE_USER_ID, { type: 'move', direction });
   }, [armedSkill, dispatchAction, humanFinished, isHumanTurn]);
+
+  // 보드 스테이지 스와이프로 이동 (내 턴/완주 가드는 handleHumanMove 내부에서 처리)
+  useSwipeMove(boardStageRef, handleHumanMove, { enabled: !humanFinished });
 
   useEffect(() => {
     const keyDirections: Record<string, Direction> = {
@@ -491,8 +497,10 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
       </div>
 
       <div
+        ref={boardStageRef}
         className="absolute inset-x-1 top-[76px] min-h-0 min-[430px]:top-[54px] sm:inset-x-2"
-        style={{ bottom: 'calc(60px + env(safe-area-inset-bottom))' }}
+        style={{ bottom: 'calc(60px + env(safe-area-inset-bottom))', touchAction: 'none' }}
+        data-testid="practice-board-stage"
       >
         <LiveBoardGrid
           boards={boards}

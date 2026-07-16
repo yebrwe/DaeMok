@@ -644,8 +644,9 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
       const selectors = [
         '[data-testid="online-hud"]',
         '[data-testid="online-controls"]',
-        '[data-testid="online-mobile-direction-dock"]',
+        '[data-testid="online-mobile-direction-float"]',
         '[data-testid="online-mobile-direction-pad"]',
+        '[data-testid="online-pad-toggle"]',
       ];
       const containers = selectors.map((selector) => {
         const element = document.querySelector(selector);
@@ -664,24 +665,25 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
         return { width: rect.width, height: rect.height };
       }).filter((size) => size.width > 0 && size.height > 0);
       const pad = document.querySelector('[data-testid="online-mobile-direction-pad"]');
-      const dock = document.querySelector('[data-testid="online-mobile-direction-dock"]');
       const ownBoard = document.querySelector('[data-player-board][data-my-player="true"]');
-      const dpad = pad && dock && ownBoard ? (() => {
+      const stage = document.querySelector('[data-testid="online-board-stage"]');
+      const dpad = pad && ownBoard && stage ? (() => {
         const padRect = pad.getBoundingClientRect();
-        const dockRect = dock.getBoundingClientRect();
         const boardRect = ownBoard.getBoundingClientRect();
         const buttons = Object.fromEntries(Array.from(pad.querySelectorAll('button')).map((button) => [
           button.getAttribute('aria-label'),
           button.getBoundingClientRect().toJSON(),
         ]));
         return {
-          insideDock:
-            padRect.left >= dockRect.left - 1 && padRect.right <= dockRect.right + 1 &&
-            padRect.top >= dockRect.top - 1 && padRect.bottom <= dockRect.bottom + 1,
-          belowBoard: padRect.top >= boardRect.bottom - 1,
-          overlapsBoard:
+          // 플로팅 패드는 공간을 예약하지 않고 우하단에 겹친다 - 내 보드(좌상단)는 가리지 않아야 함
+          overlapsMyBoard:
             Math.min(padRect.right, boardRect.right) - Math.max(padRect.left, boardRect.left) > 1 &&
             Math.min(padRect.bottom, boardRect.bottom) - Math.max(padRect.top, boardRect.top) > 1,
+          anchoredBottomRight:
+            Math.abs(padRect.right - (viewport.width - 8)) <= 8 &&
+            padRect.bottom <= viewport.height - 58 + 1,
+          // 독 제거로 보드가 커졌는지 (구 레이아웃: 내 보드 높이 ~ viewport의 30% 미만)
+          myBoardHeightRatio: boardRect.height / viewport.height,
           buttons,
         };
       })() : null;
@@ -712,17 +714,61 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     }
     const dpadButtons = mobileLayout.dpad?.buttons || {};
     if (
-      !mobileLayout.dpad?.insideDock ||
-      !mobileLayout.dpad?.belowBoard ||
-      mobileLayout.dpad?.overlapsBoard ||
+      mobileLayout.dpad?.overlapsMyBoard ||
+      !mobileLayout.dpad?.anchoredBottomRight ||
       !(dpadButtons['위로 이동']?.y < dpadButtons['왼쪽으로 이동']?.y) ||
       !(dpadButtons['아래로 이동']?.y > dpadButtons['오른쪽으로 이동']?.y) ||
       !(dpadButtons['왼쪽으로 이동']?.x < dpadButtons['오른쪽으로 이동']?.x)
     ) {
-      throw new Error(`Galaxy S21 below-board D-pad layout invalid: ${JSON.stringify(mobileLayout.dpad)}`);
+      throw new Error(`Galaxy S21 floating D-pad layout invalid: ${JSON.stringify(mobileLayout.dpad)}`);
+    }
+    // 독 제거로 4인 모드에서도 내 보드가 화면의 1/3 이상을 차지해야 함
+    if (!mobileLayout.dpad || mobileLayout.dpad.myBoardHeightRatio < 0.3) {
+      throw new Error(`Galaxy S21 4인 보드가 여전히 작음: ratio=${mobileLayout.dpad?.myBoardHeightRatio}`);
     }
     await pageA.screenshot({ path: `${OUT}/mp-4p-galaxy-s21.png` });
-    ok('4인 2x2 동시 보드 및 데스크톱/Galaxy S21 렌더링');
+    ok('4인 2x2 동시 보드 및 데스크톱/Galaxy S21 렌더링 (플로팅 패드)');
+
+    step('23-1: 플로팅 패드 토글 (숨기면 스와이프 전용)');
+    await pageA.getByTestId('online-pad-toggle').click();
+    if (await pageA.getByTestId('online-mobile-direction-pad').count() !== 0) {
+      throw new Error('패드 숨기기가 동작하지 않음');
+    }
+    await pageA.getByTestId('online-pad-toggle').click();
+    await pageA.getByTestId('online-mobile-direction-pad').waitFor({ state: 'visible', timeout: 5000 });
+    ok('패드 토글 (숨김/표시 + localStorage 유지)');
+
+    step('23-2: 스와이프(밀기)로 이동 - 현재 턴인 플레이어 화면에서');
+    const allPages = [pageA, pageB, pageC, pageD];
+    let turnPage = null;
+    for (const pg of allPages) {
+      if (await pg.locator('[data-testid="online-hud"]').getByText('내 턴', { exact: true }).count()) {
+        turnPage = pg;
+        break;
+      }
+    }
+    if (!turnPage) throw new Error('현재 턴인 플레이어 페이지를 찾지 못함');
+    const beforeTurns = await getMyBoardTurns(turnPage);
+    const stageBox = await turnPage.getByTestId('online-board-stage').boundingBox();
+    const swipeStartX = stageBox.x + stageBox.width * 0.35;
+    const swipeY = stageBox.y + stageBox.height * 0.4; // 내 보드(좌상단) 위에서 시작
+    let swiped = false;
+    for (let attempt = 0; attempt < 3 && !swiped; attempt += 1) {
+      await turnPage.mouse.move(swipeStartX, swipeY);
+      await turnPage.mouse.down();
+      await turnPage.mouse.move(swipeStartX + 90, swipeY, { steps: 2 });
+      await turnPage.mouse.up();
+      swiped = await turnPage
+        .locator('[data-player-board][data-my-player="true"]')
+        .getByText(new RegExp(`(?:턴|이동):\\s*${beforeTurns + 1}(?:\\D|$)`))
+        .first()
+        .waitFor({ state: 'visible', timeout: 6000 })
+        .then(() => true)
+        .catch(() => false);
+    }
+    if (!swiped) throw new Error('스와이프 이동이 3회 시도에도 반영되지 않음');
+    await expectMyBoardTurns(turnPage, beforeTurns + 1);
+    ok('스와이프 이동 동작 (보드 밀기 -> 1턴 소모)');
 
     step('24: 4인 방 삭제');
     pageA.once('dialog', (dialog) => dialog.accept());
