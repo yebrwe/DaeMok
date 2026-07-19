@@ -41,7 +41,6 @@ const SOURCE_FILES = [
     replacements: {
       "from '@/types/game'": "from '../types/game'",
       "from '@/lib/gameUtils'": "from './gameUtils'",
-      "from '@/lib/mazeSkills'": "from './mazeSkills'",
     },
   },
 ];

@@ -128,7 +128,7 @@ function createRoomPayload(ownerId, snapshot) {
   };
 }
 
-function validMap(skillLoadout = 'dash') {
+function validMap(skillLoadout = 'scoutPulse') {
   return {
     rulesVersion: 3,
     skillLoadout,
@@ -261,6 +261,17 @@ async function main() {
     'map without skill loadout',
     databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', missingSkill)
   );
+  for (const retiredSkillLoadout of ['breach', 'anchor', 'dash']) {
+    await expectDenied(
+      `new map with retired ${retiredSkillLoadout} loadout`,
+      databaseRequest(
+        `rooms/${roomId}/maps/${owner.uid}`,
+        owner.token,
+        'PUT',
+        validMap(retiredSkillLoadout)
+      )
+    );
+  }
   await expectDenied(
     'non-member map injection',
     databaseRequest(`rooms/${roomId}/maps/${outsider.uid}`, outsider.token, 'PUT', validMap())
@@ -294,6 +305,39 @@ async function main() {
       }],
     })
   );
+  await expectDenied(
+    'retired radar cannot be submitted in an item list',
+    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
+      ...validMap(),
+      items: [{ type: 'radar' }],
+    })
+  );
+  await expectDenied(
+    'retired radar cannot be submitted through the legacy single-item shape',
+    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
+      ...validMap(),
+      items: undefined,
+      item: { type: 'radar' },
+    })
+  );
+
+  const legacyReadRoomId = `legacy-read-${Date.now()}`;
+  const legacyReadRoom = createRoomPayload(owner.uid, canonical);
+  legacyReadRoom.maps = {
+    [owner.uid]: {
+      ...validMap('anchor'),
+      items: [{ type: 'radar' }],
+    },
+  };
+  await seedAdminFixture(`rooms/${legacyReadRoomId}`, 'PUT', legacyReadRoom);
+  const legacyMapRead = await databaseRequest(
+    `rooms/${legacyReadRoomId}/maps/${owner.uid}`,
+    owner.token,
+    'GET'
+  );
+  assert.equal(legacyMapRead.ok, true, 'existing legacy maps remain readable');
+  assert.equal(legacyMapRead.payload.skillLoadout, 'anchor');
+  assert.equal(legacyMapRead.payload.items[0].type, 'radar');
   await expectAllowed(
     'owner may atomically save setup map again',
     databaseRequest(`rooms/${roomId}`, owner.token, 'PATCH', {
@@ -342,7 +386,7 @@ async function main() {
   await expectAllowed(
     'second player map and readiness update',
     databaseRequest(`rooms/${roomId}`, outsider.token, 'PATCH', {
-      [`maps/${outsider.uid}`]: validMap('anchor'),
+      [`maps/${outsider.uid}`]: validMap(),
       [`gameState/players/${outsider.uid}/isReady`]: true,
     })
   );
@@ -370,7 +414,7 @@ async function main() {
   assert.equal(mapBeforePlay.ok, true, 'setup map should be readable');
   await expectDenied(
     'ready owner cannot rewrite a frozen setup map',
-    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', validMap('breach'))
+    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', validMap())
   );
   const playState = {
     ...setupRead.payload,
@@ -384,8 +428,16 @@ async function main() {
       [outsider.uid]: owner.uid,
     },
     itemState: {
-      [owner.uid]: { type: 'radar' },
-      [outsider.uid]: { type: 'radar' },
+      // A setup -> play transition may still carry a legacy skill envelope.
+      // One player intentionally has no item-state entry so current matches
+      // also prove that retired skill initialization is no longer required.
+      [outsider.uid]: {
+        mazeSkill: {
+          version: 1,
+          loadout: ['scoutPulse'],
+          consumed: {},
+        },
+      },
     },
     players: {
       ...setupRead.payload.players,
@@ -431,7 +483,7 @@ async function main() {
   );
   await expectDenied(
     'current player cannot replace a live map',
-    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', validMap('breach'))
+    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', validMap())
   );
   await expectDenied(
     'current player cannot delete a live map',
@@ -460,10 +512,62 @@ async function main() {
 
   const liveRead = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
   assert.equal(liveRead.ok, true, 'live state should be readable');
+  assert.equal(
+    liveRead.payload.itemState?.[owner.uid],
+    undefined,
+    'play state may omit an unused per-player item-state entry'
+  );
+  assert.deepEqual(
+    liveRead.payload.itemState[outsider.uid].mazeSkill.loadout,
+    ['scoutPulse'],
+    'setup to play may retain a legacy skill envelope for read compatibility'
+  );
+
+  const retiredSkillCreation = clone(liveRead.payload);
+  retiredSkillCreation.itemState ||= {};
+  retiredSkillCreation.itemState[owner.uid] = {
+    mazeSkill: {
+      version: 1,
+      loadout: ['scoutPulse'],
+      consumed: { scoutPulse: true },
+    },
+  };
+  await expectDenied(
+    'current player cannot create retired skill state during play',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', retiredSkillCreation)
+  );
+
+  const retiredSkillMutation = clone(liveRead.payload);
+  retiredSkillMutation.itemState[outsider.uid].mazeSkill.consumed = { scoutPulse: true };
+  await expectDenied(
+    'current player cannot mutate retained legacy skill state during play',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', retiredSkillMutation)
+  );
+
+  const retiredSkillLoadoutMutation = clone(liveRead.payload);
+  retiredSkillLoadoutMutation.itemState[outsider.uid].mazeSkill.loadout = ['anchor'];
+  await expectDenied(
+    'current player cannot change a retained legacy skill loadout during play',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', retiredSkillLoadoutMutation)
+  );
+
+  const retiredRadarTurn = clone(liveRead.payload);
+  retiredRadarTurn.itemState[owner.uid] = { consumed: { 0: true } };
+  retiredRadarTurn.players[owner.uid].moves = 1;
+  retiredRadarTurn.currentTurn = outsider.uid;
+  retiredRadarTurn.turnNumber = 2;
+  retiredRadarTurn.revealedWallsByPlayer = {
+    [owner.uid]: [{ position: { row: 5, col: 4 }, direction: 'right' }],
+  };
+  await expectDenied(
+    'current player cannot consume an own-map detector through an old bundle',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', retiredRadarTurn)
+  );
+
   const validItemState = clone(liveRead.payload);
   validItemState.itemState[outsider.uid].consumed = { 0: true };
   await expectAllowed(
-    'current player may update assigned map state',
+    'current player may consume a trap or special wall on the assigned opponent map',
     databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', validItemState)
   );
   const itemRead = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
@@ -475,6 +579,14 @@ async function main() {
   await expectAllowed(
     'current player may commit own move and next turn',
     databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', validTurnState)
+  );
+  const postTurnRead = await databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'GET');
+  assert.equal(postTurnRead.ok, true, 'advanced live state should be readable');
+  const retiredSkillCleanup = clone(postTurnRead.payload);
+  delete retiredSkillCleanup.itemState[outsider.uid].mazeSkill;
+  await expectAllowed(
+    'current player may remove a retained retired-skill envelope',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', retiredSkillCleanup)
   );
   const persistentMapRead = await databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'GET');
   assert.deepEqual(persistentMapRead.payload, mapBeforePlay.payload, 'valid live turns must leave sibling maps unchanged');

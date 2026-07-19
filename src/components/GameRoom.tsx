@@ -20,7 +20,10 @@ import {
   ROOM_OWNER_DISCONNECT_GRACE_MS,
 } from '@/lib/firebase';
 import { cloneGameMap, getFirstTurnPlayerId, getNextTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
-import { isValidMapForRuleSnapshot } from '@/lib/gameRules';
+import {
+  isValidMapForRuleSnapshot,
+  isValidNewMapForRuleSnapshot,
+} from '@/lib/gameRules';
 import { isVisionObscuredForPlayer, settleCompletedGameState } from '@/lib/gameTurn';
 import { settleMazeRankingParticipant, type MazeMatchResult } from '@/lib/mazeRankingFirebase';
 import {
@@ -1299,7 +1302,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                   {Object.entries(gameState.players || {}).map(([pid, p]) => {
                     const playerMap = gameState.maps?.[pid];
                     const needsMapUpdate = !!p.isReady && (
-                      !playerMap || !isValidMapForRuleSnapshot(playerMap, roomData?.ruleSnapshot)
+                      !playerMap || !isValidNewMapForRuleSnapshot(playerMap, roomData?.ruleSnapshot)
                     );
                     return (
                       <div key={pid} className="flex items-center justify-between gap-3 px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50">
@@ -1333,7 +1336,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                   const hasInvalidMaps = playerEntries.some(
                     ([pid, p]) =>
                       !!p.isReady &&
-                      (!mapsReady[pid] || !isValidMapForRuleSnapshot(mapsReady[pid], roomData?.ruleSnapshot))
+                      (!mapsReady[pid] || !isValidNewMapForRuleSnapshot(mapsReady[pid], roomData?.ruleSnapshot))
                   );
                   const allReady =
                     playerEntries.length >= 2 &&
@@ -1341,7 +1344,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
                       ([pid, p]) =>
                         !!p.isReady &&
                         !!mapsReady[pid] &&
-                        isValidMapForRuleSnapshot(mapsReady[pid], roomData?.ruleSnapshot)
+                        isValidNewMapForRuleSnapshot(mapsReady[pid], roomData?.ruleSnapshot)
                     );
                   const isOwner = roomData?.createdBy === userId;
 

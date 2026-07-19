@@ -57,9 +57,14 @@ async function selectEndpoints(page) {
   await page.getByText('벽(장애물)을 배치하세요', { exact: false }).first()
     .waitFor({ state: 'visible', timeout: 10_000 });
   assert.equal(
-    await page.getByRole('button', { name: /붕괴벽|거울벽/ }).count(),
+    await page.getByRole('button', { name: /붕괴벽|거울벽|탐지기/ }).count(),
     0,
-    'retired walls must not appear in the new-map palette',
+    'retired walls and radar must not appear in the new-map palette',
+  );
+  assert.equal(
+    await page.getByRole('tab', { name: '스킬' }).count(),
+    0,
+    'skills must not appear in the new-map editor',
   );
 }
 

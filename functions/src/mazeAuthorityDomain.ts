@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   createCanonicalGameRuleSnapshot,
   isValidGameRuleSnapshot,
-  isValidMapForRuleSnapshot,
+  isValidNewMapForRuleSnapshot,
   type GameRuleSnapshot,
 } from '../vendor/maze-engine/dist/lib/gameRules';
 import {
@@ -17,7 +17,6 @@ import {
   getNextTurnPlayerId,
   getTurnOrder,
 } from '../vendor/maze-engine/dist/lib/gameUtils';
-import { createMazeSkillState } from '../vendor/maze-engine/dist/lib/mazeSkills';
 import {
   GamePhase,
   type Direction,
@@ -548,34 +547,10 @@ function parseTurnAction(value: unknown): TurnAction {
     return { type: 'move', direction: parseDirection(value.direction, 'move') };
   }
   if (value.type === 'radar') {
-    const expectedKeys = Object.prototype.hasOwnProperty.call(value, 'itemIndex')
-      ? ['type', 'itemIndex']
-      : ['type'];
-    if (!hasExactKeys(value, expectedKeys)
-      || (Object.prototype.hasOwnProperty.call(value, 'itemIndex')
-        && !isSafeIntegerInRange(value.itemIndex, 0, MAX_MAP_ITEM_INPUTS - 1))) {
-      fail('invalid-argument', 'radar-action-keys', 'The radar action is malformed.');
-    }
-    return Object.prototype.hasOwnProperty.call(value, 'itemIndex')
-      ? { type: 'radar', itemIndex: value.itemIndex as number }
-      : { type: 'radar' };
+    fail('failed-precondition', 'radar-retired', 'The detector action has been retired.');
   }
   if (value.type === 'skill') {
-    const hasDirection = Object.prototype.hasOwnProperty.call(value, 'direction');
-    const expectedKeys = hasDirection ? ['type', 'skillId', 'direction'] : ['type', 'skillId'];
-    if (!hasExactKeys(value, expectedKeys)
-      || typeof value.skillId !== 'string'
-      || !MAZE_SKILLS.has(value.skillId as MazeSkillId)) {
-      fail('invalid-argument', 'skill-action-keys', 'The skill action is malformed.');
-    }
-    const skillId = value.skillId as MazeSkillId;
-    const requiresDirection = skillId === 'breach' || skillId === 'dash';
-    if (requiresDirection !== hasDirection) {
-      fail('invalid-argument', 'skill-action-direction', 'The skill direction does not match the skill.');
-    }
-    return hasDirection
-      ? { type: 'skill', skillId, direction: parseDirection(value.direction, 'skill') }
-      : { type: 'skill', skillId };
+    fail('failed-precondition', 'skill-retired', 'Maze skills have been retired.');
   }
   fail('invalid-argument', 'turn-action-type', 'The turn action type is unsupported.');
 }
@@ -1331,16 +1306,23 @@ function reduceSubmitMap(
 ): { state: MazeAuthorityState; result: SubmitMapResult } {
   requireSetup(state);
   requireMember(state, actorId);
+  if (command.map.skillLoadout !== 'scoutPulse') {
+    fail(
+      'failed-precondition',
+      'skill-loadout-retired',
+      'Custom maze skill loadouts have been retired.',
+    );
+  }
   if (getMapItems(command.map).some(
-    (item) => item.type === 'collapseWall' || item.type === 'mirrorWall',
+    (item) => item.type === 'radar' || item.type === 'collapseWall' || item.type === 'mirrorWall',
   )) {
     fail(
       'failed-precondition',
       'retired-wall-item',
-      'This wall item can no longer be submitted in new maps.',
+      'This retired item can no longer be submitted in new maps.',
     );
   }
-  if (!isValidMapForRuleSnapshot(command.map, state.ruleSnapshot)) {
+  if (!isValidNewMapForRuleSnapshot(command.map, state.ruleSnapshot)) {
     fail('failed-precondition', 'invalid-v3-map', 'The submitted map violates the room V3 rules.');
   }
   const next = withAdvancedMeta(cloneJson(state), now);
@@ -1400,8 +1382,12 @@ function reduceStartMatch(
   if (!playerIds.every((uid) => gameState.players[uid]?.isReady && maps[uid])) {
     fail('failed-precondition', 'players-not-ready', 'Every player must submit a map.');
   }
-  if (!playerIds.every((uid) => isValidMapForRuleSnapshot(maps[uid], state.ruleSnapshot))) {
-    fail('data-loss', 'stored-map-invalid', 'A stored player map violates the room V3 rules.');
+  if (!playerIds.every((uid) => isValidNewMapForRuleSnapshot(maps[uid], state.ruleSnapshot))) {
+    fail(
+      'failed-precondition',
+      'stored-map-retired',
+      'A stored player map contains retired gameplay content and cannot start a new match.',
+    );
   }
 
   const assignments: Record<string, string> = {};
@@ -1426,10 +1412,10 @@ function reduceStartMatch(
   const currentTurn = preferredFirst || getFirstTurnPlayerId(gameState.players, turnOrder);
   if (!currentTurn) fail('data-loss', 'missing-first-turn', 'The match has no eligible first player.');
 
-  const itemState = Object.fromEntries(playerIds.map((uid) => [uid, {
-    consumed: {},
-    mazeSkill: createMazeSkillState(maps[uid].skillLoadout),
-  }]));
+  // Runtime item state is created lazily only when an effect is actually used.
+  // This avoids reviving the retired per-player skill state and round-trips
+  // cleanly through RTDB, which elides empty objects.
+  delete gameState.itemState;
   const nextGameState: GameState = {
     ...gameState,
     rulesVersion: state.ruleSnapshot.version,
@@ -1439,7 +1425,6 @@ function reduceStartMatch(
     currentTurn,
     turnOrder,
     turnNumber: 1,
-    itemState,
     collisionWalls: {},
     revealedWallsByPlayer: {},
     visionEffectsByPlayer: {},
@@ -1472,6 +1457,13 @@ function reduceTurn(
   requireMember(state, actorId);
   if (state.gameState.phase !== GamePhase.PLAY) {
     fail('failed-precondition', 'not-playing', 'The match is not active.');
+  }
+  if (command.action.type !== 'move') {
+    fail(
+      'failed-precondition',
+      command.action.type === 'radar' ? 'radar-retired' : 'skill-retired',
+      'Only movement actions are supported.',
+    );
   }
   const resolution = resolveTurnAction(cloneJson(state.gameState), actorId, command.action, now);
   if (!resolution) {

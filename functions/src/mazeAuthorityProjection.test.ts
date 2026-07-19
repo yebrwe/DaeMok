@@ -89,7 +89,7 @@ function guestMap(): GameMap {
     endPosition: { row: 5, col: 3 },
     obstacles: [{ position: { row: 1, col: 1 }, direction: 'right' }],
     items: [{ type: 'smoke', position: { row: 2, col: 2 } }],
-    skillLoadout: 'dash',
+    skillLoadout: 'scoutPulse',
   };
 }
 

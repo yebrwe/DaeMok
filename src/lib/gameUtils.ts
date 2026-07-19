@@ -44,7 +44,7 @@ export const WALL_ITEM_TYPES: WallItemType[] = ['oneTimeWall', ...SPECIAL_WALL_T
 
 // New maps may no longer place these items. Runtime/type support remains so
 // an already-running legacy room can finish without corrupting its match.
-export const RETIRED_NEW_MAP_ITEM_TYPES: readonly ItemType[] = ['collapseWall', 'mirrorWall'];
+export const RETIRED_NEW_MAP_ITEM_TYPES: readonly ItemType[] = ['radar', 'collapseWall', 'mirrorWall'];
 
 export function isRetiredNewMapItemType(value: unknown): value is ItemType {
   return typeof value === 'string'
@@ -216,6 +216,19 @@ export function cloneGameMap(map: GameMap): GameMap {
     })),
     items: getMapItems(map).map(cloneMapItem),
     ...(map.skillLoadout ? { skillLoadout: map.skillLoadout } : {}),
+  };
+}
+
+/**
+ * V3 still carries one skill field on the wire. New clients always write the
+ * inert compatibility value so a stale draft cannot re-enable a retired
+ * loadout. Retired items are deliberately preserved here and rejected by the
+ * new-map validator instead of being removed without the author noticing.
+ */
+export function normalizeNewMapForSubmission(map: GameMap): GameMap {
+  return {
+    ...cloneGameMap(map),
+    skillLoadout: DEFAULT_MAZE_SKILL,
   };
 }
 
@@ -545,4 +558,15 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
     if (!item.entrance || !item.exit) return false;
     return isWormholeExitSafe(map, item.exit);
   });
+}
+
+/**
+ * Strict boundary for newly saved maps. `isValidMap` remains intentionally
+ * backward-compatible so already persisted V3 maps can still be read while a
+ * legacy match drains.
+ */
+export function isValidNewMap(map: GameMap, expectedRulesVersion?: number): boolean {
+  return map?.skillLoadout === DEFAULT_MAZE_SKILL
+    && !getMapItems(map).some((item) => isRetiredNewMapItemType(item.type))
+    && isValidMap(map, expectedRulesVersion);
 }

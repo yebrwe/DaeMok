@@ -185,6 +185,33 @@ assert.equal(utils.isValidMap(baseMap({ items: [smoke(1, 1)] })), true, 'smoke c
 assert.equal(utils.isValidMap(baseMap({ items: [smoke(1, 1), smoke(1, 2)] })), false, 'smoke cap exceeded');
 assert.equal(utils.isValidMap(baseMap({ items: [radar()] })), true, 'radar cap exact');
 assert.equal(utils.isValidMap(baseMap({ items: [radar(), radar()] })), false, 'radar cap exceeded');
+assert.equal(
+  utils.isValidNewMap(baseMap({ skillLoadout: 'scoutPulse' })),
+  true,
+  'new maps keep the inert V3 compatibility loadout'
+);
+for (const retiredSkillLoadout of ['breach', 'anchor', 'dash']) {
+  assert.equal(
+    utils.isValidMap(baseMap({ skillLoadout: retiredSkillLoadout })),
+    true,
+    `legacy ${retiredSkillLoadout} map remains readable`
+  );
+  assert.equal(
+    utils.isValidNewMap(baseMap({ skillLoadout: retiredSkillLoadout })),
+    false,
+    `new ${retiredSkillLoadout} map is rejected`
+  );
+}
+assert.equal(
+  utils.isValidNewMap(baseMap({ skillLoadout: 'scoutPulse', items: [radar()] })),
+  false,
+  'new radar map is rejected while the compatibility validator remains readable'
+);
+const normalizedNewMap = utils.normalizeNewMapForSubmission(
+  baseMap({ skillLoadout: 'anchor' })
+);
+assert.equal(normalizedNewMap.skillLoadout, 'scoutPulse', 'stale skill loadout normalizes to compatibility');
+assert.equal(utils.isValidNewMap(normalizedNewMap), true, 'normalized map passes the new-map boundary');
 
 const safeWormhole = wormhole(pos(2, 1), pos(3, 3));
 assert.equal(utils.isValidMap(baseMap({ items: [safeWormhole] })), true, 'wormhole cap exact');
@@ -737,180 +764,83 @@ function skillRuntimeState(skillId, playedMap, options = {}) {
   };
 }
 
-const scoutState = skillRuntimeState(
-  'scoutPulse',
-  baseMap({ obstacles: [{ position: pos(0, 0), direction: 'right' }] })
-);
-const scoutPulse = turns.resolveTurnAction(
-  scoutState,
-  'a',
-  { type: 'skill', skillId: 'scoutPulse' },
-  200
-);
-assert.ok(scoutPulse, 'scout skill resolves');
-assert.equal(scoutPulse.outcome.type, 'skill', 'scout uses skill outcome');
-assert.equal(scoutPulse.outcome.moves, 1, 'scout spends one turn');
-assert.equal(scoutPulse.outcome.found.length, 1, 'scout reveals nearby wall');
-assert.equal(scoutPulse.state.itemState.a.mazeSkill.consumed.scoutPulse, true, 'scout consumes once');
+for (const [skillId, direction] of [
+  ['scoutPulse', undefined],
+  ['breach', 'right'],
+  ['anchor', undefined],
+  ['dash', 'right'],
+]) {
+  const action = { type: 'skill', skillId, ...(direction ? { direction } : {}) };
+  assert.equal(
+    turns.resolveTurnAction(skillRuntimeState(skillId, baseMap()), 'a', action, 200),
+    null,
+    `${skillId} is rejected after skill retirement`
+  );
+}
 
-const breachState = skillRuntimeState(
-  'breach',
-  baseMap({ obstacles: [{ position: pos(0, 0), direction: 'right' }] })
-);
-const breach = turns.resolveTurnAction(
-  breachState,
-  'a',
-  { type: 'skill', skillId: 'breach', direction: 'right' },
-  201
-);
-assert.ok(breach, 'breach skill resolves against a wall');
-assert.deepEqual(breach.outcome.position, pos(0, 1), 'breach crosses exactly one wall');
-assert.equal(breach.state.itemState.a.mazeSkill.consumed.breach, true, 'breach consumes once');
+const retiredDetectorState = skillRuntimeState('scoutPulse', baseMap());
+retiredDetectorState.maps.a.items = [radar()];
 assert.equal(
-  turns.resolveTurnAction(
-    skillRuntimeState('breach', baseMap({ items: [specialWall('steelWall', 0, 0)] })),
-    'a',
-    { type: 'skill', skillId: 'breach', direction: 'right' },
-    202
-  ),
+  turns.resolveTurnAction(retiredDetectorState, 'a', { type: 'radar', itemIndex: 0 }, 201),
   null,
-  'breach cannot cross steel'
+  'detector action is rejected even when a legacy map still contains one'
 );
 
-const dash = turns.resolveTurnAction(
-  skillRuntimeState('dash', baseMap()),
-  'a',
-  { type: 'skill', skillId: 'dash', direction: 'right' },
-  203
+const legacyAnchorState = skillRuntimeState(
+  'anchor',
+  baseMap({ items: [mine(0, 1)] }),
+  {
+    itemState: {
+      a: { mazeSkill: { version: 1, loadout: ['anchor'], consumed: {} } },
+    },
+  }
 );
-assert.ok(dash, 'dash skill resolves on two open segments');
-assert.deepEqual(dash.outcome.position, pos(0, 2), 'dash moves two cells in one turn');
-assert.deepEqual(dash.outcome.via, [pos(0, 1)], 'dash exposes a stable animation waypoint');
-
-const dashIntoMine = turns.resolveTurnAction(
-  skillRuntimeState('dash', baseMap({ items: [mine(0, 2)] })),
-  'a',
-  { type: 'skill', skillId: 'dash', direction: 'right' },
-  203
-);
-assert.ok(dashIntoMine, 'dash landing item resolves');
-assert.equal(dashIntoMine.outcome.landingEffect, 'mine', 'dash does not bypass a landing trap');
-assert.deepEqual(dashIntoMine.outcome.position, pos(0, 0), 'dash mine uses turn history rollback');
-assert.equal(dashIntoMine.state.itemState.b.consumed[0], true, 'dash landing mine is consumed');
-
-const dashThroughMine = turns.resolveTurnAction(
-  skillRuntimeState('dash', baseMap({ items: [mine(0, 1)] })),
-  'a',
-  { type: 'skill', skillId: 'dash', direction: 'right' },
-  203
-);
-assert.ok(dashThroughMine, 'dash intermediate mine resolves');
-assert.equal(dashThroughMine.outcome.landingEffect, 'mine', 'dash stops on an intermediate mine');
-assert.deepEqual(dashThroughMine.outcome.position, pos(0, 0), 'intermediate mine rolls back from its cell');
-assert.equal(dashThroughMine.state.itemState.b.consumed[0], true, 'intermediate mine is consumed');
-
-const dashThroughWormhole = turns.resolveTurnAction(
-  skillRuntimeState('dash', baseMap({ items: [wormhole(pos(0, 1), pos(5, 5))] })),
-  'a',
-  { type: 'skill', skillId: 'dash', direction: 'right' },
-  203
-);
-assert.ok(dashThroughWormhole, 'dash intermediate wormhole resolves');
-assert.equal(dashThroughWormhole.outcome.landingEffect, 'wormhole', 'dash stops on an intermediate wormhole');
-assert.deepEqual(dashThroughWormhole.outcome.position, pos(5, 5), 'intermediate wormhole teleports normally');
-
-const dashThroughSmoke = turns.resolveTurnAction(
-  skillRuntimeState('dash', baseMap({ items: [{ type: 'smoke', position: pos(0, 1) }] })),
-  'a',
-  { type: 'skill', skillId: 'dash', direction: 'right' },
-  203
-);
-assert.ok(dashThroughSmoke, 'dash intermediate smoke resolves');
-assert.equal(dashThroughSmoke.outcome.landingEffect, 'smoke', 'dash stops on intermediate smoke');
-assert.deepEqual(dashThroughSmoke.outcome.position, pos(0, 1), 'smoke keeps the intermediate landing cell');
-
-const dashIntoGoal = turns.resolveTurnAction(
-  skillRuntimeState('dash', baseMap({
-    endPosition: pos(0, 1),
-    obstacles: [{ position: pos(0, 1), direction: 'right' }],
-  })),
-  'a',
-  { type: 'skill', skillId: 'dash', direction: 'right' },
-  203
-);
-assert.ok(dashIntoGoal, 'dash may stop at an intermediate goal before a blocked second segment');
-assert.equal(dashIntoGoal.outcome.reachedGoal, true, 'intermediate goal completes the run');
-assert.deepEqual(dashIntoGoal.outcome.position, pos(0, 1), 'dash stops exactly on the goal');
-
-const dashThroughOpenPhase = turns.resolveTurnAction(
-  skillRuntimeState(
-    'dash',
-    baseMap({ items: [specialWall('phaseWall', 0, 0)] }),
-    { itemState: { b: { phaseOpen: { 0: true } } } }
-  ),
-  'a',
-  { type: 'skill', skillId: 'dash', direction: 'right' },
-  203
-);
-assert.ok(dashThroughOpenPhase, 'dash crosses an already-open phase wall');
-assert.deepEqual(dashThroughOpenPhase.outcome.position, pos(0, 2), 'open phase keeps both dash segments usable');
-assert.equal(dashThroughOpenPhase.state.itemState.b.phaseOpen[0], false, 'phase wall closes after dash passage');
-
-const dashThroughArmedCollapse = turns.resolveTurnAction(
-  skillRuntimeState('dash', baseMap({ items: [specialWall('collapseWall', 0, 0)] })),
-  'a',
-  { type: 'skill', skillId: 'dash', direction: 'right' },
-  203
-);
-assert.ok(dashThroughArmedCollapse, 'dash crosses a not-yet-collapsed wall');
-assert.deepEqual(dashThroughArmedCollapse.outcome.position, pos(0, 2), 'armed collapse does not block dash');
-assert.equal(
-  dashThroughArmedCollapse.state.itemState.b.activeWalls[0],
-  true,
-  'collapse wall activates safely behind the dash'
-);
-
-assert.equal(
-  turns.resolveTurnAction(
-    skillRuntimeState(
-      'dash',
-      baseMap({ items: [specialWall('collapseWall', 0, 0)] }),
-      { itemState: { b: { activeWalls: { 0: true } } } }
-    ),
-    'a',
-    { type: 'skill', skillId: 'dash', direction: 'right' },
-    203
-  ),
-  null,
-  'active collapse wall blocks dash'
-);
-
-assert.equal(
-  turns.resolveTurnAction(
-    skillRuntimeState(
-      'breach',
-      baseMap({ items: [specialWall('phaseWall', 0, 0)] }),
-      { itemState: { b: { phaseOpen: { 0: true } } } }
-    ),
-    'a',
-    { type: 'skill', skillId: 'breach', direction: 'right' },
-    203
-  ),
-  null,
-  'breach is not consumed against an already-open phase segment'
-);
-
-const anchoredMine = turns.resolveTurnAction(
-  skillRuntimeState('anchor', baseMap({ items: [mine(0, 1)] })),
+const ordinaryMine = turns.resolveTurnAction(
+  legacyAnchorState,
   'a',
   { type: 'move', direction: 'right' },
   204
 );
-assert.ok(anchoredMine, 'anchor integration resolves');
-assert.deepEqual(anchoredMine.outcome.position, pos(0, 1), 'anchor keeps the normally entered cell');
-assert.equal(anchoredMine.outcome.skillEffect, 'anchor', 'anchor effect is reported');
-assert.equal(anchoredMine.state.itemState.a.mazeSkill.consumed.anchor, true, 'anchor consumes automatically');
-assert.equal(anchoredMine.state.itemState.b.consumed[0], true, 'negated mine still consumes');
+assert.ok(ordinaryMine, 'legacy anchor map still resolves ordinary movement');
+assert.equal(ordinaryMine.outcome.effect, 'mine', 'retired anchor cannot cancel a mine');
+assert.deepEqual(ordinaryMine.outcome.position, pos(0, 0), 'mine performs its normal rollback');
+assert.equal(ordinaryMine.outcome.skillEffect, undefined, 'no passive skill effect is reported');
+assert.deepEqual(
+  ordinaryMine.state.itemState.a.mazeSkill,
+  legacyAnchorState.itemState.a.mazeSkill,
+  'legacy skill state remains inert and unconsumed'
+);
+assert.equal(ordinaryMine.state.itemState.b.consumed[0], true, 'ordinary mine is consumed');
+
+const legacyAnchorItemState = {
+  a: { mazeSkill: { version: 1, loadout: ['anchor'], consumed: {} } },
+};
+const ordinaryWormhole = turns.resolveTurnAction(
+  skillRuntimeState(
+    'anchor',
+    baseMap({ items: [wormhole(pos(0, 1), pos(3, 3))] }),
+    { itemState: legacyAnchorItemState }
+  ),
+  'a',
+  { type: 'move', direction: 'right' },
+  205
+);
+assert.ok(ordinaryWormhole, 'legacy anchor map resolves wormhole movement');
+assert.equal(ordinaryWormhole.outcome.effect, 'wormhole', 'retired anchor cannot cancel a wormhole');
+assert.deepEqual(ordinaryWormhole.outcome.position, pos(3, 3), 'wormhole teleports normally');
+
+const ordinaryIceWall = turns.resolveTurnAction(
+  skillRuntimeState(
+    'anchor',
+    baseMap({ items: [specialWall('iceWall', 0, 0)] }),
+    { itemState: legacyAnchorItemState }
+  ),
+  'a',
+  { type: 'move', direction: 'right' },
+  206
+);
+assert.ok(ordinaryIceWall, 'legacy anchor map resolves forced wall movement');
+assert.deepEqual(ordinaryIceWall.outcome.position, pos(0, 2), 'retired anchor cannot cancel ice sliding');
 
 const practiceAiItemTypes = new Set();
 for (const [index, map] of practice.PRACTICE_MAP_TEMPLATES.entries()) {
@@ -926,7 +856,16 @@ for (const [index, map] of practice.PRACTICE_MAP_TEMPLATES.entries()) {
     practice.getPracticeMapRouteLength(map) > manhattan,
     `practice template ${index + 1} forces a real detour to the exit`
   );
-  assert.equal(utils.isMazeSkillId(map.skillLoadout), true, `practice template ${index + 1} equips a skill`);
+  assert.equal(
+    map.skillLoadout,
+    utils.DEFAULT_MAZE_SKILL,
+    `practice template ${index + 1} keeps only the inert V3 compatibility loadout`
+  );
+  assert.equal(
+    (map.items || []).some((item) => item.type === 'radar'),
+    false,
+    `practice template ${index + 1} does not include the retired radar`
+  );
 }
 for (let index = 0; index < 3; index += 1) {
   for (const item of practice.createAiPracticeMap(index).items || []) {
@@ -936,9 +875,9 @@ for (let index = 0; index < 3; index += 1) {
 assert.deepEqual(
   [...practiceAiItemTypes].sort(),
   Object.keys(utils.ITEM_COSTS)
-    .filter((itemType) => !utils.isRetiredNewMapItemType(itemType))
+    .filter((itemType) => itemType !== 'radar' && !utils.isRetiredNewMapItemType(itemType))
     .sort(),
-  'the three AI maps use every currently available trap and special wall'
+  'the three AI maps use every currently available trap and special wall except radar'
 );
 
 function simulatePracticeState(initialState, label) {
@@ -950,15 +889,8 @@ function simulatePracticeState(initialState, label) {
     probeCounts[actorId] ||= {};
     const action = practice.choosePracticeAiAction(state, actorId, probeCounts[actorId]);
     assert.ok(action, `${label}: ${actorId} finds an action`);
-    let resolved = turns.resolveTurnAction(state, actorId, action, 10_000 + step);
-    if (!resolved && action.type === 'skill' && action.direction) {
-      resolved = turns.resolveTurnAction(
-        state,
-        actorId,
-        { type: 'move', direction: action.direction },
-        10_000 + step
-      );
-    }
+    assert.equal(action.type, 'move', `${label}: ${actorId} only uses movement actions`);
+    const resolved = turns.resolveTurnAction(state, actorId, action, 10_000 + step);
     assert.ok(resolved, `${label}: ${actorId} resolves an action`);
     if (resolved.outcome.type === 'move' && resolved.outcome.effect === 'bump') {
       const key = practice.practiceWallKey(resolved.outcome.origin, resolved.outcome.direction);

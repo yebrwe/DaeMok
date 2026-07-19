@@ -800,8 +800,8 @@ function runSimulation() {
   const dashSummary = summaries.find((summary) => summary.id === 'dash');
   assert.ok(dashSummary.saved >= 0 && dashSummary.saved <= 1);
 
-  console.log('RECOMMENDATION: ranked matches should keep exactly one equipped skill and one use per match.');
-  console.log('RECOMMENDATION: dash is the stable low-variance option; breach and anchor are situational swing picks; scoutPulse should remain a post-collision information trade.');
+  console.log('COMPATIBILITY ONLY: legacy skill algorithms remain deterministic for stored-data tooling.');
+  console.log('RUNTIME RETIRED: ranked play rejects every skill action and passive activation.');
   return summaries;
 }
 

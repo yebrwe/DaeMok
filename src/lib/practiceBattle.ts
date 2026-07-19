@@ -24,11 +24,8 @@ import {
   MAX_OBSTACLES,
 } from '@/lib/gameUtils';
 import {
-  getPlayerMazeSkillState,
   isVisionObscuredForPlayer,
   mergeWallSegments,
-  normalizeConsumed,
-  TurnAction,
 } from '@/lib/gameTurn';
 import { createMazeSkillState } from '@/lib/mazeSkills';
 
@@ -88,8 +85,6 @@ const smoke = (row: number, col: number): MapItem => ({
   position: { row, col },
 });
 
-const radar = (): MapItem => ({ type: 'radar' });
-
 const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
   {
     skillLoadout: 'scoutPulse',
@@ -116,7 +111,7 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
     ],
   },
   {
-    skillLoadout: 'breach',
+    skillLoadout: 'scoutPulse',
     startPosition: { row: 5, col: 0 },
     endPosition: { row: 5, col: 5 },
     obstacles: [
@@ -129,14 +124,13 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
     ],
     items: [
       wormhole({ row: 2, col: 0 }, { row: 4, col: 1 }),
-      radar(),
       specialWall('steelWall', 5, 1, 'up'),
       specialWall('windWall', 4, 3, 'up', 'right'),
       specialWall('crystalWall', 1, 2, 'right'),
     ],
   },
   {
-    skillLoadout: 'dash',
+    skillLoadout: 'scoutPulse',
     startPosition: { row: 0, col: 5 },
     endPosition: { row: 5, col: 0 },
     obstacles: [],
@@ -147,7 +141,7 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
     ],
   },
   {
-    skillLoadout: 'anchor',
+    skillLoadout: 'scoutPulse',
     startPosition: { row: 5, col: 5 },
     endPosition: { row: 0, col: 0 },
     obstacles: [
@@ -189,7 +183,9 @@ export function clonePracticeMap(map: GameMap): GameMap {
       entrance: item.entrance ? clonePosition(item.entrance) : undefined,
       exit: item.exit ? clonePosition(item.exit) : undefined,
     })),
-    skillLoadout: map.skillLoadout || null,
+    // 연습전에서는 스킬을 노출하거나 사용하지 않는다. V3 맵 필드는 유지하되
+    // 자동 발동형 anchor가 이동 결과에 개입하지 않도록 수동형 기본값으로 통일한다.
+    skillLoadout: 'scoutPulse',
   };
 }
 
@@ -489,22 +485,13 @@ export function choosePracticeAiAction(
   state: GameState,
   runnerId: string,
   probeCounts: Record<string, number> = {}
-): TurnAction | null {
+): { type: 'move'; direction: Direction } | null {
   if (state.phase !== GamePhase.PLAY || state.currentTurn !== runnerId) return null;
   const player = state.players[runnerId];
   const mapOwnerId = state.assignments?.[runnerId];
   const playedMap = mapOwnerId ? state.maps?.[mapOwnerId] : null;
-  const ownMap = state.maps?.[runnerId];
-  if (!player || player.finished || !playedMap || !ownMap) return null;
+  if (!player || player.finished || !playedMap) return null;
 
-  const ownItems = getMapItems(ownMap);
-  const ownConsumed = normalizeConsumed(state.itemState?.[runnerId]?.consumed);
-  const mazeSkill = getPlayerMazeSkillState(state, runnerId, ownMap);
-  const equippedSkill = mazeSkill.loadout[0];
-  const skillAvailable = !!equippedSkill && !mazeSkill.consumed[equippedSkill];
-  const radarIndex = ownItems.findIndex(
-    (item, index) => item.type === 'radar' && !ownConsumed[index]
-  );
   if (isVisionObscuredForPlayer(state, runnerId)) {
     const knownWalls = knownWallsForRunner(state, runnerId);
     const directions: Direction[] = ['up', 'right', 'down', 'left'];
@@ -519,12 +506,6 @@ export function choosePracticeAiAction(
       }
     }
   }
-  if ((player.moves || 0) === 0 && radarIndex >= 0) {
-    return { type: 'radar', itemIndex: radarIndex };
-  }
-  if ((player.moves || 0) === 0 && skillAvailable && equippedSkill === 'scoutPulse') {
-    return { type: 'skill', skillId: 'scoutPulse' };
-  }
 
   const knownWalls = knownWallsForRunner(state, runnerId);
   const path = findExplorationPath(player.position, playedMap.endPosition, knownWalls, probeCounts);
@@ -532,20 +513,6 @@ export function choosePracticeAiAction(
 
   const direction = directionBetween(player.position, path[1]);
   if (!direction) return null;
-
-  if (skillAvailable && equippedSkill === 'breach') {
-    const knownWallKeys = new Set(knownWalls.map((wall) => practiceWallKey(wall.position, wall.direction)));
-    if (knownWallKeys.has(practiceWallKey(player.position, direction))) {
-      return { type: 'skill', skillId: 'breach', direction };
-    }
-  }
-
-  if (skillAvailable && equippedSkill === 'dash' && path.length >= 3) {
-    const secondDirection = directionBetween(path[1], path[2]);
-    if (secondDirection === direction) {
-      return { type: 'skill', skillId: 'dash', direction };
-    }
-  }
 
   return { type: 'move', direction };
 }

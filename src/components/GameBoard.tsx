@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import { CellType, CollisionWall, Direction, GamePhase, ItemType, MapItem, Obstacle, Position, WallItemType } from '@/types/game';
 import { BOARD_SIZE, ITEM_LABELS, isSamePosition, isSameWallSegment, isWallItemType } from '@/lib/gameUtils';
@@ -19,7 +19,87 @@ const ITEM_WALL_STYLES: Record<WallItemType, string> = {
   crystalWall: 'bg-fuchsia-700 ring-pink-100',
 };
 
-const NORMAL_WALL_STYLE = 'bg-[#263242] ring-1 ring-[#f4c64f] shadow-sm shadow-slate-950/60';
+const NORMAL_WALL_STYLE = 'bg-[#6b1111] ring-2 ring-[#fecaca] shadow-sm shadow-red-950/70';
+
+const WALL_EFFECT_GLYPHS: Record<WallItemType, string> = {
+  oneTimeWall: '···',
+  steelWall: '•••',
+  fireWall: '▲▲▲',
+  poisonWall: '●●●',
+  iceWall: '◆◆◆',
+  windWall: '»»»',
+  collapseWall: '▼▼▼',
+  phaseWall: '∿∿∿',
+  mirrorWall: '◇◇◇',
+  thornWall: '▲▲▲',
+  crystalWall: '✦✦✦',
+};
+
+interface WallTarget {
+  position: Position;
+  direction: Direction;
+}
+
+function ItemWallVisual({
+  type,
+  orientation,
+  preview = false,
+  consumed = false,
+  active = false,
+  phaseOpen = false,
+}: {
+  type: WallItemType;
+  orientation: 'horizontal' | 'vertical';
+  preview?: boolean;
+  consumed?: boolean;
+  active?: boolean;
+  phaseOpen?: boolean;
+}) {
+  const horizontal = orientation === 'horizontal';
+  const dimensions = preview
+    ? horizontal ? 'h-full w-[88%]' : 'h-[88%] w-full'
+    : horizontal ? 'h-3/4 w-[82%]' : 'h-[82%] w-3/4';
+
+  if (type === 'oneTimeWall') {
+    return (
+      <div
+        className={`wall-effect-visual ${
+          horizontal
+            ? `flex ${preview ? 'h-full w-[88%]' : 'h-3/4 w-[82%]'} justify-between`
+            : `flex ${preview ? 'h-[88%] w-full' : 'h-[82%] w-3/4'} flex-col justify-between`
+        } ${preview ? 'wall-effect-guide' : ''}`}
+        data-wall-effect={type}
+        data-wall-orientation={orientation}
+      >
+        {[0, 1, 2].map((segment) => (
+          <span
+            key={segment}
+            className={`${horizontal ? 'h-full w-[28%]' : 'h-[28%] w-full'} ${ITEM_WALL_STYLES[type]} ring-1`}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  const inactiveCollapse = type === 'collapseWall' && !active && !consumed;
+  const openedPhase = type === 'phaseWall' && phaseOpen && !consumed;
+  let visualClasses = `${dimensions} ${horizontal ? 'border-x-2' : 'border-y-2'} ${ITEM_WALL_STYLES[type]} border-slate-950/50 ring-1`;
+  if (inactiveCollapse) {
+    visualClasses = `${dimensions} border-2 border-dashed border-stone-200 bg-stone-500/30 ring-1 ring-stone-300`;
+  } else if (openedPhase) {
+    visualClasses = `${dimensions} border-2 border-dashed border-violet-300 bg-violet-500/20 ring-1 ring-fuchsia-200/70`;
+  }
+
+  return (
+    <div
+      className={`wall-effect-visual ${visualClasses} ${preview ? 'wall-effect-guide' : 'wall-effect-installed'} ${consumed ? 'opacity-35' : ''}`}
+      data-wall-effect={type}
+      data-wall-orientation={orientation}
+    >
+      <span className="wall-effect-glyph" aria-hidden="true">{WALL_EFFECT_GLYPHS[type]}</span>
+    </div>
+  );
+}
 
 interface GameBoardProps {
   gamePhase: GamePhase;
@@ -102,7 +182,6 @@ const GameBoard: React.FC<GameBoardProps> = ({
     const item = itemList[itemWallIndex];
     if (!isWallItemType(item.type)) return null;
     const consumed = !!itemsConsumed?.[itemWallIndex];
-    const horizontal = orientation === 'horizontal';
 
     if (item.type === 'oneTimeWall' && !showFakeWallIdentity) {
       if (consumed) return null;
@@ -112,7 +191,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
           data-wall-state="armed"
           className="absolute inset-0 flex items-center justify-center"
         >
-          <div className={`${horizontal ? 'h-1/2 w-3/4' : 'h-3/4 w-1/2'} ${NORMAL_WALL_STYLE}`} />
+          <div className={`${orientation === 'horizontal' ? 'h-1/2 w-3/4' : 'h-3/4 w-1/2'} ${NORMAL_WALL_STYLE}`} />
         </div>
       );
     }
@@ -125,37 +204,26 @@ const GameBoard: React.FC<GameBoardProps> = ({
           title={`${ITEM_LABELS[item.type]} · ${consumed ? '소모됨' : '미사용'}`}
           className={`absolute inset-0 flex items-center justify-center ${consumed ? 'opacity-35' : ''}`}
         >
-          <div className={horizontal ? 'flex h-1/2 w-3/4 justify-between' : 'flex h-3/4 w-1/2 flex-col justify-between'}>
-            {[0, 1, 2].map((segment) => (
-              <span
-                key={segment}
-                className={`${horizontal ? 'h-full w-[28%]' : 'h-[28%] w-full'} ${ITEM_WALL_STYLES[item.type]} ring-1`}
-              />
-            ))}
-          </div>
+          <ItemWallVisual
+            type={item.type}
+            orientation={orientation}
+            consumed={consumed}
+          />
         </div>
       );
     }
 
     const active = !!itemActiveWalls?.[itemWallIndex];
     const phaseOpen = !!itemPhaseOpen?.[itemWallIndex];
-    const dimensions = horizontal ? 'h-1/2 w-3/4' : 'h-3/4 w-1/2';
     let wallState = consumed ? 'consumed' : 'armed';
     let stateLabel = consumed ? '소모됨' : '활성';
-    let wallClasses = `${dimensions} ${horizontal ? 'border-x-2' : 'border-y-2'} ${ITEM_WALL_STYLES[item.type]} border-slate-950/50 ring-1`;
 
     if (item.type === 'collapseWall' && !consumed) {
       wallState = active ? 'closed' : 'armed';
       stateLabel = active ? '폐쇄됨' : '대기 · 통과 후 폐쇄';
-      wallClasses = active
-        ? `${dimensions} border-2 border-stone-950 bg-stone-500 ring-2 ring-stone-200`
-        : `${dimensions} border-2 border-dashed border-stone-200 bg-stone-500/30 ring-1 ring-stone-300`;
     } else if (item.type === 'phaseWall' && !consumed) {
       wallState = phaseOpen ? 'open' : 'closed';
       stateLabel = phaseOpen ? '열림 · 다음 시도 통과' : '닫힘 · 다음 시도 차단';
-      wallClasses = phaseOpen
-        ? `${dimensions} border-2 border-dashed border-violet-300 bg-violet-500/20 ring-1 ring-fuchsia-200/70`
-        : `${dimensions} border-2 border-violet-200 bg-violet-500 ring-2 ring-fuchsia-200`;
     }
 
     return (
@@ -165,7 +233,13 @@ const GameBoard: React.FC<GameBoardProps> = ({
         title={`${ITEM_LABELS[item.type]} · ${stateLabel}`}
         className={`absolute inset-0 flex items-center justify-center ${consumed ? 'opacity-35' : ''}`}
       >
-        <div className={wallClasses} />
+        <ItemWallVisual
+          type={item.type}
+          orientation={orientation}
+          consumed={consumed}
+          active={active}
+          phaseOpen={phaseOpen}
+        />
       </div>
     );
   };
@@ -275,6 +349,137 @@ const GameBoard: React.FC<GameBoardProps> = ({
 
     return obstacles.some((obstacle) =>
       isSameWallSegment(position, direction, obstacle.position, obstacle.direction)
+    );
+  };
+
+  const isWallOccupied = (position: Position, direction: Direction): boolean =>
+    hasObstacle(position, direction) || findItemWallIndex(position, direction) >= 0;
+
+  const selectedWallType = placeMode !== 'wall' && isWallItemType(placeMode) ? placeMode : null;
+  const suggestedGuideWall = useMemo<WallTarget | null>(() => {
+    if (!selectedWallType) return null;
+
+    const center = (BOARD_SIZE - 1) / 2;
+    const reservedCells = [
+      startPosition,
+      endPosition,
+      pendingCell,
+      ...(items || []).flatMap((item) => [item.position, item.entrance, item.exit]),
+    ].filter((position): position is Position => !!position);
+    const candidates: Array<WallTarget & { distance: number; markerPenalty: number }> = [];
+    for (let row = 0; row < BOARD_SIZE; row += 1) {
+      for (let col = 0; col < BOARD_SIZE; col += 1) {
+        if (col < BOARD_SIZE - 1) {
+          const adjacent = { row, col: col + 1 };
+          candidates.push({
+            position: { row, col },
+            direction: 'right',
+            distance: Math.abs(row - center) + Math.abs(col + 0.5 - center),
+            markerPenalty: reservedCells.some((cell) =>
+              isSamePosition(cell, { row, col }) || isSamePosition(cell, adjacent)
+            ) ? 10 : 0,
+          });
+        }
+        if (row < BOARD_SIZE - 1) {
+          const adjacent = { row: row + 1, col };
+          candidates.push({
+            position: { row, col },
+            direction: 'down',
+            distance: Math.abs(row + 0.5 - center) + Math.abs(col - center),
+            markerPenalty: reservedCells.some((cell) =>
+              isSamePosition(cell, { row, col }) || isSamePosition(cell, adjacent)
+            ) ? 10 : 0,
+          });
+        }
+      }
+    }
+
+    candidates.sort((left, right) =>
+      left.markerPenalty - right.markerPenalty ||
+      left.distance - right.distance ||
+      left.position.row - right.position.row ||
+      left.position.col - right.position.col ||
+      left.direction.localeCompare(right.direction)
+    );
+
+    const available = candidates.find((candidate) => {
+      const blockedByObstacle = (obstacles || []).some((obstacle) =>
+        isSameWallSegment(
+          candidate.position,
+          candidate.direction,
+          obstacle.position,
+          obstacle.direction
+        )
+      );
+      const blockedByItem = (items || []).some((item) =>
+        isWallItemType(item.type) &&
+        !!item.wallPosition &&
+        !!item.wallDirection &&
+        isSameWallSegment(
+          candidate.position,
+          candidate.direction,
+          item.wallPosition,
+          item.wallDirection
+        )
+      );
+      return !blockedByObstacle && !blockedByItem;
+    });
+
+    return available
+      ? { position: available.position, direction: available.direction }
+      : null;
+  }, [endPosition, items, obstacles, pendingCell, selectedWallType, startPosition]);
+
+  const activeGuideWall = selectedWallType
+    ? hoveredWall || suggestedGuideWall
+    : null;
+
+  const isGuideWall = (position: Position, direction: Direction): boolean =>
+    !!activeGuideWall && isSameWallSegment(
+      position,
+      direction,
+      activeGuideWall.position,
+      activeGuideWall.direction
+    );
+
+  const renderWallPlacementFeedback = (
+    position: Position,
+    direction: Direction,
+    orientation: 'horizontal' | 'vertical',
+    occupied: boolean
+  ) => {
+    if (!selectedWallType || !isGuideWall(position, direction)) return null;
+
+    if (occupied) {
+      return (
+        <div
+          className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+          data-wall-conflict="true"
+          aria-hidden="true"
+        >
+          <span className="wall-guide-conflict flex size-4 items-center justify-center rounded-full border border-red-100 bg-red-600 text-[11px] font-black leading-none text-white shadow-lg shadow-red-950/70">×</span>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center"
+        data-wall-guide={selectedWallType}
+        data-guide-source={hoveredWall ? 'pointer' : 'suggested'}
+        aria-hidden="true"
+      >
+        <ItemWallVisual type={selectedWallType} orientation={orientation} preview />
+        <span
+          className={`wall-guide-badge absolute rounded-full border border-cyan-100/80 bg-slate-950/90 px-1 py-px text-[7px] font-black leading-none text-cyan-100 shadow-sm ${
+            orientation === 'horizontal'
+              ? '-top-[9px] left-1/2 -translate-x-1/2'
+              : '-right-[16px] top-1/2 -translate-y-1/2'
+          }`}
+        >
+          예시
+        </span>
+      </div>
     );
   };
 
@@ -415,6 +620,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
     }
     
     const isBlocked = hasObstacle(position, direction);
+    const isOccupied = isWallOccupied(position, direction);
     const isHovered = hoveredWall && 
       isSamePosition(hoveredWall.position, position) && 
       hoveredWall.direction === direction;
@@ -448,8 +654,11 @@ const GameBoard: React.FC<GameBoardProps> = ({
       selectionMode === 'none' && isWallPlacementMode;
     const yieldsToCellPlacement = gamePhase === GamePhase.SETUP && !readOnly &&
       (selectionMode !== 'none' || !isWallPlacementMode);
+    const hasPlacementConflict = !!selectedWallType && isGuideWall(position, direction) && isOccupied;
     const containerClasses = `w-full h-2 z-10 relative
-      ${isInteractive ? 'cursor-pointer wall-hit-horizontal hover:bg-yellow-200' : ''}
+      ${isInteractive ? 'cursor-pointer wall-hit-horizontal' : ''}
+      ${isInteractive && placeMode === 'wall' ? 'hover:bg-red-100' : ''}
+      ${hasPlacementConflict ? '!cursor-not-allowed bg-red-500/25' : ''}
       ${yieldsToCellPlacement ? 'pointer-events-none' : ''}
       transition-all duration-150 ease-in-out bg-transparent`;
     
@@ -457,9 +666,20 @@ const GameBoard: React.FC<GameBoardProps> = ({
       <div
         key={`h-wall-${row}-${col}`}
         className={containerClasses}
+        data-wall-segment={`${position.row},${position.col}:${direction}`}
+        data-wall-occupied={isOccupied ? 'true' : 'false'}
         role={isInteractive ? 'button' : undefined}
         tabIndex={isInteractive ? 0 : undefined}
         aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽` : undefined}
+        aria-disabled={hasPlacementConflict || undefined}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          // Touch devices do not have a durable hover state. Pin the tapped segment so an
+          // occupied wall can still show the same explicit conflict cue as pointer hover.
+          if (isInteractive && selectedWallType && event.pointerType !== 'mouse') {
+            setHoveredWall({ position, direction });
+          }
+        }}
         onClick={(e) => {
           e.stopPropagation();
           if (isInteractive && onDirectionClick) {
@@ -486,9 +706,9 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 설정 단계: 노란색으로 호버 효과 및 배치된 벽 표시 */}
         {gamePhase === GamePhase.SETUP && (
           <>
-          {isHovered && !isBlocked && (
+          {isHovered && placeMode === 'wall' && !isOccupied && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-1/2 w-3/4 rounded-sm bg-amber-400 ring-2 ring-white" />
+              <div className={`h-1/2 w-3/4 rounded-sm ${NORMAL_WALL_STYLE} opacity-60`} />
             </div>
           )}
           {isBlocked && (
@@ -501,7 +721,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 플레이 단계: 충돌한 벽만 빨간색으로 표시 */}
         {gamePhase === GamePhase.PLAY && isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="h-1/2 w-3/4 rounded-sm bg-red-600 ring-2 ring-red-200" />
+            <div className="wall-collision-impact h-1/2 w-3/4 rounded-sm bg-red-500 ring-2 ring-red-100" />
           </div>
         )}
         {/* 게임 종료: 아직 충돌하지 않은 벽 공개 */}
@@ -511,6 +731,8 @@ const GameBoard: React.FC<GameBoardProps> = ({
           </div>
         )}
         {renderItemWall(position, direction, 'horizontal')}
+        {gamePhase === GamePhase.SETUP &&
+          renderWallPlacementFeedback(position, direction, 'horizontal', isOccupied)}
         {/* 탐지기로 밝혀낸 벽 (1회성 벽도 일반 벽으로 위장) */}
         {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
           isRadarRevealed(position, direction) && (
@@ -536,6 +758,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
     }
     
     const isBlocked = hasObstacle(position, direction);
+    const isOccupied = isWallOccupied(position, direction);
     const isHovered = hoveredWall && 
       isSamePosition(hoveredWall.position, position) && 
       hoveredWall.direction === direction;
@@ -569,8 +792,11 @@ const GameBoard: React.FC<GameBoardProps> = ({
       selectionMode === 'none' && isWallPlacementMode;
     const yieldsToCellPlacement = gamePhase === GamePhase.SETUP && !readOnly &&
       (selectionMode !== 'none' || !isWallPlacementMode);
+    const hasPlacementConflict = !!selectedWallType && isGuideWall(position, direction) && isOccupied;
     const containerClasses = `h-full w-2 z-10 relative 
-      ${isInteractive ? 'cursor-pointer wall-hit-vertical hover:bg-yellow-200' : ''}
+      ${isInteractive ? 'cursor-pointer wall-hit-vertical' : ''}
+      ${isInteractive && placeMode === 'wall' ? 'hover:bg-red-100' : ''}
+      ${hasPlacementConflict ? '!cursor-not-allowed bg-red-500/25' : ''}
       ${yieldsToCellPlacement ? 'pointer-events-none' : ''}
       transition-all duration-150 ease-in-out bg-transparent`;
     
@@ -578,9 +804,19 @@ const GameBoard: React.FC<GameBoardProps> = ({
       <div
         key={`v-wall-${row}-${col}`}
         className={containerClasses}
+        data-wall-segment={`${position.row},${position.col}:${direction}`}
+        data-wall-occupied={isOccupied ? 'true' : 'false'}
         role={isInteractive ? 'button' : undefined}
         tabIndex={isInteractive ? 0 : undefined}
         aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽` : undefined}
+        aria-disabled={hasPlacementConflict || undefined}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          // Keep overlap feedback visible after a coarse-pointer tap as well as hover.
+          if (isInteractive && selectedWallType && event.pointerType !== 'mouse') {
+            setHoveredWall({ position, direction });
+          }
+        }}
         onClick={(e) => {
           e.stopPropagation();
           if (isInteractive && onDirectionClick) {
@@ -607,9 +843,9 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 설정 단계: 노란색으로 호버 효과 및 배치된 벽 표시 */}
         {gamePhase === GamePhase.SETUP && (
           <>
-          {isHovered && !isBlocked && (
+          {isHovered && placeMode === 'wall' && !isOccupied && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="h-3/4 w-1/2 rounded-sm bg-amber-400 ring-2 ring-white" />
+              <div className={`h-3/4 w-1/2 rounded-sm ${NORMAL_WALL_STYLE} opacity-60`} />
             </div>
           )}
           {isBlocked && (
@@ -622,7 +858,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 플레이 단계: 충돌한 벽만 빨간색으로 표시 */}
         {gamePhase === GamePhase.PLAY && isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="h-3/4 w-1/2 rounded-sm bg-red-600 ring-2 ring-red-200" />
+            <div className="wall-collision-impact h-3/4 w-1/2 rounded-sm bg-red-500 ring-2 ring-red-100" />
           </div>
         )}
         {/* 게임 종료: 아직 충돌하지 않은 벽 공개 */}
@@ -632,6 +868,8 @@ const GameBoard: React.FC<GameBoardProps> = ({
           </div>
         )}
         {renderItemWall(position, direction, 'vertical')}
+        {gamePhase === GamePhase.SETUP &&
+          renderWallPlacementFeedback(position, direction, 'vertical', isOccupied)}
         {/* 탐지기로 밝혀낸 벽 (1회성 벽도 일반 벽으로 위장) */}
         {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
           isRadarRevealed(position, direction) && (

@@ -136,21 +136,6 @@ async function expectLandscapeDpadRail(page) {
   ok('모바일 가로 화면은 보드 오른쪽 전용 십자패드 레일 사용');
 }
 
-async function expectLocatorCanvasNonBlank(page, locator, label) {
-  await locator.waitFor({ timeout: 15000 });
-  await page.waitForTimeout(700);
-  const image = PNG.sync.read(await locator.screenshot());
-  let min = 255;
-  let max = 0;
-  for (let offset = 0; offset < image.data.length; offset += 4) {
-    const lightness = Math.round((image.data[offset] + image.data[offset + 1] + image.data[offset + 2]) / 3);
-    min = Math.min(min, lightness);
-    max = Math.max(max, lightness);
-  }
-  if (max - min < 15) throw new Error(`${label} 캔버스가 비어 있음: range=${max - min}`);
-  ok(`${label} 캔버스 nonblank`);
-}
-
 async function waitForMapSetupHistoryState(page, expected) {
   await page.waitForFunction((state) => {
     const buttons = [...document.querySelectorAll('button')];
@@ -228,9 +213,12 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
   if (await completeButton.isEnabled()) throw new Error('0/24 연습 맵에서 완료 버튼이 활성화됨');
   await page.locator('[data-testid=full-budget-required]').waitFor();
 
-  await page.getByRole('tab', { name: '스킬' }).click();
-  await page.getByRole('button', { name: /질주/ }).first().click();
-  await page.getByRole('tab', { name: '함정' }).click();
+  if (await page.getByRole('tab', { name: '스킬' }).count() !== 0) {
+    throw new Error('스킬 탭이 신규 맵 제작에 노출됨');
+  }
+  if (await page.getByRole('button', { name: /탐지기/ }).count() !== 0) {
+    throw new Error('탐지기가 신규 맵 제작 팔레트에 노출됨');
+  }
   await page.getByRole('button', { name: /연막 함정/ }).click();
   await page.locator('[data-cell="0,1"]').click();
 
@@ -238,48 +226,83 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
   if (await page.getByRole('button', { name: /붕괴벽|거울벽/ }).count() !== 0) {
     throw new Error('은퇴한 붕괴벽/거울벽이 신규 맵 제작 팔레트에 노출됨');
   }
+  const budgetBeforeGuide = await page.locator('[data-testid=setup-budget]').innerText();
   await page.getByRole('button', { name: /화염벽/ }).click();
-  const firePreview = page.locator('[data-testid=wall-effect-preview]');
-  await firePreview.waitFor();
+  const wallGuideStatus = page.locator('[data-testid=wall-placement-guide][data-selected-wall=fireWall]');
+  const fireGuide = page.locator('[data-maze-board-grid] [data-wall-guide=fireWall]');
+  await wallGuideStatus.waitFor();
+  await fireGuide.waitFor();
   if (verifyPreview) {
-    const firstFrame = await firePreview.getAttribute('data-preview-frame');
-    await page.locator('[data-testid=wall-preview-2d]').waitFor();
-    const preview3d = page.locator('[data-testid=wall-preview-3d] canvas');
-    await expectLocatorCanvasNonBlank(page, preview3d, '특수벽 Three.js 미리보기');
-    await page.waitForFunction(
-      (frame) => document.querySelector('[data-testid=wall-effect-preview]')?.getAttribute('data-preview-frame') !== frame,
-      firstFrame,
-      { timeout: 3500 }
-    );
-    const previewBounds = await firePreview.evaluate((element) => {
+    if (await page.locator('[data-testid=wall-effect-preview]').count() !== 0) {
+      throw new Error('보드를 가리는 기존 벽 미리보기 팝업이 남아 있음');
+    }
+    const guideContract = await fireGuide.evaluate((element) => {
+      const board = element.closest('[data-maze-board-grid]');
+      const slot = element.closest('[data-wall-segment]');
       const rect = element.getBoundingClientRect();
-      const closeRect = element.querySelector('button')?.getBoundingClientRect();
+      const boardRect = board?.getBoundingClientRect();
+      const effect = element.querySelector('[data-wall-effect="fireWall"]');
       return {
-        left: rect.left,
-        top: rect.top,
-        right: rect.right,
-        bottom: rect.bottom,
-        close: closeRect ? { width: closeRect.width, height: closeRect.height } : null,
+        inBoard: !!board,
+        occupied: slot?.getAttribute('data-wall-occupied'),
+        segment: slot?.getAttribute('data-wall-segment'),
+        insideBoard: !!boardRect && rect.left >= boardRect.left && rect.top >= boardRect.top &&
+          rect.right <= boardRect.right && rect.bottom <= boardRect.bottom,
+        animation: effect ? getComputedStyle(effect).animationName : '',
         scrollWidth: document.documentElement.scrollWidth,
         clientWidth: document.documentElement.clientWidth,
       };
     });
     if (
-      previewBounds.left < 0 || previewBounds.top < 0 || previewBounds.right > 360 ||
-      previewBounds.bottom > 800 || previewBounds.scrollWidth !== previewBounds.clientWidth
-      || !previewBounds.close || previewBounds.close.width < 44 || previewBounds.close.height < 44
+      !guideContract.inBoard || !guideContract.insideBoard || guideContract.occupied !== 'false' ||
+      !guideContract.segment || !guideContract.animation.includes('wall-guide-breathe') ||
+      guideContract.scrollWidth !== guideContract.clientWidth
     ) {
-      throw new Error(`Galaxy S21 벽 미리보기 범위 오류: ${JSON.stringify(previewBounds)}`);
+      throw new Error(`Galaxy S21 인보드 벽 가이드 계약 오류: ${JSON.stringify(guideContract)}`);
     }
-    await page.screenshot({ path: path.join(OUT, 'practice-wall-preview-galaxy-s21.png') });
-    ok('2D/Three.js 벽 효과 프레임 애니메이션');
+    if (await page.locator('[data-testid=setup-budget]').innerText() !== budgetBeforeGuide) {
+      throw new Error('벽 가이드만 표시했는데 벽 예산이 변경됨');
+    }
+    await page.screenshot({ path: path.join(OUT, 'practice-wall-guide-galaxy-s21.png') });
+    ok('실제 보드 내 빈 선분 벽 고스트 · 예산 무변경');
   }
-  await page.getByRole('button', { name: '벽 효과 미리보기 닫기' }).click();
   await page.getByRole('button', { name: '1행 1열 right 벽', exact: true }).click();
 
   if (verifyPreview) {
+    const installedFire = page.locator('[data-map-item=fireWall] [data-wall-effect=fireWall]');
+    await installedFire.waitFor();
+    const installedAnimation = await installedFire.evaluate((element) => getComputedStyle(element).animationName);
+    if (!installedAnimation.includes('wall-fire-flicker')) {
+      throw new Error(`설치된 화염벽 이펙트가 활성화되지 않음: ${installedAnimation}`);
+    }
     const windButton = page.getByRole('button', { name: /바람벽/ }).first();
     await windButton.click();
+    const occupiedFireSlot = page.locator('[data-wall-segment="0,0:right"]');
+    await occupiedFireSlot.dispatchEvent('pointerdown', {
+      pointerType: 'touch',
+      pointerId: 7,
+      isPrimary: true,
+      bubbles: true,
+    });
+    await occupiedFireSlot.locator('[data-wall-conflict=true]').waitFor();
+    if (await occupiedFireSlot.getAttribute('aria-disabled') !== 'true') {
+      throw new Error('터치한 점유 벽이 충돌 대상으로 안내되지 않음');
+    }
+    if (await occupiedFireSlot.locator('[data-wall-guide]').count() !== 0) {
+      throw new Error('기존 화염벽 위에 바람벽 고스트가 겹쳐짐');
+    }
+    const windGuideSlot = page.locator('[data-wall-segment][data-wall-occupied=false]').first();
+    await windGuideSlot.dispatchEvent('pointerdown', {
+      pointerType: 'touch',
+      pointerId: 8,
+      isPrimary: true,
+      bubbles: true,
+    });
+    await windGuideSlot.locator('[data-wall-guide=windWall]').waitFor();
+    await windGuideSlot.waitFor();
+    if (await windGuideSlot.getAttribute('data-wall-occupied') !== 'false') {
+      throw new Error('바람벽 자동 가이드가 점유된 벽을 선택함');
+    }
     const windLayout = await page.evaluate(() => {
       const description = document.querySelector('[data-testid=active-palette-description]');
       const controls = document.querySelector('[aria-label="바람 방향"]');
@@ -325,7 +348,7 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
       throw new Error(`바람 방향 터치 영역 오류: ${JSON.stringify(windTouchSizes)}`);
     }
     await page.getByRole('tab', { name: '함정' }).click();
-    ok('Galaxy S21 바람벽 설명 전체 표시와 방향 버튼');
+    ok('Galaxy S21 바람벽 방향 버튼 · 기존 벽 중첩 방지 피드백');
   }
 
   await addFullBudgetWalls(page);

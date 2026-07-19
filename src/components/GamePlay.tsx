@@ -2,24 +2,19 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Image from 'next/image';
-import { CollisionWall, Direction, GameMap, GameState, MazeSkillId, Obstacle, Position } from '@/types/game';
+import { CollisionWall, Direction, GameMap, GameState, Obstacle, Position } from '@/types/game';
 import type { BoardFx } from './three/GameBoard3D';
 import LiveBoardGrid, { LiveBoardEntry } from './LiveBoardGrid';
 import MobileDirectionPad from './MobileDirectionPad';
 import { useSwipeMove } from '@/hooks/useSwipeMove';
-import { Anchor, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, FastForward, Gamepad2, ScanSearch, ShieldAlert } from 'lucide-react';
-import { getNewPosition, isPositionInBoard, isSamePosition, getMapItems } from '@/lib/gameUtils';
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Gamepad2 } from 'lucide-react';
+import { getNewPosition, isPositionInBoard, isSamePosition } from '@/lib/gameUtils';
 import {
-  getPlayerMazeSkillState,
   isVisionObscuredForPlayer,
-  mergeWallSegments,
   MoveTurnOutcome,
   normalizeConsumed,
-  RadarTurnOutcome,
   resolveTurnAction,
-  SkillTurnOutcome,
 } from '@/lib/gameTurn';
-import { MAZE_SKILL_DEFINITIONS } from '@/lib/mazeSkills';
 import {
   createLocalBoardVisualRoute,
   deriveLiveBoardVisualTransition,
@@ -36,7 +31,7 @@ interface GamePlayProps {
   userId: string;
   roomId: string;
   gameState?: GameState;
-  myMap?: GameMap; // 내가 만든 맵 정보 (탐지기 보유량 확인용)
+  myMap?: GameMap; // 레거시 호출부 호환용
   gameEnded?: boolean; // 게임 종료 여부
   myFinished?: boolean; // 내가 이미 완주함 -> 관전 모드
   myFinishMoves?: number | null; // 내 완주 턴 수
@@ -51,13 +46,6 @@ interface GamePlayProps {
   }>; // 나를 제외한 참가자들 (HUD 표시)
 }
 
-const SKILL_ICONS: Record<MazeSkillId, typeof ScanSearch> = {
-  scoutPulse: ScanSearch,
-  breach: ShieldAlert,
-  anchor: Anchor,
-  dash: FastForward,
-};
-
 function removeTransientMaps(state: GameState): GameState {
   const persistentState = { ...state };
   delete persistentState.maps;
@@ -70,7 +58,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
   userId,
   roomId,
   gameState,
-  myMap,
   gameEnded = false,
   myFinished = false,
   myFinishMoves = null,
@@ -85,13 +72,11 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const [message, setMessage] = useState<string>('');
   const [playerPhotoURL, setPlayerPhotoURL] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState<string>('나');
-  // 액션 이펙트 (지뢰 폭발/웜홀/탐지 파동/충돌 스파크/골인 축포)
+  // 액션 이펙트 (지뢰 폭발/웜홀/충돌 스파크/골인 축포)
   const [fx, setFx] = useState<BoardFx | null>(null);
   // 경유지는 목적지와 개인 턴 수가 일치하는 한 액션에서만 사용한다.
   const [localVisualRoute, setLocalVisualRoute] = useState<LocalBoardVisualRoute | null>(null);
   const [remoteVisuals, setRemoteVisuals] = useState<Record<string, LiveBoardVisualTransition>>({});
-  const [armedSkill, setArmedSkill] = useState<'breach' | 'dash' | null>(null);
-  const [skillNotice, setSkillNotice] = useState<string>('');
   // 모바일 하단 방향패드 표시 여부
   const [padVisible, setPadVisible] = useState(true);
   const boardStageRef = useRef<HTMLDivElement>(null);
@@ -180,22 +165,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
     }
   }, []);
 
-  // 탐지기는 내가 만든 맵에 배치한 자기용 아이템 상태를 사용한다.
-  const myItems = useMemo(() => getMapItems(myMap), [myMap]);
-  const [myItemsConsumed, setMyItemsConsumed] = useState<Record<number, boolean>>({}); // 내 맵의 자기용 아이템
-
-  // 탐지기(자기용 아이템): 내 셋업에서 확보한 개수만큼 사용 가능
-  const nextRadarIndex = myItems.findIndex(
-    (it, idx) => it.type === 'radar' && !myItemsConsumed[idx]
-  );
-  const mazeSkill = useMemo(
-    () => getPlayerMazeSkillState(gameState, userId, myMap),
-    [gameState, userId, myMap]
-  );
-  const equippedSkill = mazeSkill.loadout[0];
-  const skillConsumed = !equippedSkill || !!mazeSkill.consumed[equippedSkill];
-  const SkillIcon = equippedSkill ? SKILL_ICONS[equippedSkill] : ScanSearch;
-  // 탐지기로 밝혀낸 벽들 (일반 벽 + 위장된 1회성 벽)
+  // 구방 상태에 이미 기록된 공개 벽은 읽기 호환을 위해 계속 표시한다.
   const [revealedWalls, setRevealedWalls] = useState<Obstacle[]>([]);
 
   const iAmDone = gameOver || myFinished; // 내가 골인했음 (게임은 계속될 수 있음)
@@ -214,60 +184,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
     const position = player?.position;
     if (position) setPlayerPosition(position);
     if (typeof player?.moves === 'number') setMoveCount(player.moves);
-
-    setMyItemsConsumed(normalizeConsumed(gameState?.itemState?.[userId]?.consumed));
   }, [gameState, userId]);
-
-  // 탐지기 사용 - 내 주변 한 칸(대각선 포함, 3x3)의 벽을 탐지
-  // 일반 벽 + 아직 부서지지 않은 1회성 벽(일반 벽으로 위장되어 표시)을 찾아냄. 지뢰/웜홀은 탐지 불가.
-  // 탐지기를 여러 개 확보했으면 그 수만큼 사용 가능
-  const handleUseRadar = useCallback(async () => {
-    if (nextRadarIndex < 0 || isFinished) return;
-    const usedIndex = nextRadarIndex;
-    if (!isMyTurn) {
-      setMessage(`${currentTurnName}의 턴입니다.`);
-      return;
-    }
-    if (movePendingRef.current) return;
-
-    movePendingRef.current = true;
-    let outcome: RadarTurnOutcome | null = null;
-
-    try {
-      const database = getDatabase();
-      const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
-      const result = await runTransaction(gameStateRef, (state: GameState | null) => {
-        if (!state || !immutableMaps) return;
-        const resolved = resolveTurnAction(
-          { ...state, maps: immutableMaps },
-          userId,
-          { type: 'radar', itemIndex: usedIndex }
-        );
-        if (!resolved || resolved.outcome.type !== 'radar') return;
-        outcome = resolved.outcome;
-        return removeTransientMaps(resolved.state);
-      }, { applyLocally: false });
-
-      if (!result.committed || !outcome) {
-        setMessage('이미 턴이 넘어갔거나 탐지기를 사용할 수 없습니다.');
-        return;
-      }
-
-      const committed = outcome as RadarTurnOutcome;
-      setRevealedWalls((prev) => mergeWallSegments(prev, committed.found));
-      setMyItemsConsumed((prev) => ({ ...prev, [usedIndex]: true }));
-      setMoveCount(committed.moves);
-      setLocalVisualRoute(null);
-      setMessage(`탐지기로 벽 ${committed.found.length}개를 찾았습니다. 1턴을 사용했습니다.`);
-      fireFx({ type: 'radar', at: committed.position });
-      update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
-    } catch (error) {
-      console.error('탐지기 턴 처리 오류:', error);
-      setMessage('탐지기 사용을 처리하지 못했습니다.');
-    } finally {
-      releaseActionLock();
-    }
-  }, [nextRadarIndex, isFinished, isMyTurn, currentTurnName, roomId, userId, fireFx, immutableMaps, releaseActionLock]);
 
   // 사용자 프로필은 이미 구독 중인 방 상태와 인증 세션에서 가져온다.
   useEffect(() => {
@@ -294,8 +211,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
     }).length;
   const rankTotal = rankedOthers.length + 1;
   const showRank = !gameEnded && othersInfo.length > 0;
-  const mobileStatusText = skillNotice
-    || message
+  const mobileStatusText = message
     || (iAmDone && !gameEnded
       ? `${myFinishMoves ?? moveCount}턴 완주 · 관전 중`
       : !iAmDone && !gameEnded && leadingFinishMoves !== null
@@ -402,80 +318,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
     }
   }, [isFinished, isMyTurn, currentTurnName, playerPosition, roomId, userId, onGameComplete, fireFx, immutableMaps, releaseActionLock]);
 
-  const handleOnlineSkill = useCallback(async (
-    skillId: Exclude<MazeSkillId, 'anchor'>,
-    direction?: Direction
-  ): Promise<boolean> => {
-    if (isFinished || movePendingRef.current || !isMyTurn) return false;
-    movePendingRef.current = true;
-    let outcome: SkillTurnOutcome | null = null;
-
-    try {
-      const database = getDatabase();
-      const gameStateRef = ref(database, `rooms/${roomId}/gameState`);
-      const result = await runTransaction(gameStateRef, (state: GameState | null) => {
-        if (!state || !immutableMaps) return;
-        const resolved = resolveTurnAction(
-          { ...state, maps: immutableMaps },
-          userId,
-          { type: 'skill', skillId, direction }
-        );
-        if (!resolved || resolved.outcome.type !== 'skill') return;
-        outcome = resolved.outcome;
-        return removeTransientMaps(resolved.state);
-      }, { applyLocally: false });
-
-      if (!result.committed || !outcome) return false;
-
-      const committed = outcome as SkillTurnOutcome;
-      setMoveCount(committed.moves);
-      setPlayerPosition(committed.position);
-      setLocalVisualRoute(createLocalBoardVisualRoute(
-        committed.via,
-        committed.position,
-        committed.moves
-      ));
-      setLastMoveValid(
-        committed.skillId === 'scoutPulse' || committed.landingEffect === 'wormhole'
-          ? null
-          : committed.landingEffect === 'mine'
-            ? false
-            : true
-      );
-      setMessage(committed.message);
-      if (committed.found) {
-        setRevealedWalls((previous) => mergeWallSegments(previous, committed.found || []));
-      }
-      if (committed.skillId === 'scoutPulse') {
-        fireFx({ type: 'radar', at: committed.position });
-      } else if (committed.landingEffect === 'mine') {
-        fireFx({ type: 'mine', at: committed.itemPosition, delay: 0.35 });
-      } else if (committed.landingEffect === 'wormhole') {
-        fireFx({
-          type: 'wormhole',
-          at: committed.itemPosition,
-          to: committed.wormholeExit,
-          delay: 0.35,
-        });
-      }
-
-      update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
-      if (committed.reachedGoal) {
-        setGameOver(true);
-        setMessage(`${committed.moves}턴 만에 도착지에 도달했습니다.`);
-        fireFx({ type: 'goal', at: committed.position });
-        onGameComplete?.(committed.moves);
-      }
-      return true;
-    } catch (error) {
-      console.error('온라인 스킬 처리 오류:', error);
-      setMessage('스킬을 처리하지 못했습니다.');
-      return false;
-    } finally {
-      releaseActionLock();
-    }
-  }, [fireFx, immutableMaps, isFinished, isMyTurn, onGameComplete, releaseActionLock, roomId, userId]);
-
   const handleMove = useCallback(
     async (direction: Direction) => {
       if (isFinished) return;
@@ -483,21 +325,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
         queuedMoveRef.current = direction;
         return;
       }
-      if (armedSkill) {
-        const succeeded = await handleOnlineSkill(armedSkill, direction);
-        setArmedSkill(null);
-        setSkillNotice(succeeded ? '' : '그 방향으로는 스킬을 사용할 수 없습니다.');
-        return;
-      }
-      setSkillNotice('');
       await handleOnlineMove(direction);
     },
-    [
-      armedSkill,
-      handleOnlineMove,
-      handleOnlineSkill,
-      isFinished,
-    ]
+    [handleOnlineMove, isFinished]
   );
 
   // 키보드 이벤트 처리 - ref로 항상 최신 핸들러를 사용 (stale closure 방지)
@@ -599,28 +429,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
     });
   }, [gameState, userId, playerName, playerPosition, moveCount, revealedWalls, fx, moveVia, remoteVisuals, currentTurnId]);
 
-  useEffect(() => {
-    if (!isMyTurn) {
-      setArmedSkill(null);
-      setSkillNotice('');
-    }
-  }, [isMyTurn]);
-
-  const handleSkillButton = useCallback(async () => {
-    if (!equippedSkill || skillConsumed || isFinished || !isMyTurn) return;
-    if (equippedSkill === 'anchor') {
-      setSkillNotice('공간 닻은 첫 강제 이동에 자동 발동합니다.');
-      return;
-    }
-    if (equippedSkill === 'scoutPulse') {
-      const succeeded = await handleOnlineSkill('scoutPulse');
-      setSkillNotice(succeeded ? '' : '현재 정찰 파동을 사용할 수 없습니다.');
-      return;
-    }
-    setArmedSkill((current) => current === equippedSkill ? null : equippedSkill);
-    setSkillNotice(armedSkill === equippedSkill ? '' : '이동 방향을 선택하세요.');
-  }, [armedSkill, equippedSkill, handleOnlineSkill, isFinished, isMyTurn, skillConsumed]);
-
   const renderControls = () => {
     const sizeClass = '!h-11 !w-11 !rounded-lg';
     const disabled = isFinished || !isMyTurn;
@@ -661,22 +469,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
           data-testid="online-pad-toggle"
         >
           <Gamepad2 size={18} aria-hidden="true" />
-        </button>
-        <button
-          className={`ml-1 flex h-11 min-w-11 items-center justify-center rounded-lg border ${
-            armedSkill
-              ? 'border-emerald-300 bg-emerald-400 text-slate-950'
-              : equippedSkill === 'anchor' && !skillConsumed
-                ? 'border-cyan-400 bg-cyan-500/20 text-cyan-100'
-                : 'border-emerald-500/60 bg-slate-950/90 text-emerald-200'
-          } disabled:opacity-35`}
-          onClick={handleSkillButton}
-          disabled={!equippedSkill || skillConsumed || isFinished || !isMyTurn}
-          title={equippedSkill ? `${MAZE_SKILL_DEFINITIONS[equippedSkill].label}${equippedSkill === 'anchor' ? ' · 자동 발동' : ''}` : '스킬 없음'}
-          aria-label={equippedSkill ? `${MAZE_SKILL_DEFINITIONS[equippedSkill].label}${equippedSkill === 'anchor' ? ' 자동 발동' : ' 사용'}` : '스킬 없음'}
-          aria-pressed={!!armedSkill}
-        >
-          <SkillIcon size={18} aria-hidden="true" />
         </button>
       </div>
     );
@@ -812,25 +604,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
               <span className="min-w-0 flex-1 truncate text-[10px] text-slate-500">상대 대기</span>
             )}
 
-            {nextRadarIndex >= 0 && !isFinished && (() => {
-              const remaining = myItems.filter(
-                (it, idx) => it.type === 'radar' && !myItemsConsumed[idx]
-              ).length;
-              return (
-                <button
-                  className="btn-game relative flex size-11 shrink-0 items-center justify-center !rounded-lg"
-                  onClick={handleUseRadar}
-                  disabled={!isMyTurn}
-                  title="내 주변 한 칸(대각선 포함)의 벽을 탐지합니다"
-                  aria-label={`탐지기 사용${remaining > 1 ? `, ${remaining}개 남음` : ''}`}
-                >
-                  <ScanSearch size={18} aria-hidden="true" />
-                  {remaining > 1 && (
-                    <span className="absolute right-0.5 top-0.5 text-[8px] font-black">{remaining}</span>
-                  )}
-                </button>
-              );
-            })()}
           </div>
         </div>
         {mobileStatusText && (
@@ -850,11 +623,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
       {/* 메시지/배너 오버레이 */}
       <div className="game-desktop-messages pointer-events-none absolute left-1/2 top-[114px] z-20 w-[96%] max-w-2xl -translate-x-1/2 flex-col items-center gap-1.5">
-        {skillNotice && (
-          <div className="rounded border border-emerald-400/50 bg-slate-950/90 px-3 py-1 text-xs font-bold text-emerald-200">
-            {skillNotice}
-          </div>
-        )}
         {message && (
           <div
             className={`rounded-full border px-3 py-1 text-xs backdrop-blur-sm ${

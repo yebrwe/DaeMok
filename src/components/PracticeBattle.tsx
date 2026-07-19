@@ -2,31 +2,23 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Anchor,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
-  FastForward,
-  ScanSearch,
-  ShieldAlert,
 } from 'lucide-react';
 import LiveBoardGrid, { LiveBoardEntry } from '@/components/LiveBoardGrid';
 import MobileDirectionPad from '@/components/MobileDirectionPad';
 import { useSwipeMove } from '@/hooks/useSwipeMove';
 import { BoardFx } from '@/components/three/GameBoard3D';
-import { Direction, GameMap, GamePhase, GameState, MazeSkillId } from '@/types/game';
+import { Direction, GameMap, GamePhase, GameState } from '@/types/game';
 import {
   MoveTurnOutcome,
-  getPlayerMazeSkillState,
   isVisionObscuredForPlayer,
   normalizeConsumed,
   resolveTurnAction,
   settleCompletedGameState,
-  TurnAction,
-  TurnOutcome,
 } from '@/lib/gameTurn';
-import { MAZE_SKILL_DEFINITIONS } from '@/lib/mazeSkills';
 import {
   choosePracticeAiAction,
   createMapTestGameState,
@@ -39,14 +31,7 @@ import {
   PracticeStanding,
   practiceWallKey,
 } from '@/lib/practiceBattle';
-import { getMapItems, getNewPosition, isPositionInBoard, isSamePosition } from '@/lib/gameUtils';
-
-const SKILL_ICONS: Record<MazeSkillId, typeof ScanSearch> = {
-  scoutPulse: ScanSearch,
-  breach: ShieldAlert,
-  anchor: Anchor,
-  dash: FastForward,
-};
+import { getNewPosition, isPositionInBoard, isSamePosition } from '@/lib/gameUtils';
 
 interface RacerVisualState {
   fx: BoardFx | null;
@@ -66,42 +51,7 @@ interface PracticeBattleProps {
   onComplete: (result: PracticeBattleResult) => void;
 }
 
-function outcomeVisual(outcome: TurnOutcome, key: number): RacerVisualState {
-  if (outcome.type === 'radar') {
-    return {
-      fx: { key, type: 'radar', at: outcome.position },
-      via: null,
-    };
-  }
-
-  if (outcome.type === 'skill') {
-    if (outcome.reachedGoal) {
-      return {
-        fx: { key, type: 'goal', at: outcome.position },
-        via: outcome.via || null,
-      };
-    }
-    if (outcome.landingEffect === 'mine') {
-      return {
-        fx: { key, type: 'mine', at: outcome.itemPosition, delay: 0.35 },
-        via: outcome.via || null,
-      };
-    }
-    if (outcome.landingEffect === 'wormhole') {
-      return {
-        fx: { key, type: 'wormhole', at: outcome.itemPosition, to: outcome.wormholeExit, delay: 0.35 },
-        via: outcome.via || null,
-      };
-    }
-    if (outcome.skillId === 'scoutPulse') {
-      return {
-        fx: { key, type: 'radar', at: outcome.position },
-        via: null,
-      };
-    }
-    return { fx: null, via: outcome.via || null };
-  }
-
+function outcomeVisual(outcome: MoveTurnOutcome, key: number): RacerVisualState {
   if (outcome.reachedGoal) {
     return {
       fx: { key, type: 'goal', at: outcome.position },
@@ -150,19 +100,18 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
     mode === 'mapTest' ? createMapTestGameState(playerMap) : createPracticeGameState(playerMap, aiCount)
   );
   const [visuals, setVisuals] = useState<Record<string, RacerVisualState>>({});
-  const [armedSkill, setArmedSkill] = useState<'breach' | 'dash' | null>(null);
-  const [skillNotice, setSkillNotice] = useState<string>('');
   const stateRef = useRef(gameState);
   const visualKeyRef = useRef(0);
   const completedRef = useRef(false);
   const actedTurnRef = useRef<string | null>(null);
   const probeCountsRef = useRef<Record<string, Record<string, number>>>({});
 
-  const dispatchAction = useCallback((runnerId: string, action: TurnAction, expectedTurn?: number) => {
+  const dispatchMove = useCallback((runnerId: string, direction: Direction, expectedTurn?: number) => {
     const current = stateRef.current;
     if (expectedTurn !== undefined && current.turnNumber !== expectedTurn) return null;
-    const resolved = resolveTurnAction(current, runnerId, action);
-    if (!resolved) return null;
+    const resolved = resolveTurnAction(current, runnerId, { type: 'move', direction });
+    if (!resolved || resolved.outcome.type !== 'move') return null;
+    const outcome = resolved.outcome;
 
     const nextState = settleCompletedGameState(resolved.state);
     stateRef.current = nextState;
@@ -171,11 +120,11 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
     visualKeyRef.current += 1;
     setVisuals((previous) => ({
       ...previous,
-      [runnerId]: outcomeVisual(resolved.outcome, visualKeyRef.current),
+      [runnerId]: outcomeVisual(outcome, visualKeyRef.current),
     }));
 
-    if (resolved.outcome.type === 'move' && resolved.outcome.effect === 'bump') {
-      const key = practiceWallKey(resolved.outcome.origin, resolved.outcome.direction);
+    if (outcome.effect === 'bump') {
+      const key = practiceWallKey(outcome.origin, outcome.direction);
       const currentCounts = probeCountsRef.current[runnerId] || {};
       probeCountsRef.current[runnerId] = {
         ...currentCounts,
@@ -183,7 +132,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
       };
     }
 
-    return resolved.outcome;
+    return outcome;
   }, []);
 
   useEffect(() => {
@@ -218,14 +167,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
         currentTurnId,
         probeCountsRef.current[currentTurnId] || {}
       );
-      let outcome = action ? dispatchAction(currentTurnId, action, expectedTurn) : null;
-      if (!outcome && action?.type === 'skill' && action.direction) {
-        outcome = dispatchAction(
-          currentTurnId,
-          { type: 'move', direction: action.direction },
-          expectedTurn
-        );
-      }
+      let outcome = action ? dispatchMove(currentTurnId, action.direction, expectedTurn) : null;
       if (!outcome) {
         const currentPlayer = stateRef.current.players[currentTurnId];
         const fallbackDirections: Direction[] = ['up', 'right', 'down', 'left'];
@@ -233,11 +175,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
           isPositionInBoard(getNewPosition(currentPlayer.position, direction))
         ));
         if (fallback) {
-          outcome = dispatchAction(
-            currentTurnId,
-            { type: 'move', direction: fallback },
-            expectedTurn,
-          );
+          outcome = dispatchMove(currentTurnId, fallback, expectedTurn);
         }
       }
       if (outcome) {
@@ -246,35 +184,17 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
     }, 420);
 
     return () => window.clearTimeout(timer);
-  }, [aiThinking, currentTurnId, gameState.turnNumber, dispatchAction]);
+  }, [aiThinking, currentTurnId, gameState.turnNumber, dispatchMove]);
 
   const isHumanTurn = gameState.phase === GamePhase.PLAY && currentTurnId === PRACTICE_USER_ID;
   const humanFinished = !!gameState.players[PRACTICE_USER_ID]?.finished;
-
-  useEffect(() => {
-    if (!isHumanTurn) {
-      setArmedSkill(null);
-      setSkillNotice('');
-    }
-  }, [isHumanTurn]);
 
   const boardStageRef = React.useRef<HTMLDivElement>(null);
 
   const handleHumanMove = useCallback((direction: Direction) => {
     if (!isHumanTurn || humanFinished) return;
-    if (armedSkill) {
-      const outcome = dispatchAction(PRACTICE_USER_ID, {
-        type: 'skill',
-        skillId: armedSkill,
-        direction,
-      });
-      setArmedSkill(null);
-      setSkillNotice(outcome ? '' : '그 방향으로는 스킬을 사용할 수 없습니다.');
-      return;
-    }
-    setSkillNotice('');
-    dispatchAction(PRACTICE_USER_ID, { type: 'move', direction });
-  }, [armedSkill, dispatchAction, humanFinished, isHumanTurn]);
+    dispatchMove(PRACTICE_USER_ID, direction);
+  }, [dispatchMove, humanFinished, isHumanTurn]);
 
   // 보드 스테이지 스와이프로 이동 (내 턴/완주 가드는 handleHumanMove 내부에서 처리)
   useSwipeMove(boardStageRef, handleHumanMove, { enabled: !humanFinished });
@@ -304,35 +224,6 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [handleHumanMove]);
-
-  const ownMap = gameState.maps?.[PRACTICE_USER_ID];
-  const ownItems = getMapItems(ownMap);
-  const ownConsumed = normalizeConsumed(gameState.itemState?.[PRACTICE_USER_ID]?.consumed);
-  const radarIndex = ownItems.findIndex((item, index) => item.type === 'radar' && !ownConsumed[index]);
-  const mazeSkill = getPlayerMazeSkillState(gameState, PRACTICE_USER_ID, ownMap);
-  const equippedSkill = mazeSkill.loadout[0];
-  const skillConsumed = !equippedSkill || !!mazeSkill.consumed[equippedSkill];
-  const SkillIcon = equippedSkill ? SKILL_ICONS[equippedSkill] : ScanSearch;
-
-  const handleRadar = () => {
-    if (!isHumanTurn || humanFinished || radarIndex < 0) return;
-    dispatchAction(PRACTICE_USER_ID, { type: 'radar', itemIndex: radarIndex });
-  };
-
-  const handleSkill = () => {
-    if (!isHumanTurn || humanFinished || !equippedSkill || skillConsumed) return;
-    if (equippedSkill === 'anchor') {
-      setSkillNotice('공간 닻은 첫 강제 이동에 자동 발동합니다.');
-      return;
-    }
-    if (equippedSkill === 'scoutPulse') {
-      const outcome = dispatchAction(PRACTICE_USER_ID, { type: 'skill', skillId: 'scoutPulse' });
-      setSkillNotice(outcome ? '' : '현재 정찰 파동을 사용할 수 없습니다.');
-      return;
-    }
-    setSkillNotice('방향을 선택하세요.');
-    setArmedSkill((current) => current === equippedSkill ? null : equippedSkill);
-  };
 
   const boards = useMemo<LiveBoardEntry[]>(() => {
     const collisions = getPracticeCollisionWalls(gameState);
@@ -476,17 +367,6 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
         </div>
       )}
 
-      {skillNotice && (
-        <div
-          className="game-practice-skill-notice pointer-events-none absolute inset-x-2 bottom-[calc(210px+env(safe-area-inset-bottom))] z-40 flex justify-center"
-          aria-live="polite"
-        >
-          <span className="rounded-xl border border-[#69cdb7] bg-[#effaf5]/95 px-2 py-1 text-[10px] font-bold text-[#315f54]">
-            {skillNotice}
-          </span>
-        </div>
-      )}
-
       <div
         className="absolute inset-x-0 bottom-0 z-30 flex h-[58px] items-center justify-center gap-1.5 border-t-2 border-[#e5cfad] bg-[#fffaf0]/95 px-2 backdrop-blur-sm"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(58px + env(safe-area-inset-bottom))' }}
@@ -498,37 +378,6 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
           {moveButton('down', '아래로 이동', ArrowDown)}
           {moveButton('right', '오른쪽으로 이동', ArrowRight)}
         </div>
-        <button
-          type="button"
-          className={`ml-1 flex h-11 min-w-11 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-bold sm:h-12 ${
-            armedSkill
-              ? 'border-[#315f54] bg-[#69cdb7] text-[#173b37]'
-              : equippedSkill === 'anchor' && !skillConsumed
-                ? 'border-[#1f708b] bg-[#e8f6fa] text-[#1f596d]'
-                : 'border-[#69cdb7] bg-[#effaf5] text-[#315f54]'
-          } disabled:opacity-35`}
-          onClick={handleSkill}
-          disabled={controlDisabled || skillConsumed}
-          title={equippedSkill ? `${MAZE_SKILL_DEFINITIONS[equippedSkill].label}${equippedSkill === 'anchor' ? ' · 자동 발동' : ''}` : '스킬 없음'}
-          aria-label={equippedSkill ? `${MAZE_SKILL_DEFINITIONS[equippedSkill].label}${equippedSkill === 'anchor' ? ' 자동 발동' : ' 사용'}` : '스킬 없음'}
-          aria-pressed={!!armedSkill}
-        >
-          <SkillIcon size={17} aria-hidden="true" />
-          <span className="hidden min-[430px]:inline">
-            {equippedSkill ? MAZE_SKILL_DEFINITIONS[equippedSkill].label : '스킬'}
-          </span>
-        </button>
-        <button
-          type="button"
-          className="btn-game ml-1 flex h-11 min-w-11 items-center justify-center gap-1 !rounded-lg px-2 text-[10px] sm:h-12"
-          onClick={handleRadar}
-          disabled={controlDisabled || radarIndex < 0}
-          title="탐지기 사용"
-          aria-label="탐지기 사용"
-        >
-          <ScanSearch size={17} aria-hidden="true" />
-          {radarIndex >= 0 && <span className="hidden min-[390px]:inline">탐지</span>}
-        </button>
       </div>
     </div>
   );

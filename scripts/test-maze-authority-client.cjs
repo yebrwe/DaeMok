@@ -404,6 +404,19 @@ async function main() {
   inputMap.obstacles.push({ position: { row: 0, col: 0 }, direction: 'right' });
   assert.deepEqual(submit.map.startPosition, { row: 0, col: 0 }, 'the builder snapshots map bytes');
   assert.deepEqual(submit.map.obstacles, [], 'later map mutations cannot change an in-flight command');
+  const normalizedSubmit = client.buildMazeAuthoritySubmitMapCommand({
+    ...fence,
+    map: validMap({ skillLoadout: 'anchor' }),
+  });
+  assert.equal(
+    normalizedSubmit.map.skillLoadout,
+    'scoutPulse',
+    'the client normalizes stale skill drafts to the inert V3 compatibility value',
+  );
+  assert.equal(client.parseMazeAuthorityCommand({
+    ...normalizedSubmit,
+    map: { ...normalizedSubmit.map, skillLoadout: 'dash' },
+  }), null, 'the strict wire parser rejects retired skill loadouts');
 
   const turn = client.buildMazeAuthorityTurnCommand({
     ...fence,
@@ -422,10 +435,24 @@ async function main() {
     assert.equal(command?.type, lifecycleType);
     assert.equal(client.parseMazeAuthorityCommand({ ...command, extra: true }), null);
   }
-  assert.equal(client.parseMazeAuthorityCommand({
-    ...turn,
-    action: { type: 'skill', skillId: 'dash' },
-  }), null, 'directional skills require an exact direction');
+  for (const retiredAction of [
+    { type: 'radar', itemIndex: 0 },
+    { type: 'skill', skillId: 'scoutPulse' },
+    { type: 'skill', skillId: 'breach', direction: 'right' },
+    { type: 'skill', skillId: 'anchor' },
+    { type: 'skill', skillId: 'dash', direction: 'right' },
+  ]) {
+    assert.equal(
+      client.parseMazeAuthorityCommand({ ...turn, action: retiredAction }),
+      null,
+      `${retiredAction.type} command parsing is retired`,
+    );
+    assert.throws(
+      () => client.buildMazeAuthorityTurnCommand({ ...fence, action: retiredAction }),
+      (error) => error?.code === 'invalid-command',
+      `${retiredAction.type} command building is retired`,
+    );
+  }
   assert.throws(
     () => client.buildMazeAuthorityJoinRoomCommand({ ...fence, expectedGeneration: 0 }),
     (error) => error?.code === 'invalid-command',
@@ -433,6 +460,14 @@ async function main() {
   assert.throws(
     () => client.buildMazeAuthorityJoinRoomCommand({ ...fence, commandId: 'not-a-uuid' }),
     (error) => error?.code === 'invalid-command',
+  );
+  assert.throws(
+    () => client.buildMazeAuthoritySubmitMapCommand({
+      ...fence,
+      map: validMap({ items: [{ type: 'radar' }] }),
+    }),
+    (error) => error?.code === 'invalid-command',
+    'new Authority maps reject radar',
   );
   for (const retiredWall of ['collapseWall', 'mirrorWall']) {
     assert.throws(
@@ -823,6 +858,9 @@ async function main() {
           wallPosition: { row: 0, col: 1 },
           wallDirection: 'right',
         },
+        2: {
+          type: 'radar',
+        },
       },
     },
     [GUEST]: {
@@ -836,7 +874,8 @@ async function main() {
   assert.ok(endedView, 'legacy ended projections remain readable during drain');
   assert.equal(endedView.gameState.maps[OWNER].items[0].type, 'collapseWall');
   assert.equal(endedView.gameState.maps[OWNER].items[1].type, 'mirrorWall');
-  for (const retiredWall of ['collapseWall', 'mirrorWall']) {
+  assert.equal(endedView.gameState.maps[OWNER].items[2].type, 'radar');
+  for (const retiredWall of ['radar', 'collapseWall', 'mirrorWall']) {
     assert.ok(
       Object.prototype.hasOwnProperty.call(endedView.ruleSnapshot.itemCosts, retiredWall),
       `the legacy V3 rule snapshot keeps ${retiredWall} on the wire`,

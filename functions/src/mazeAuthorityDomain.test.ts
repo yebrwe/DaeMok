@@ -107,7 +107,7 @@ function submitMap(
 
 function readyTwoPlayerRoom(
   ownerMap = simpleMap(),
-  guestMap = simpleMap({ row: 5, col: 5 }, { row: 5, col: 4 }, 'dash'),
+  guestMap = simpleMap({ row: 5, col: 5 }, { row: 5, col: 4 }),
 ): MazeAuthorityState {
   let state = createRoom();
   state = joinRoom(state);
@@ -171,7 +171,6 @@ function readyRoomWithPlayers(playerIds: readonly string[]): MazeAuthorityState 
       simpleMap(
         { row: index, col: 0 },
         { row: index, col: 1 },
-        (['scoutPulse', 'breach', 'anchor', 'dash'] as const)[index],
       ),
       `submit-player-${index + 1}-map`,
       10_200 + index,
@@ -320,8 +319,20 @@ test('strict tagged parsing rejects unknown command, action, map, and array fiel
       expectedRevision: 5,
       action: { type: 'skill', skillId: 'dash' },
     }),
-    'invalid-argument',
-    'skill-action-direction',
+    'failed-precondition',
+    'skill-retired',
+  );
+  expectDomainError(
+    () => parseMazeAuthorityCommand({
+      type: 'turn',
+      commandId: 'command-radar-retired',
+      roomId: ROOM_ID,
+      expectedGeneration: 1,
+      expectedRevision: 5,
+      action: { type: 'radar', itemIndex: 0 },
+    }),
+    'failed-precondition',
+    'radar-retired',
   );
 });
 
@@ -416,6 +427,37 @@ test('create, join, and submitMap apply exact generation/revision CAS without mu
     'retired-wall-item',
   );
 
+  expectDomainError(
+    () => reduceMazeAuthorityCommand(joined, OWNER, {
+      type: 'submitMap',
+      commandId: 'command-retired-radar',
+      roomId: ROOM_ID,
+      expectedGeneration: joined.meta.generation,
+      expectedRevision: joined.meta.revision,
+      map: {
+        ...simpleMap(),
+        items: [{ type: 'radar' }],
+      },
+    }, 1_200),
+    'failed-precondition',
+    'retired-wall-item',
+  );
+
+  for (const skillLoadout of ['breach', 'anchor', 'dash'] as const) {
+    expectDomainError(
+      () => reduceMazeAuthorityCommand(joined, OWNER, {
+        type: 'submitMap',
+        commandId: `command-retired-skill-${skillLoadout}`,
+        roomId: ROOM_ID,
+        expectedGeneration: joined.meta.generation,
+        expectedRevision: joined.meta.revision,
+        map: simpleMap(undefined, undefined, skillLoadout),
+      }, 1_200),
+      'failed-precondition',
+      'skill-loadout-retired',
+    );
+  }
+
   const submitted = submitMap(joined, OWNER, simpleMap(), 'command-map-owner-02', 1_200);
   assert.equal(submitted.meta.revision, 3);
   assert.equal(submitted.gameState.players[OWNER].isReady, true);
@@ -466,7 +508,7 @@ test('Realtime Database sparse values rehydrate to canonical maps and exactly re
 
   const ready = readyTwoPlayerRoom(
     simpleMap({ row: 0, col: 0 }, { row: 0, col: 1 }, 'scoutPulse'),
-    simpleMap({ row: 5, col: 5 }, { row: 5, col: 4 }, 'dash'),
+    simpleMap({ row: 5, col: 5 }, { row: 5, col: 4 }),
   );
   const persistedReady = simulateRealtimeDatabase(ready);
   assert.ok(persistedReady);
@@ -557,8 +599,40 @@ test('receipt ledger stays bounded and a retained command remains replayable onl
 
 test('startMatch preserves the current V3 relay assignment and initialization contract', () => {
   const ownerMap = simpleMap({ row: 0, col: 0 }, { row: 0, col: 1 }, 'scoutPulse');
-  const guestMap = simpleMap({ row: 5, col: 5 }, { row: 5, col: 4 }, 'dash');
+  const guestMap = simpleMap({ row: 5, col: 5 }, { row: 5, col: 4 });
   const setup = readyTwoPlayerRoom(ownerMap, guestMap);
+
+  const legacySetups = [
+    (() => {
+      const legacy = cloneJson(setup);
+      legacy.gameState.maps![GUEST].skillLoadout = 'dash';
+      return legacy;
+    })(),
+    (() => {
+      const legacy = cloneJson(setup);
+      legacy.gameState.maps![GUEST].items = [{ type: 'radar' }];
+      return legacy;
+    })(),
+  ];
+  legacySetups.forEach((legacy, index) => {
+    assert.deepEqual(
+      parseMazeAuthorityState(legacy),
+      legacy,
+      'legacy map content remains readable for view/history compatibility',
+    );
+    expectDomainError(
+      () => reduceMazeAuthorityCommand(legacy, OWNER, {
+        type: 'startMatch',
+        commandId: `command-start-retired-map-${index}`,
+        roomId: ROOM_ID,
+        expectedGeneration: legacy.meta.generation,
+        expectedRevision: legacy.meta.revision,
+      }, 1_400),
+      'failed-precondition',
+      'stored-map-retired',
+    );
+  });
+
   const reduction = reduceMazeAuthorityCommand(setup, OWNER, {
     type: 'startMatch',
     commandId: 'command-start-parity',
@@ -580,21 +654,35 @@ test('startMatch preserves the current V3 relay assignment and initialization co
   assert.equal(state.gameState.currentTurn, OWNER);
   assert.deepEqual(state.gameState.turnOrder, [OWNER, GUEST]);
   assert.equal(state.gameState.turnNumber, 1);
-  assert.deepEqual(state.gameState.itemState?.[OWNER]?.mazeSkill, {
-    version: 1,
-    loadout: ['scoutPulse'],
-    consumed: {},
-  });
-  assert.deepEqual(state.gameState.itemState?.[GUEST]?.mazeSkill, {
-    version: 1,
-    loadout: ['dash'],
-    consumed: {},
-  });
+  assert.equal(state.gameState.itemState, undefined);
   assert.deepEqual(state.gameState.maps, { [OWNER]: ownerMap, [GUEST]: guestMap });
   assert.deepEqual(state.gameState.collisionWalls, {});
   assert.deepEqual(state.gameState.revealedWallsByPlayer, {});
   assert.deepEqual(state.gameState.visionEffectsByPlayer, {});
   assert.equal(state.gameState.turnMessageTimestamp, 1_400);
+
+  const unchanged = cloneJson(state);
+  for (const [action, reason] of [
+    [{ type: 'radar', itemIndex: 0 }, 'radar-retired'],
+    [{ type: 'skill', skillId: 'scoutPulse' }, 'skill-retired'],
+    [{ type: 'skill', skillId: 'breach', direction: 'right' }, 'skill-retired'],
+    [{ type: 'skill', skillId: 'anchor' }, 'skill-retired'],
+    [{ type: 'skill', skillId: 'dash', direction: 'right' }, 'skill-retired'],
+  ] as const) {
+    expectDomainError(
+      () => reduceMazeAuthorityCommand(state, OWNER, {
+        type: 'turn',
+        commandId: `retired-${action.type}-${String('skillId' in action ? action.skillId : 'detector')}`,
+        roomId: ROOM_ID,
+        expectedGeneration: state.meta.generation,
+        expectedRevision: state.meta.revision,
+        action,
+      }, 1_450),
+      'failed-precondition',
+      reason,
+    );
+  }
+  assert.deepEqual(state, unchanged, 'retired actions cannot mutate authority state');
 });
 
 function applyTurnWithParity(
@@ -1099,7 +1187,7 @@ test('restartMatch fences a new generation, resets only active members, and repl
   state = submitMap(
     state,
     FOURTH,
-    simpleMap({ row: 3, col: 0 }, { row: 3, col: 1 }, 'dash'),
+    simpleMap({ row: 3, col: 0 }, { row: 3, col: 1 }),
     'restart-fourth-new-map',
     24_200,
   );

@@ -9,8 +9,6 @@ import {
   ArrowUp,
   LogOut,
   RotateCcw,
-  ScanSearch,
-  Sparkles,
 } from 'lucide-react';
 import GameSetup from '@/components/GameSetup';
 import LiveBoardGrid from '@/components/LiveBoardGrid';
@@ -37,9 +35,7 @@ import {
   buildMazeAuthorityLiveBoards,
   isFullMazeAuthorityMap,
 } from '@/lib/mazeAuthorityPresentation';
-import { getMapItems } from '@/lib/gameUtils';
-import type { Direction, GameMap, MazeSkillId } from '@/types/game';
-import type { TurnAction } from '@/lib/gameTurn';
+import type { Direction, GameMap } from '@/types/game';
 
 interface AuthorityGameRoomProps {
   roomId: string;
@@ -89,10 +85,6 @@ function fullMap(value: MazeAuthorityMapView | undefined): GameMap | null {
   return value && isFullMazeAuthorityMap(value) ? value : null;
 }
 
-function consumedAt(value: Record<number, boolean> | boolean | undefined, index: number): boolean {
-  return typeof value === 'object' && value !== null && value[index] === true;
-}
-
 function resultLabel(input: {
   winner: string | null;
   draw: boolean | null;
@@ -115,7 +107,6 @@ export default function AuthorityGameRoom({ roomId, userId }: AuthorityGameRoomP
     error: viewError,
   } = useMazeAuthorityRoom(roomId, userId);
   const [pending, setPending] = useState(false);
-  const [armedSkill, setArmedSkill] = useState<'breach' | 'dash' | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [offlineTurnNotice, setOfflineTurnNotice] = useState<OfflineTurnNotice | null>(null);
@@ -334,15 +325,6 @@ export default function AuthorityGameRoom({ roomId, userId }: AuthorityGameRoomP
     && gameState.turnOrder.every((uid) => gameState.players[uid]?.isReady);
   const myTurn = phase === 'play' && gameState.currentTurn === userId;
   const canAct = isMember && myTurn && !me?.finished && !me?.forfeited && !me?.hasLeft;
-  const ownItemState = gameState.itemState[userId];
-  const nextRadarIndex = ownMap
-    ? getMapItems(ownMap).findIndex((item, index) => (
-      item.type === 'radar' && !consumedAt(ownItemState?.consumed, index)
-    ))
-    : -1;
-  const equippedSkill = ownItemState?.mazeSkill?.loadout[0] ?? ownMap?.skillLoadout;
-  const skillConsumed = !equippedSkill || ownItemState?.mazeSkill?.consumed[equippedSkill] === true;
-
   const runCommand = async (command: MazeAuthorityCommand) => {
     if (pending) return null;
     setPending(true);
@@ -371,28 +353,13 @@ export default function AuthorityGameRoom({ roomId, userId }: AuthorityGameRoomP
     void runCommand(buildMazeAuthoritySubmitMapCommand({ ...fence(activeView), map }));
   };
 
-  const sendTurn = async (action: TurnAction) => {
-    const response = await runCommand(buildMazeAuthorityTurnCommand({ ...fence(activeView), action }));
-    if (response?.result.type === 'turn') setMessage(response.result.outcome.message);
-    setArmedSkill(null);
-  };
-
-  const sendDirection = (direction: Direction) => {
+  const sendDirection = async (direction: Direction) => {
     if (!canAct) return;
-    if (armedSkill) {
-      void sendTurn({ type: 'skill', skillId: armedSkill, direction });
-    } else {
-      void sendTurn({ type: 'move', direction });
-    }
-  };
-
-  const activateSkill = (skillId: MazeSkillId) => {
-    if (!canAct || skillConsumed) return;
-    if (skillId === 'breach' || skillId === 'dash') {
-      setArmedSkill((current) => current === skillId ? null : skillId);
-    } else {
-      void sendTurn({ type: 'skill', skillId });
-    }
+    const response = await runCommand(buildMazeAuthorityTurnCommand({
+      ...fence(activeView),
+      action: { type: 'move', direction },
+    }));
+    if (response?.result.type === 'turn') setMessage(response.result.outcome.message);
   };
 
   const leave = async () => {
@@ -532,37 +499,12 @@ export default function AuthorityGameRoom({ roomId, userId }: AuthorityGameRoomP
                       type="button"
                       className="btn-game flex min-h-11 min-w-11 items-center justify-center px-3"
                       disabled={!canAct || pending}
-                      onClick={() => sendDirection(direction)}
-                      aria-label={`${armedSkill ? '스킬 사용 방향 ' : '이동 '}${label}`}
+                      onClick={() => void sendDirection(direction)}
+                      aria-label={`이동 ${label}`}
                     >
                       <Icon size={20} aria-hidden="true" />
                     </button>
                   ))}
-                  {nextRadarIndex >= 0 && (
-                    <button
-                      type="button"
-                      className="btn-sub flex min-h-11 items-center gap-1.5 px-3 text-xs"
-                      disabled={!canAct || pending}
-                      onClick={() => void sendTurn({ type: 'radar', itemIndex: nextRadarIndex })}
-                    >
-                      <ScanSearch size={18} aria-hidden="true" /> 탐지
-                    </button>
-                  )}
-                  {equippedSkill && (
-                    <button
-                      type="button"
-                      className={`flex min-h-11 items-center gap-1.5 rounded-xl border-2 px-3 text-xs font-black ${
-                        armedSkill
-                          ? 'border-[#5d4635] bg-[#f08b78] text-[#3d352d]'
-                          : 'btn-sub'
-                      }`}
-                      disabled={!canAct || pending || skillConsumed}
-                      onClick={() => activateSkill(equippedSkill)}
-                    >
-                      <Sparkles size={18} aria-hidden="true" />
-                      {armedSkill ? '방향 선택' : '미로 스킬'}
-                    </button>
-                  )}
                 </div>
               </section>
             )}

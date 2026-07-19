@@ -181,7 +181,7 @@ const OWNER_DETAILED_MAP = mapWithDetails(
 const GUEST_DETAILED_MAP = mapWithDetails(
   { row: 5, col: 5 },
   { row: 5, col: 3 },
-  'dash',
+  'scoutPulse',
   { row: 1, col: 1 },
   { row: 2, col: 2 },
 );
@@ -241,7 +241,7 @@ test('play projection publishes boundary-only public boards and only the member 
     endPosition: GUEST_DETAILED_MAP.endPosition,
   });
   assert.deepEqual(publicView.gameState.itemState, {});
-  assert.deepEqual(Object.keys(ownerView.gameState.itemState), [OWNER]);
+  assert.deepEqual(Object.keys(ownerView.gameState.itemState), []);
   assert.equal(ownerView.gameState.itemState[GUEST], undefined);
   assert.deepEqual(publicView.gameState.revealedWallsByPlayer, {});
   assert.deepEqual(publicView.gameState.visionEffectsByPlayer, {});
@@ -263,7 +263,7 @@ test('collision projection keeps a consumed fake wall disguised as a discovered 
       wallPosition: { row: 0, col: 0 },
       wallDirection: 'right',
     }],
-    skillLoadout: 'anchor',
+    skillLoadout: 'scoutPulse',
   };
   const guestMap: GameMap = {
     rulesVersion: 3,
@@ -271,7 +271,7 @@ test('collision projection keeps a consumed fake wall disguised as a discovered 
     endPosition: { row: 4, col: 4 },
     obstacles: [{ position: { row: 5, col: 5 }, direction: 'left' }],
     items: [],
-    skillLoadout: 'breach',
+    skillLoadout: 'scoutPulse',
   };
   let state = startMatch(readyRoom(ownerMap, guestMap));
   state = applyMove(state, OWNER, 'left', 'view-static-wall-1', 1_500);
@@ -311,8 +311,8 @@ test('end projection reveals every full map and final item state without revivin
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 0, col: 1 },
     obstacles: [{ position: { row: 4, col: 4 }, direction: 'right' }],
-    items: [{ type: 'radar' }],
-    skillLoadout: 'anchor',
+    items: [{ type: 'mine', position: { row: 5, col: 4 } }],
+    skillLoadout: 'scoutPulse',
   };
   const guestMap: GameMap = {
     rulesVersion: 3,
@@ -320,7 +320,7 @@ test('end projection reveals every full map and final item state without revivin
     endPosition: { row: 0, col: 1 },
     obstacles: [{ position: { row: 3, col: 3 }, direction: 'right' }],
     items: [{ type: 'smoke', position: { row: 5, col: 5 } }],
-    skillLoadout: 'dash',
+    skillLoadout: 'scoutPulse',
   };
   let state = startMatch(readyRoom(ownerMap, guestMap));
   state = applyMove(state, OWNER, 'right', 'view-owner-finish', 1_500);
@@ -331,7 +331,7 @@ test('end projection reveals every full map and final item state without revivin
   const guestView = projectMazeAuthorityMemberView(state, GUEST);
   assert.deepEqual(publicView.gameState.maps, { [OWNER]: ownerMap, [GUEST]: guestMap });
   assert.deepEqual(guestView.gameState.maps, publicView.gameState.maps);
-  assert.deepEqual(Object.keys(publicView.gameState.itemState), [OWNER, GUEST]);
+  assert.deepEqual(Object.keys(publicView.gameState.itemState), []);
   assert.deepEqual(guestView.gameState.itemState, publicView.gameState.itemState);
   assert.equal('position' in publicView.gameState.players[OWNER], true);
   assertNoPrivateAuthorityFields(publicView);

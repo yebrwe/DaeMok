@@ -41,11 +41,11 @@ const COLORS = {
   tileHover: '#31b7a6',
   base: '#7c3f22',
   baseSide: '#4b2418',
-  wall: '#263242', // 2D 보드와 같은 짙은 잉크색 일반 벽
-  wallPreview: '#f5a524',
+  wall: '#6b1111', // 2D 보드와 같은 짙은 적색 일반 벽
+  wallPreview: '#b91c1c',
   fakeWall: '#008e95',
-  collision: '#e5484d', // 충돌한 벽 (선명한 빨강)
-  reveal: '#d76a22', // 게임 종료 후 공개된 벽
+  collision: '#ff334f', // 충돌한 벽 (일반벽보다 밝은 빨강)
+  reveal: '#991b1b', // 게임 종료 후 공개된 일반벽
   start: '#12a66a',
   end: '#d9365f',
   player: '#2674d9',
@@ -158,6 +158,8 @@ function WallBox({ seg, color, opacity = 1, height = WALL_HEIGHT }: { seg: WallS
     >
       <meshStandardMaterial
         color={color}
+        emissive={color}
+        emissiveIntensity={opacity < 1 ? 0.04 : 0.1}
         transparent={opacity < 1}
         opacity={opacity}
         roughness={0.74}
@@ -261,14 +263,18 @@ function SpecialWallBox({
   consumed = false,
   active = false,
   phaseOpen = false,
+  reducedMotion = false,
 }: {
   seg: WallSegment;
   type: SpecialWallType;
   consumed?: boolean;
   active?: boolean;
   phaseOpen?: boolean;
+  reducedMotion?: boolean;
 }) {
   const style = SPECIAL_WALL_STYLES[type];
+  const bodyMaterialRef = useRef<THREE.MeshPhysicalMaterial>(null);
+  const accentMaterialRef = useRef<THREE.MeshStandardMaterial>(null);
   const [x, , z] = segmentToWorld(seg);
   const size = segmentSize(seg);
   const inactiveCollapse = type === 'collapseWall' && !active && !consumed;
@@ -291,6 +297,45 @@ function SpecialWallBox({
   const detailedCones = type === 'fireWall' || type === 'thornWall';
   const detailedRivets = type === 'steelWall' || type === 'poisonWall';
 
+  useFrame((state) => {
+    const body = bodyMaterialRef.current;
+    const accent = accentMaterialRef.current;
+    if (!body || !accent) return;
+
+    const baseBody = consumed ? 0 : style.emissiveIntensity;
+    const baseAccent = consumed ? 0 : style.emissiveIntensity * 0.55;
+    if (reducedMotion || consumed || style.emissiveIntensity === 0) {
+      body.emissiveIntensity = baseBody;
+      accent.emissiveIntensity = baseAccent;
+      body.opacity = opacity;
+      accent.opacity = opacity;
+      return;
+    }
+
+    const speed = type === 'fireWall'
+      ? 7
+      : type === 'windWall'
+        ? 4.5
+        : type === 'crystalWall'
+          ? 3.8
+          : type === 'phaseWall'
+            ? 2.6
+            : 2.1;
+    const wave = (Math.sin(state.clock.elapsedTime * speed) + 1) / 2;
+    const strength = type === 'fireWall' || type === 'crystalWall' ? 0.9 : 0.48;
+    body.emissiveIntensity = baseBody * (0.72 + wave * strength);
+    accent.emissiveIntensity = baseAccent * (0.8 + wave * 1.1);
+
+    if (type === 'windWall' || type === 'phaseWall') {
+      const opacityWave = type === 'phaseWall' ? 0.38 + wave * 0.62 : 0.72 + wave * 0.28;
+      body.opacity = Math.min(1, opacity * opacityWave);
+      accent.opacity = Math.min(1, opacity * (0.78 + wave * 0.22));
+    } else {
+      body.opacity = opacity;
+      accent.opacity = opacity;
+    }
+  });
+
   const detailPosition = (offset: number, y: number): [number, number, number] =>
     seg.type === 'H' ? [x + offset, y, z] : [x, y, z + offset];
 
@@ -305,6 +350,7 @@ function SpecialWallBox({
         receiveShadow
       >
         <meshPhysicalMaterial
+          ref={bodyMaterialRef}
           color={style.color}
           emissive={style.emissive}
           emissiveIntensity={consumed ? 0 : style.emissiveIntensity}
@@ -329,6 +375,7 @@ function SpecialWallBox({
         castShadow={false}
       >
         <meshStandardMaterial
+          ref={accentMaterialRef}
           color={style.accent}
           emissive={style.emissive}
           emissiveIntensity={consumed ? 0 : style.emissiveIntensity * 0.55}
@@ -1140,6 +1187,7 @@ function ItemVisuals({
         consumed={consumed}
         active={active}
         phaseOpen={phaseOpen}
+        reducedMotion={reducedMotion}
       />
     ) : null;
   }

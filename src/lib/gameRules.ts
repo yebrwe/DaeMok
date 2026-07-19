@@ -8,6 +8,8 @@ import {
   getMapItems,
   isSameWallSegment,
   isValidMap,
+  isValidNewMap,
+  normalizeNewMapForSubmission,
 } from '@/lib/gameUtils';
 import { MAX_MAZE_SKILL_LOADOUT } from '@/lib/mazeSkills';
 
@@ -224,4 +226,28 @@ export function isValidMapForRuleSnapshot(
   }
 
   return countUniqueWalls(map.obstacles || []) + itemCost <= snapshot.wallBudget;
+}
+
+/**
+ * Validation used only when a map is about to be saved or submitted. The
+ * compatibility validator above continues accepting old V3 radar/skill maps
+ * for read-only rendering and in-flight legacy matches.
+ */
+export function isValidNewMapForRuleSnapshot(
+  map: GameMap | null | undefined,
+  snapshot: unknown
+): boolean {
+  if (!isValidGameRuleSnapshot(snapshot) || !map) return false;
+  return isValidNewMap(map, snapshot.version)
+    && isValidMapForRuleSnapshot(map, snapshot);
+}
+
+/** Normalizes the retired skill field, then applies the strict write boundary. */
+export function normalizeNewMapForRuleSnapshot(
+  map: GameMap | null | undefined,
+  snapshot: unknown
+): GameMap | null {
+  if (!map || !isValidMapForRuleSnapshot(map, snapshot)) return null;
+  const normalized = normalizeNewMapForSubmission(map);
+  return isValidNewMapForRuleSnapshot(normalized, snapshot) ? normalized : null;
 }

@@ -425,7 +425,7 @@ function deterministicFixtures() {
       },
     },
     {
-      name: 'radar action',
+      name: 'retired detector action',
       state: runtimeState(gameMap({
         obstacles: [wall(0, 0, 'right')],
         items: [wallItem('oneTimeWall', 1, 0, 'right')],
@@ -434,60 +434,49 @@ function deterministicFixtures() {
       }),
       steps: [{ action: { type: 'radar', itemIndex: 0 } }],
       verify(run) {
-        const resolved = resolutionAt(run);
-        assert.equal(resolved.outcome.type, 'radar');
-        assert.ok(resolved.outcome.found.length >= 2);
-        assert.equal(resolved.state.itemState.a.consumed[0], true);
-        assert.deepEqual(resolved.state.revealedWallsByPlayer.a, resolved.outcome.found);
+        assert.equal(run.resolutions[0], null);
       },
     },
     {
-      name: 'scout pulse skill',
+      name: 'retired scout pulse skill',
       state: runtimeState(gameMap({ obstacles: [wall(0, 0, 'right')] }), {
         skill: 'scoutPulse',
       }),
       steps: [{ action: { type: 'skill', skillId: 'scoutPulse' } }],
       verify(run) {
-        const resolved = resolutionAt(run);
-        assert.equal(resolved.outcome.skillId, 'scoutPulse');
-        assert.equal(resolved.outcome.found.length, 1);
-        assert.equal(resolved.state.itemState.a.mazeSkill.consumed.scoutPulse, true);
+        assert.equal(run.resolutions[0], null);
       },
     },
     {
-      name: 'breach skill',
+      name: 'retired breach skill',
       state: runtimeState(gameMap({ obstacles: [wall(0, 0, 'right')] }), {
         skill: 'breach',
       }),
       steps: [{ action: { type: 'skill', skillId: 'breach', direction: 'right' } }],
       verify(run) {
-        const resolved = resolutionAt(run);
-        assert.equal(resolved.outcome.skillId, 'breach');
-        assert.deepEqual(resolved.outcome.position, position(0, 1));
+        assert.equal(run.resolutions[0], null);
       },
     },
     {
-      name: 'anchor passive skill',
+      name: 'retired anchor passive',
       state: runtimeState(gameMap({ items: [{ type: 'mine', position: position(0, 1) }] }), {
         skill: 'anchor',
       }),
       steps: [{ action: { type: 'move', direction: 'right' } }],
       verify(run) {
         const resolved = resolutionAt(run);
-        assert.equal(resolved.outcome.skillEffect, 'anchor');
-        assert.deepEqual(resolved.outcome.position, position(0, 1));
-        assert.equal(resolved.state.itemState.a.mazeSkill.consumed.anchor, true);
+        assert.equal(resolved.outcome.skillEffect, undefined);
+        assert.equal(resolved.outcome.effect, 'mine');
+        assert.deepEqual(resolved.outcome.position, position(0, 0));
+        assert.equal(resolved.state.itemState.a.mazeSkill.consumed.anchor, undefined);
       },
     },
     {
-      name: 'dash skill',
+      name: 'retired dash skill',
       state: runtimeState(gameMap(), { skill: 'dash' }),
       steps: [{ action: { type: 'skill', skillId: 'dash', direction: 'right' } }],
       verify(run) {
-        const resolved = resolutionAt(run);
-        assert.equal(resolved.outcome.skillId, 'dash');
-        assert.deepEqual(resolved.outcome.position, position(0, 2));
-        assert.deepEqual(resolved.outcome.via, [position(0, 1)]);
+        assert.equal(run.resolutions[0], null);
       },
     },
     {

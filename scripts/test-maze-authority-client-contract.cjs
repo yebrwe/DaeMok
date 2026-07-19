@@ -249,7 +249,7 @@ assert.equal(
   'the supported-wall catalog must feed the rendered palette',
 );
 assert.match(setupSource, /paletteItems\.map\(/u, 'GameSetup must render the guarded palette catalog');
-for (const retiredType of ['collapseWall', 'mirrorWall']) {
+for (const retiredType of ['radar', 'collapseWall', 'mirrorWall']) {
   assert.equal(
     newMapCatalog.includes(retiredType),
     false,
@@ -270,8 +270,8 @@ const retiredTypes = findDeclaration(
 assert.ok(retiredTypes, 'the Authority submit boundary must declare retired map types');
 assert.deepEqual(
   new Set(literalTextsIn(retiredTypes)),
-  new Set(['collapseWall', 'mirrorWall']),
-  'only collapseWall and mirrorWall are retired from new submissions',
+  new Set(['radar', 'collapseWall', 'mirrorWall']),
+  'radar, collapseWall, and mirrorWall are retired from new submissions',
 );
 const submittedMapParser = findDeclaration(
   clientSourceFile,
@@ -293,6 +293,11 @@ assert.equal(
 const submittedMapParserSource = submittedMapParser.getText(clientSourceFile);
 assert.match(
   submittedMapParserSource,
+  /value\.skillLoadout\s*!==\s*NEW_MAP_SKILL_LOADOUT/u,
+  'Authority submissions must reject every retired skill loadout on the wire',
+);
+assert.match(
+  submittedMapParserSource,
   /parseMapItemList\(value\.items,\s*false\)/u,
   'Authority item-list submission must disable retired-type compatibility decoding',
 );
@@ -301,7 +306,43 @@ assert.match(
   /parseMapItem\(value\.item,\s*false\)/u,
   'Authority single-item submission must disable retired-type compatibility decoding',
 );
+const submitBuilder = findDeclaration(
+  clientSourceFile,
+  'buildMazeAuthoritySubmitMapCommand',
+  ts.isFunctionDeclaration,
+);
+assert.ok(submitBuilder, 'buildMazeAuthoritySubmitMapCommand must exist');
+assert.match(
+  submitBuilder.getText(clientSourceFile),
+  /skillLoadout:\s*NEW_MAP_SKILL_LOADOUT/u,
+  'the client builder must normalize stale draft loadouts to the compatibility value',
+);
+
+const legacyFirebasePath = 'src/lib/firebase.ts';
+const legacyFirebaseSourceFile = parse(legacyFirebasePath);
+const legacyStartGame = findDeclaration(
+  legacyFirebaseSourceFile,
+  'startGame',
+  (node) => ts.isVariableDeclaration(node),
+);
+assert.ok(legacyStartGame, 'the legacy room adapter must keep an explicit startGame boundary');
+const legacyStartGameSource = legacyStartGame.getText(legacyFirebaseSourceFile);
+assert.equal(
+  identifiersIn(legacyStartGame).has('createMazeSkillState'),
+  false,
+  'legacy room startup must not initialize retired skill state',
+);
+assert.doesNotMatch(
+  legacyStartGameSource,
+  /mazeSkill/u,
+  'legacy room startup must not write a mazeSkill payload',
+);
+assert.match(
+  legacyStartGameSource,
+  /delete\s+persistentState\.itemState/u,
+  'legacy room startup must discard stale setup item/skill state',
+);
 
 console.log(
-  'MAZE AUTHORITY CLIENT CONTRACT: no legacy writes/local resolution/voluntary forfeit; retired walls stay out of new maps',
+  'MAZE AUTHORITY CLIENT CONTRACT: no legacy writes/local resolution/voluntary forfeit; retired items stay out of new maps',
 );

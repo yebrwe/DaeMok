@@ -66,6 +66,7 @@ const INVALID_FIREBASE_KEY = /[.#$\[\]\/\u0000-\u001F\u007F-\u009F]/u;
 const RESERVED_RECORD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const DIRECTIONS: readonly Direction[] = ['up', 'down', 'left', 'right'];
 const MAZE_SKILLS: readonly MazeSkillId[] = ['scoutPulse', 'breach', 'anchor', 'dash'];
+const NEW_MAP_SKILL_LOADOUT = 'scoutPulse' as const satisfies MazeSkillId;
 const ACTIVE_MAZE_SKILLS: readonly Exclude<MazeSkillId, 'anchor'>[] = [
   'scoutPulse',
   'breach',
@@ -88,7 +89,7 @@ const ITEM_TYPES: readonly ItemType[] = [
   'thornWall',
   'crystalWall',
 ];
-const RETIRED_NEW_MAP_ITEM_TYPES = new Set<ItemType>(['collapseWall', 'mirrorWall']);
+const RETIRED_NEW_MAP_ITEM_TYPES = new Set<ItemType>(['radar', 'collapseWall', 'mirrorWall']);
 const NEW_MAP_ITEM_TYPES = ITEM_TYPES.filter((itemType) => !RETIRED_NEW_MAP_ITEM_TYPES.has(itemType));
 const WALL_ITEM_TYPES = new Set<ItemType>([
   'oneTimeWall',
@@ -647,7 +648,7 @@ function parseSubmittedGameMap(value: unknown): GameMap | null {
   if (!isRecord(value)
     || !hasRequiredAllowedKeys(value, required, allowed)
     || value.rulesVersion !== MAZE_AUTHORITY_RULES_VERSION
-    || !oneOf(value.skillLoadout, MAZE_SKILLS)) return null;
+    || value.skillLoadout !== NEW_MAP_SKILL_LOADOUT) return null;
   const startPosition = parsePosition(value.startPosition);
   const endPosition = parsePosition(value.endPosition);
   const obstacles = parseObstacleList(value.obstacles);
@@ -692,27 +693,9 @@ function parseTurnAction(value: unknown): TurnAction | null {
       ? { type: 'move', direction: value.direction }
       : null;
   }
-  if (value.type === 'radar') {
-    const hasIndex = Object.prototype.hasOwnProperty.call(value, 'itemIndex');
-    if (!hasExactKeys(value, hasIndex ? ['type', 'itemIndex'] : ['type'])
-      || (hasIndex && !integerInRange(value.itemIndex, 0, MAX_MAP_ITEMS - 1))) return null;
-    return hasIndex ? { type: 'radar', itemIndex: value.itemIndex as number } : { type: 'radar' };
-  }
-  if (value.type === 'skill') {
-    const hasDirection = Object.prototype.hasOwnProperty.call(value, 'direction');
-    if (!hasExactKeys(value, hasDirection
-      ? ['type', 'skillId', 'direction']
-      : ['type', 'skillId'])
-      || !oneOf(value.skillId, MAZE_SKILLS)
-      || (hasDirection && !oneOf(value.direction, DIRECTIONS))) return null;
-    const requiresDirection = value.skillId === 'breach' || value.skillId === 'dash';
-    if (requiresDirection !== hasDirection) return null;
-    return {
-      type: 'skill',
-      skillId: value.skillId,
-      ...(hasDirection ? { direction: value.direction as Direction } : {}),
-    };
-  }
+  // Detector and skill actions are retained only in legacy result/view decoders.
+  // New commands may submit movement actions exclusively.
+  if (value.type === 'radar' || value.type === 'skill') return null;
   return null;
 }
 
@@ -874,7 +857,11 @@ export function buildMazeAuthoritySubmitMapCommand(
   return requireCommand(parseMazeAuthorityCommand({
     type: 'submitMap',
     ...fencedCommandInput(input),
-    map: input.map,
+    map: {
+      ...input.map,
+      // V3 requires this field, but skills are retired for newly authored maps.
+      skillLoadout: NEW_MAP_SKILL_LOADOUT,
+    },
   })) as MazeAuthoritySubmitMapCommand;
 }
 

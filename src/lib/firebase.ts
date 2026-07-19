@@ -22,13 +22,13 @@ import {
 } from 'firebase/functions';
 import { FIREBASE_CLIENT_CONFIG } from '@/lib/firebaseClientConfig';
 import { Room, GameState, GamePhase, GameMap, UserProfile } from '@/types/game';
-import { cloneGameMap, GAME_RULES_VERSION, getFirstTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
+import { GAME_RULES_VERSION, getFirstTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
 import {
   createCanonicalGameRuleSnapshot,
   isValidGameRuleSnapshot,
-  isValidMapForRuleSnapshot,
+  isValidNewMapForRuleSnapshot,
+  normalizeNewMapForRuleSnapshot,
 } from '@/lib/gameRules';
-import { createMazeSkillState } from '@/lib/mazeSkills';
 import { canLeaveRoomWithoutForfeit, shouldPreserveGamePlayerOnLeave } from '@/lib/roomLifecycle';
 
 // Firebase 인스턴스를 저장할 변수들  
@@ -721,7 +721,7 @@ export const startGame = async (roomId: string): Promise<boolean> => {
       const allReady = playerIds.every((id) => players[id]?.isReady);
       const allMapsReady = playerIds.every((id) => maps[id]);
       const allMapsValid = playerIds.every(
-        (id) => maps[id] && isValidMapForRuleSnapshot(maps[id], ruleSnapshot)
+        (id) => maps[id] && isValidNewMapForRuleSnapshot(maps[id], ruleSnapshot)
       );
 
       // 시작 조건 미충족 -> 중단
@@ -744,13 +744,12 @@ export const startGame = async (roomId: string): Promise<boolean> => {
       const turnOrder = getTurnOrder(players, playerIds);
       const preferredFirst = state.currentTurn && players[state.currentTurn] ? state.currentTurn : null;
       const currentTurn = preferredFirst || getFirstTurnPlayerId(players, turnOrder);
-      const itemState = Object.fromEntries(playerIds.map((id) => [id, {
-        consumed: {},
-        mazeSkill: createMazeSkillState(maps[id].skillLoadout),
-      }]));
 
       const persistentState = { ...state };
       delete persistentState.maps;
+      // 설정 단계의 레거시 소비/스킬 상태는 새 경기에 승계하지 않는다.
+      // 실제 아이템 상태는 효과가 발생할 때 턴 엔진이 지연 생성한다.
+      delete persistentState.itemState;
       return {
         ...persistentState,
         rulesVersion: ruleSnapshot.version,
@@ -761,7 +760,6 @@ export const startGame = async (roomId: string): Promise<boolean> => {
         currentTurn,
         turnOrder,
         turnNumber: 1,
-        itemState,
         collisionWalls: {},
         revealedWallsByPlayer: {},
         visionEffectsByPlayer: {},
@@ -796,17 +794,17 @@ export const placeObstacles = async (roomId: string, userId: string, map: GameMa
     return;
   }
 
-  const persistableMap = cloneGameMap(map);
   const roomSnapshot = await get(ref(database, `rooms/${roomId}`));
   const room = roomSnapshot.val() as Partial<Room> | null;
   if (
     !room ||
     room.rulesVersion !== GAME_RULES_VERSION ||
-    !isValidGameRuleSnapshot(room.ruleSnapshot) ||
-    !isValidMapForRuleSnapshot(persistableMap, room.ruleSnapshot)
+    !isValidGameRuleSnapshot(room.ruleSnapshot)
   ) {
     throw new Error('유효하지 않은 맵은 저장할 수 없습니다.');
   }
+  const persistableMap = normalizeNewMapForRuleSnapshot(map, room.ruleSnapshot);
+  if (!persistableMap) throw new Error('유효하지 않은 맵은 저장할 수 없습니다.');
 
   try {
     console.log('맵 설정 중...', { roomId, userId });

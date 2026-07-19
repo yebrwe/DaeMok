@@ -238,6 +238,49 @@ for (const skillLoadout of EXPECTED_SKILLS) {
   );
 }
 assert.equal(
+  rules.isValidNewMapForRuleSnapshot(baseMap(), second),
+  true,
+  'new-map boundary accepts the inert V3 compatibility loadout'
+);
+for (const retiredSkillLoadout of ['breach', 'anchor', 'dash']) {
+  assert.equal(
+    rules.isValidNewMapForRuleSnapshot(baseMap({ skillLoadout: retiredSkillLoadout }), second),
+    false,
+    `new-map boundary rejects retired ${retiredSkillLoadout} loadout`
+  );
+}
+const normalizedSkillMap = rules.normalizeNewMapForRuleSnapshot(
+  baseMap({ skillLoadout: 'anchor' }),
+  second
+);
+assert.ok(normalizedSkillMap, 'stale skill drafts normalize at the trusted client boundary');
+assert.equal(normalizedSkillMap.skillLoadout, 'scoutPulse', 'normalized maps keep only V3 compatibility');
+
+const legacyRadarMap = baseMap({ items: [{ type: 'radar' }] });
+assert.equal(
+  rules.isValidMapForRuleSnapshot(legacyRadarMap, second),
+  true,
+  'legacy radar maps remain readable through the compatibility validator'
+);
+assert.equal(
+  rules.isValidNewMapForRuleSnapshot(legacyRadarMap, second),
+  false,
+  'new-map boundary rejects radar'
+);
+assert.equal(
+  rules.normalizeNewMapForRuleSnapshot(
+    baseMap({ skillLoadout: 'anchor', items: [{ type: 'radar' }] }),
+    second
+  ),
+  null,
+  'normalization never silently drops a retired radar item'
+);
+assert.equal(
+  rules.normalizeNewMapForRuleSnapshot(baseMap({ items: 'malformed' }), second),
+  null,
+  'normalization never launders an invalid item container into an empty list'
+);
+assert.equal(
   rules.isValidMapForRuleSnapshot(baseMap({ rulesVersion: undefined }), second),
   false,
   'missing map rulesVersion rejected'
