@@ -1,0 +1,7 @@
+.next
+.next-*
+node_modules
+functions/node_modules
+e2e-artifacts
+.playwright-cli
+*-debug.log
