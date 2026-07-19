@@ -42,6 +42,15 @@ export const SPECIAL_WALL_TYPES: SpecialWallType[] = [
 
 export const WALL_ITEM_TYPES: WallItemType[] = ['oneTimeWall', ...SPECIAL_WALL_TYPES];
 
+// New maps may no longer place these items. Runtime/type support remains so
+// an already-running legacy room can finish without corrupting its match.
+export const RETIRED_NEW_MAP_ITEM_TYPES: readonly ItemType[] = ['collapseWall', 'mirrorWall'];
+
+export function isRetiredNewMapItemType(value: unknown): value is ItemType {
+  return typeof value === 'string'
+    && RETIRED_NEW_MAP_ITEM_TYPES.includes(value as ItemType);
+}
+
 // 아이템 비용 (벽 개수 기준)
 export const ITEM_COSTS: Record<ItemType, number> = {
   oneTimeWall: 7,
@@ -184,6 +193,32 @@ export function getMapItems(map: { items?: MapItem[] | null; item?: MapItem | nu
   return isRecord(map.item) ? [map.item as unknown as MapItem] : [];
 }
 
+export function cloneMapItem(item: MapItem): MapItem {
+  return {
+    type: item.type,
+    ...(item.wallPosition ? { wallPosition: { ...item.wallPosition } } : {}),
+    ...(item.wallDirection ? { wallDirection: item.wallDirection } : {}),
+    ...(item.effectDirection ? { effectDirection: item.effectDirection } : {}),
+    ...(item.position ? { position: { ...item.position } } : {}),
+    ...(item.entrance ? { entrance: { ...item.entrance } } : {}),
+    ...(item.exit ? { exit: { ...item.exit } } : {}),
+  };
+}
+
+export function cloneGameMap(map: GameMap): GameMap {
+  return {
+    ...(typeof map.rulesVersion === 'number' ? { rulesVersion: map.rulesVersion } : {}),
+    startPosition: { ...map.startPosition },
+    endPosition: { ...map.endPosition },
+    obstacles: (map.obstacles || []).map((obstacle) => ({
+      position: { ...obstacle.position },
+      direction: obstacle.direction,
+    })),
+    items: getMapItems(map).map(cloneMapItem),
+    ...(map.skillLoadout ? { skillLoadout: map.skillLoadout } : {}),
+  };
+}
+
 export function getVisibleCollisionWalls(
   collisionWalls: readonly CollisionWall[],
   map: GameMap,
@@ -200,6 +235,11 @@ export function getVisibleCollisionWalls(
     const consumedBlockingWall = items.some((item, index) =>
       consumed[index] === true &&
       item.type !== 'steelWall' &&
+      // A fake wall stays visually indistinguishable from a discovered normal
+      // wall after its first collision even though the engine now lets the
+      // runner pass through it. Removing this collision made it look
+      // transparent and revealed the deception immediately.
+      item.type !== 'oneTimeWall' &&
       isWallItemType(item.type) &&
       !!item.wallPosition &&
       !!item.wallDirection &&
@@ -466,8 +506,9 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
 
   for (const item of items) {
     if (!Object.prototype.hasOwnProperty.call(ITEM_COSTS, item.type)) return false;
-    itemCounts[item.type] = (itemCounts[item.type] || 0) + 1;
-    if (itemCounts[item.type] > ITEM_LIMITS[item.type]) return false;
+    const itemCount = (itemCounts[item.type] || 0) + 1;
+    itemCounts[item.type] = itemCount;
+    if (itemCount > ITEM_LIMITS[item.type]) return false;
     itemCost += ITEM_COSTS[item.type];
 
     if (isWallItemType(item.type)) {

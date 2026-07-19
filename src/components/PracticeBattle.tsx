@@ -7,13 +7,11 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
-  Box,
   FastForward,
-  Grid2X2,
   ScanSearch,
   ShieldAlert,
 } from 'lucide-react';
-import LiveBoardGrid, { LiveBoardEntry, LiveBoardViewMode } from '@/components/LiveBoardGrid';
+import LiveBoardGrid, { LiveBoardEntry } from '@/components/LiveBoardGrid';
 import MobileDirectionPad from '@/components/MobileDirectionPad';
 import { useSwipeMove } from '@/hooks/useSwipeMove';
 import { BoardFx } from '@/components/three/GameBoard3D';
@@ -41,9 +39,7 @@ import {
   PracticeStanding,
   practiceWallKey,
 } from '@/lib/practiceBattle';
-import { getMapItems, getNextTurnPlayerId, isSamePosition } from '@/lib/gameUtils';
-
-const MAX_AI_MOVES = 200;
+import { getMapItems, getNewPosition, isPositionInBoard, isSamePosition } from '@/lib/gameUtils';
 
 const SKILL_ICONS: Record<MazeSkillId, typeof ScanSearch> = {
   scoutPulse: ScanSearch,
@@ -153,7 +149,6 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
   const [gameState, setGameState] = useState<GameState>(() =>
     mode === 'mapTest' ? createMapTestGameState(playerMap) : createPracticeGameState(playerMap, aiCount)
   );
-  const [viewMode, setViewMode] = useState<LiveBoardViewMode>('2d');
   const [visuals, setVisuals] = useState<Record<string, RacerVisualState>>({});
   const [armedSkill, setArmedSkill] = useState<'breach' | 'dash' | null>(null);
   const [skillNotice, setSkillNotice] = useState<string>('');
@@ -191,37 +186,6 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
     return resolved.outcome;
   }, []);
 
-  const retireAi = useCallback((runnerId: string, expectedTurn: number) => {
-    const current = stateRef.current;
-    if (
-      current.phase !== GamePhase.PLAY ||
-      current.currentTurn !== runnerId ||
-      current.turnNumber !== expectedTurn ||
-      !current.players[runnerId]
-    ) {
-      return false;
-    }
-
-    const players = {
-      ...current.players,
-      [runnerId]: {
-        ...current.players[runnerId],
-        forfeited: true,
-      },
-    };
-    const nextState = settleCompletedGameState({
-      ...current,
-      players,
-      currentTurn: getNextTurnPlayerId(players, runnerId, current.turnOrder),
-      turnNumber: (current.turnNumber || 1) + 1,
-      turnMessage: `${players[runnerId].displayName || 'AI'}가 경로 탐색을 중단했습니다.`,
-      turnMessageTimestamp: Date.now(),
-    });
-    stateRef.current = nextState;
-    setGameState(nextState);
-    return true;
-  }, []);
-
   useEffect(() => {
     stateRef.current = gameState;
   }, [gameState]);
@@ -249,10 +213,6 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
 
     const timer = window.setTimeout(() => {
       if (stateRef.current.currentTurn !== currentTurnId || stateRef.current.turnNumber !== expectedTurn) return;
-      if ((stateRef.current.players[currentTurnId]?.moves || 0) >= MAX_AI_MOVES) {
-        if (retireAi(currentTurnId, expectedTurn)) actedTurnRef.current = turnToken;
-        return;
-      }
       const action = choosePracticeAiAction(
         stateRef.current,
         currentTurnId,
@@ -266,15 +226,27 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
           expectedTurn
         );
       }
+      if (!outcome) {
+        const currentPlayer = stateRef.current.players[currentTurnId];
+        const fallbackDirections: Direction[] = ['up', 'right', 'down', 'left'];
+        const fallback = currentPlayer && fallbackDirections.find((direction) => (
+          isPositionInBoard(getNewPosition(currentPlayer.position, direction))
+        ));
+        if (fallback) {
+          outcome = dispatchAction(
+            currentTurnId,
+            { type: 'move', direction: fallback },
+            expectedTurn,
+          );
+        }
+      }
       if (outcome) {
-        actedTurnRef.current = turnToken;
-      } else if (retireAi(currentTurnId, expectedTurn)) {
         actedTurnRef.current = turnToken;
       }
     }, 420);
 
     return () => window.clearTimeout(timer);
-  }, [aiThinking, currentTurnId, gameState.turnNumber, dispatchAction, retireAi]);
+  }, [aiThinking, currentTurnId, gameState.turnNumber, dispatchAction]);
 
   const isHumanTurn = gameState.phase === GamePhase.PLAY && currentTurnId === PRACTICE_USER_ID;
   const humanFinished = !!gameState.players[PRACTICE_USER_ID]?.finished;
@@ -433,7 +405,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
 
   return (
     <div
-      className="absolute inset-0 overflow-hidden bg-slate-950"
+      className="absolute inset-0 overflow-hidden bg-transparent text-[#3d352d]"
       data-testid="practice-match"
       data-practice-mode={mode}
       data-ai-count={mode === 'mapTest' ? 0 : aiCount}
@@ -442,47 +414,21 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
       <div className="absolute inset-x-1 top-1 z-20 h-12 sm:inset-x-2">
         <div className="game-panel flex h-full min-w-0 items-center justify-between gap-2 !rounded-lg px-2 sm:px-3">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 text-[10px] font-black text-slate-500" data-testid="turn-number">
+            <span className="shrink-0 text-[10px] font-black text-[#74685c]" data-testid="turn-number">
               전체 {Math.max(0, (gameState.turnNumber || 1) - 1)}턴
             </span>
             <span
-              className={isHumanTurn ? 'badge-turn shrink-0 !px-2 !py-0.5' : 'shrink-0 text-[11px] font-bold text-amber-300'}
+              className={isHumanTurn ? 'badge-turn shrink-0 !px-2 !py-0.5' : 'shrink-0 text-[11px] font-bold text-[#b36c4c]'}
               data-testid="turn-owner"
               aria-live="polite"
             >
               {turnLabel}
             </span>
-            <span className="hidden min-w-0 truncate text-[10px] text-slate-400 min-[430px]:block">
+            <span className="hidden min-w-0 truncate text-[10px] text-[#74685c] min-[430px]:block">
               {gameState.turnMessage}
             </span>
           </div>
 
-          <div className="flex shrink-0 items-center gap-1" aria-label="보드 시점">
-            <button
-              type="button"
-              className={`flex size-11 items-center justify-center rounded-md border ${
-                viewMode === '2d' ? 'border-amber-400 bg-amber-400 text-slate-950' : 'border-slate-600 bg-slate-800 text-slate-300'
-              }`}
-              onClick={() => setViewMode('2d')}
-              title="2D 보드"
-              aria-label="2D 보드"
-              aria-pressed={viewMode === '2d'}
-            >
-              <Grid2X2 size={15} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className={`flex size-11 items-center justify-center rounded-md border ${
-                viewMode === 'third' ? 'border-amber-400 bg-amber-400 text-slate-950' : 'border-slate-600 bg-slate-800 text-slate-300'
-              }`}
-              onClick={() => setViewMode('third')}
-              title="3D 보드"
-              aria-label="3D 보드"
-              aria-pressed={viewMode === 'third'}
-            >
-              <Box size={15} aria-hidden="true" />
-            </button>
-          </div>
         </div>
       </div>
 
@@ -491,52 +437,62 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
         aria-live="polite"
         data-testid="mobile-turn-message"
       >
-        <span className="max-w-full truncate rounded border border-slate-700 bg-slate-950/90 px-2 py-0.5 text-[10px] text-slate-300">
+        <span className="max-w-full truncate rounded-xl border border-[#cfa87a] bg-[#fffaf0]/95 px-2 py-0.5 text-[10px] font-semibold text-[#5d5146]">
           {gameState.turnMessage || '행동 결과 대기 중'}
         </span>
       </div>
 
       <div
         ref={boardStageRef}
-        className="absolute inset-x-1 top-[76px] min-h-0 min-[430px]:top-[54px] sm:inset-x-2"
-        style={{ bottom: 'calc(60px + env(safe-area-inset-bottom))', touchAction: 'none' }}
+        className={`game-practice-board-stage absolute inset-x-1 top-[76px] min-h-0 min-[430px]:top-[54px] ${
+          humanFinished
+            ? 'bottom-[calc(60px+env(safe-area-inset-bottom))]'
+            : 'bottom-[calc(206px+env(safe-area-inset-bottom))]'
+        }`}
+        data-mobile-pad-visible={humanFinished ? 'false' : 'true'}
         data-testid="practice-board-stage"
       >
         <LiveBoardGrid
           boards={boards}
           currentTurnId={currentTurnId}
           myPlayerId={PRACTICE_USER_ID}
-          viewMode={viewMode}
           gameEnded={gameState.phase === GamePhase.END}
           className="h-full"
-          renderOverlay={(board) => board.runnerId === PRACTICE_USER_ID && !humanFinished ? (
-            <MobileDirectionPad
-              disabled={controlDisabled}
-              active={isHumanTurn}
-              onMove={handleHumanMove}
-              testId="practice-mobile-direction-pad"
-            />
-          ) : null}
         />
       </div>
 
+      {!humanFinished && (
+        <div
+          className="game-mobile-direction-dock absolute inset-x-0 z-30 flex h-[148px] items-center justify-center border-t border-[#e5cfad] bg-[#fffaf0]/95"
+          style={{ bottom: 'calc(58px + env(safe-area-inset-bottom))' }}
+          data-testid="practice-mobile-direction-dock"
+        >
+          <MobileDirectionPad
+            disabled={controlDisabled}
+            active={isHumanTurn}
+            onMove={handleHumanMove}
+            testId="practice-mobile-direction-pad"
+          />
+        </div>
+      )}
+
       {skillNotice && (
         <div
-          className="pointer-events-none absolute inset-x-2 bottom-[64px] z-40 flex justify-center"
+          className="game-practice-skill-notice pointer-events-none absolute inset-x-2 bottom-[calc(210px+env(safe-area-inset-bottom))] z-40 flex justify-center"
           aria-live="polite"
         >
-          <span className="rounded border border-emerald-400/50 bg-slate-950/95 px-2 py-1 text-[10px] font-bold text-emerald-200">
+          <span className="rounded-xl border border-[#69cdb7] bg-[#effaf5]/95 px-2 py-1 text-[10px] font-bold text-[#315f54]">
             {skillNotice}
           </span>
         </div>
       )}
 
       <div
-        className="absolute inset-x-0 bottom-0 z-30 flex h-[58px] items-center justify-center gap-1.5 border-t border-slate-800 bg-slate-950/95 px-2 backdrop-blur-sm"
+        className="absolute inset-x-0 bottom-0 z-30 flex h-[58px] items-center justify-center gap-1.5 border-t-2 border-[#e5cfad] bg-[#fffaf0]/95 px-2 backdrop-blur-sm"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(58px + env(safe-area-inset-bottom))' }}
         data-testid="practice-controls"
       >
-        <div className="hidden items-center gap-1.5 sm:flex">
+        <div className="game-desktop-direction-buttons items-center gap-1.5">
           {moveButton('left', '왼쪽으로 이동', ArrowLeft)}
           {moveButton('up', '위로 이동', ArrowUp)}
           {moveButton('down', '아래로 이동', ArrowDown)}
@@ -546,10 +502,10 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
           type="button"
           className={`ml-1 flex h-11 min-w-11 items-center justify-center gap-1 rounded-lg border px-2 text-[10px] font-bold sm:h-12 ${
             armedSkill
-              ? 'border-emerald-300 bg-emerald-400 text-slate-950'
+              ? 'border-[#315f54] bg-[#69cdb7] text-[#173b37]'
               : equippedSkill === 'anchor' && !skillConsumed
-                ? 'border-cyan-400 bg-cyan-500/15 text-cyan-200'
-                : 'border-emerald-500/60 bg-slate-900 text-emerald-200'
+                ? 'border-[#1f708b] bg-[#e8f6fa] text-[#1f596d]'
+                : 'border-[#69cdb7] bg-[#effaf5] text-[#315f54]'
           } disabled:opacity-35`}
           onClick={handleSkill}
           disabled={controlDisabled || skillConsumed}

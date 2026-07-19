@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import GameSetup from '@/components/GameSetup';
 import PracticeBattle, { PracticeBattleResult } from '@/components/PracticeBattle';
+import MazeShell from '@/components/maze/MazeShell';
 import { GameMap } from '@/types/game';
 import { createQuickPracticeMap, PRACTICE_USER_ID } from '@/lib/practiceBattle';
 
@@ -91,17 +92,18 @@ export default function PracticePage() {
       : mode === 'mapTest' ? '제작자 시점 · 단독 주행' : `나 + AI ${aiCount}명 · 교대 대전`;
 
   return (
-    <main className="fixed inset-0 h-[100dvh] overflow-hidden bg-slate-950">
+    <MazeShell screen="practice" phase={stage === 'battle' ? 'play' : stage}>
+    <main className="fixed inset-0 h-[100dvh] overflow-hidden bg-transparent text-[#3d352d]">
       <header
         className="absolute inset-x-0 top-0 z-40 flex justify-center px-2 pointer-events-none"
         style={{ paddingTop: 'max(8px, env(safe-area-inset-top))' }}
       >
         <div className="game-panel pointer-events-auto flex h-11 w-full max-w-3xl items-center justify-between gap-2 !rounded-lg px-2.5 sm:px-3">
           <div className="flex min-w-0 items-center gap-2">
-            <Bot size={19} className="shrink-0 text-amber-300" aria-hidden="true" />
+            <Bot size={19} className="shrink-0 text-[#b36c4c]" aria-hidden="true" />
             <div className="min-w-0 leading-tight">
-              <h1 className="text-sm font-black text-amber-300">{mode === 'mapTest' ? '내 맵 테스트' : 'AI 연습'}</h1>
-              <p className="hidden truncate text-[9px] text-slate-500 min-[390px]:block">{subtitle}</p>
+              <h1 className="text-sm font-black text-[#3d352d]">{mode === 'mapTest' ? '내 맵 테스트' : 'AI 연습'}</h1>
+              <p className="hidden truncate text-[9px] text-[#74685c] min-[390px]:block">{subtitle}</p>
             </div>
           </div>
 
@@ -151,12 +153,12 @@ export default function PracticePage() {
           <div className="absolute inset-0 flex items-center justify-center overflow-auto p-3" data-testid="practice-config">
             <div className="game-panel w-full max-w-sm !rounded-lg p-4 sm:p-5">
               <div className="mb-4 flex items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-amber-400/40 bg-amber-400/10 text-amber-300">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border-2 border-[#cfa87a] bg-[#fff8de] text-[#b36c4c]">
                   <Swords size={21} aria-hidden="true" />
                 </div>
                 <div>
-                  <h2 className="text-base font-black text-slate-100">AI 교대 대전</h2>
-                  <p className="text-[11px] text-slate-500">참가 인원</p>
+                  <h2 className="text-base font-black text-[#3d352d]">AI 교대 대전</h2>
+                  <p className="text-[11px] text-[#74685c]">참가 인원</p>
                 </div>
               </div>
 
@@ -167,10 +169,10 @@ export default function PracticePage() {
                     type="button"
                     role="radio"
                     aria-checked={aiCount === count}
-                    className={`h-11 rounded-md border text-sm font-bold transition-colors ${
+                    className={`h-11 rounded-xl border-2 text-sm font-black transition-colors ${
                       aiCount === count
-                        ? 'border-amber-400 bg-amber-400 text-slate-950'
-                        : 'border-slate-600 bg-slate-800 text-slate-300 hover:border-amber-400/60'
+                        ? 'border-[#5d4635] bg-[#f4c64f] text-[#3d352d]'
+                        : 'border-[#cfa87a] bg-[#fffef9] text-[#5d5146] hover:border-[#5d4635]'
                     }`}
                     onClick={() => setAiCount(count)}
                   >
@@ -231,7 +233,7 @@ export default function PracticePage() {
 
       {result && stage === 'battle' && (
         <div
-          className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-3 backdrop-blur-sm"
+          className="absolute inset-0 z-50 flex items-center justify-center bg-[#5d4635]/35 p-3 backdrop-blur-sm"
           data-testid="practice-result"
           role="dialog"
           aria-modal="true"
@@ -239,8 +241,8 @@ export default function PracticePage() {
         >
           <div className="game-panel w-full max-w-sm !rounded-lg p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-center gap-2 text-center">
-              <Trophy size={22} className="text-amber-300" aria-hidden="true" />
-              <h2 id="practice-result-title" className="text-lg font-black text-amber-300">{finalResultTitle}</h2>
+              <Trophy size={22} className="text-[#b36c4c]" aria-hidden="true" />
+              <h2 id="practice-result-title" className="text-lg font-black text-[#3d352d]">{finalResultTitle}</h2>
             </div>
 
             <ol className="space-y-1.5">
@@ -249,12 +251,12 @@ export default function PracticePage() {
                   key={entry.id}
                   className={`flex h-9 items-center justify-between rounded-md border px-3 text-xs ${
                     entry.id === PRACTICE_USER_ID
-                      ? 'border-blue-400/50 bg-blue-400/10 text-blue-100'
-                      : 'border-slate-700 bg-slate-800/70 text-slate-200'
+                      ? 'border-[#69cdb7] bg-[#e4f6ef] text-[#315f54]'
+                      : 'border-[#e5cfad] bg-[#fffaf0] text-[#3d352d]'
                   }`}
                 >
                   <span className="font-bold">{entry.rank}위 · {entry.name}</span>
-                  <span className="text-slate-400">{entry.moves}턴</span>
+                  <span className="text-[#74685c]">{entry.moves}턴</span>
                 </li>
               ))}
             </ol>
@@ -277,5 +279,6 @@ export default function PracticePage() {
         </div>
       )}
     </main>
+    </MazeShell>
   );
 }

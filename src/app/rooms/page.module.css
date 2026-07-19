@@ -1,5 +1,7 @@
 .page {
   width: 100%;
+  padding-top: max(12px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(20px, env(safe-area-inset-bottom, 0px));
 }
 
 .header {
@@ -7,6 +9,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  border-radius: 20px !important;
 }
 
 .brand {
@@ -26,7 +29,7 @@
 .headerActions > a,
 .headerActions > button {
   display: inline-flex;
-  min-height: 36px;
+  min-height: 44px;
   align-items: center;
   justify-content: center;
   gap: 4px;
@@ -39,15 +42,15 @@
 
 .profileBadge {
   display: flex;
-  min-height: 36px;
-  min-width: 40px;
+  min-height: 44px;
+  min-width: 44px;
   align-items: center;
   justify-content: center;
   gap: 6px;
   padding: 4px 8px;
-  border: 1px solid rgb(51 65 85 / 60%);
-  border-radius: 8px;
-  background: rgb(30 41 59 / 60%);
+  border: 2px solid var(--maze-line-soft, #e5cfad);
+  border-radius: 14px;
+  background: var(--maze-paper-raised, #fffef9);
 }
 
 .lobbyGrid {
@@ -65,7 +68,7 @@
 .rankingPanel {
   min-width: 0;
   overflow: hidden;
-  border-radius: 8px !important;
+  border-radius: 20px !important;
 }
 
 .rankingHeading {
@@ -81,7 +84,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  color: rgb(252 211 77);
+  color: var(--maze-mint-ink, #173b37);
 }
 
 .rankingTitleRow h2 {
@@ -92,11 +95,11 @@
 .betaBadge {
   flex: none;
   padding: 3px 6px;
-  border: 1px solid rgb(251 191 36 / 38%);
+  border: 1px solid var(--maze-line, #cfa87a);
   border-radius: 999px;
-  background: rgb(251 191 36 / 10%);
-  color: rgb(253 230 138);
-  font-size: 10px;
+  background: #fff1bb;
+  color: var(--maze-ink, #3d352d);
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -106,21 +109,22 @@
   gap: 7px 12px;
   align-items: end;
   padding: 9px 12px;
-  border-top: 1px solid rgb(51 65 85 / 70%);
-  border-bottom: 1px solid rgb(51 65 85 / 70%);
+  border-top: 1px solid var(--maze-line-soft, #e5cfad);
+  border-bottom: 1px solid var(--maze-line-soft, #e5cfad);
+  background: linear-gradient(105deg, #effaf5, #fff8de);
 }
 
 .ownRankingLabel {
   display: block;
   margin-bottom: 1px;
-  color: rgb(100 116 139);
-  font-size: 10px;
+  color: var(--maze-ink-muted, #74685c);
+  font-size: 11px;
 }
 
 .ownRankingPosition {
   display: block;
   overflow: hidden;
-  color: rgb(226 232 240);
+  color: var(--maze-ink, #3d352d);
   font-size: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -131,7 +135,7 @@
   align-items: baseline;
   justify-content: flex-end;
   gap: 3px;
-  color: rgb(251 191 36);
+  color: #80600b;
 }
 
 .ownRating strong {
@@ -140,8 +144,8 @@
 }
 
 .ownRating span {
-  color: rgb(148 163 184);
-  font-size: 10px;
+  color: var(--maze-ink-muted, #74685c);
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -151,13 +155,13 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: rgb(148 163 184);
-  font-size: 10px;
+  color: var(--maze-ink-muted, #74685c);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 .ownRecord b {
-  color: rgb(226 232 240);
+  color: var(--maze-ink, #3d352d);
 }
 
 .rankingStatus {
@@ -167,16 +171,16 @@
   justify-content: center;
   gap: 8px;
   padding: 16px;
-  color: rgb(100 116 139);
-  font-size: 11px;
+  color: var(--maze-ink-muted, #74685c);
+  font-size: 12px;
   text-align: center;
 }
 
 .smallSpinner {
   width: 16px;
   height: 16px;
-  border: 2px solid rgb(251 191 36 / 28%);
-  border-top-color: rgb(251 191 36);
+  border: 2px solid rgb(105 205 183 / 28%);
+  border-top-color: var(--maze-mint, #69cdb7);
   border-radius: 50%;
   animation: ranking-spin 0.8s linear infinite;
 }
@@ -192,15 +196,15 @@
   min-width: 286px;
   table-layout: fixed;
   border-collapse: collapse;
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 .rankingTable th {
   height: 27px;
   padding: 4px 3px;
-  color: rgb(100 116 139);
-  font-size: 9px;
+  color: var(--maze-ink-muted, #74685c);
+  font-size: 11px;
   font-weight: 700;
   text-align: left;
 }
@@ -232,25 +236,25 @@
 .rankingTable td {
   height: 34px;
   padding: 4px 3px;
-  border-top: 1px solid rgb(51 65 85 / 48%);
-  color: rgb(203 213 225);
+  border-top: 1px solid var(--maze-line-soft, #e5cfad);
+  color: var(--maze-ink, #3d352d);
   vertical-align: middle;
 }
 
 .rankingTable tr:first-child .rankNumber {
-  color: rgb(252 211 77);
+  color: #8a6600;
 }
 
 .rankingTable tr:nth-child(2) .rankNumber {
-  color: rgb(203 213 225);
+  color: #6d6960;
 }
 
 .rankingTable tr:nth-child(3) .rankNumber {
-  color: rgb(251 146 60);
+  color: #a65335;
 }
 
 .myRankingRow {
-  background: rgb(251 191 36 / 8%);
+  background: rgb(244 198 79 / 20%);
 }
 
 .rankNumber,
@@ -259,12 +263,12 @@
 }
 
 .ratingCell {
-  color: rgb(252 211 77) !important;
+  color: #74580c !important;
 }
 
 .recordCell,
 .bestMovesCell {
-  color: rgb(148 163 184) !important;
+  color: var(--maze-ink-muted, #74685c) !important;
 }
 
 .rankingPlayer {
@@ -296,17 +300,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgb(37 99 235);
-  color: white;
+  background: var(--maze-mint, #69cdb7);
+  color: var(--maze-mint-ink, #173b37);
   font-size: 9px;
   font-weight: 800;
 }
 
 .betaNote {
   padding: 8px 12px 9px;
-  border-top: 1px solid rgb(51 65 85 / 48%);
-  color: rgb(100 116 139);
-  font-size: 9px;
+  border-top: 1px solid var(--maze-line-soft, #e5cfad);
+  color: var(--maze-ink-muted, #74685c);
+  font-size: 11px;
   line-height: 1.4;
   text-align: center;
 }

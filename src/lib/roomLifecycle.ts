@@ -6,6 +6,13 @@ export function shouldPreserveGamePlayerOnLeave(phase: GamePhase | string | null
   return phase === GamePhase.PLAY || phase === GamePhase.END;
 }
 
+export function canLeaveRoomWithoutForfeit(
+  phase: GamePhase | string | null | undefined,
+  isParticipant: boolean,
+): boolean {
+  return phase !== GamePhase.PLAY || !isParticipant;
+}
+
 export function shouldIncludeGamePlayerOnRestart(
   player: Pick<Player, 'hasLeft' | 'isOnline'> | null | undefined
 ): boolean {

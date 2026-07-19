@@ -3,6 +3,12 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createRoom } from '@/lib/firebase';
+import {
+  buildMazeAuthorityCreateRoomCommand,
+  createMazeAuthorityRoomId,
+  invokeMazeAuthorityCommand,
+} from '@/lib/mazeAuthorityClient';
+import { mazeAuthorityNewRoomsEnabled } from '@/lib/mazeAuthorityRuntime';
 
 interface CreateRoomFormProps {
   userId: string;
@@ -35,7 +41,18 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
 
       console.log('방 생성 시도:', { roomName, maxPlayers });
 
-      const roomId = await createRoom(roomName, userId, maxPlayers);
+      const useAuthority = mazeAuthorityNewRoomsEnabled();
+      let roomId: string | null;
+      if (useAuthority) {
+        roomId = createMazeAuthorityRoomId();
+        await invokeMazeAuthorityCommand(buildMazeAuthorityCreateRoomCommand({
+          roomId,
+          name: roomName.trim(),
+          maxPlayers,
+        }));
+      } else {
+        roomId = await createRoom(roomName, userId, maxPlayers);
+      }
 
       if (roomId) {
         console.log('방 생성 성공:', roomId);
@@ -57,27 +74,30 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
     <div className="game-panel p-4">
       {!isFormOpen ? (
         <button
+          type="button"
           onClick={() => setIsFormOpen(true)}
-          className="btn-game w-full py-3 text-sm flex items-center justify-center gap-2"
+          className="btn-game flex min-h-11 w-full items-center justify-center gap-2 py-3 text-sm"
+          aria-expanded={isFormOpen}
+          aria-controls="maze-create-room-form"
         >
-          <span className="text-base">⚔️</span>
+          <span className="text-base" aria-hidden="true">🧸</span>
           새 게임 방 만들기
         </button>
       ) : (
-        <>
-          <h2 className="text-sm font-bold mb-3 text-slate-200 flex items-center gap-1.5">
-            ⚔️ 새 게임 방 만들기
+        <div id="maze-create-room-form">
+          <h2 className="mb-3 flex items-center gap-1.5 text-sm font-black text-[#3d352d]">
+            <span aria-hidden="true">🧸</span> 새 게임 방 만들기
           </h2>
 
           {error && (
-            <div className="bg-red-500/10 border border-red-500/40 text-red-300 px-3 py-2 rounded-xl mb-3 text-xs">
+            <div className="mb-3 rounded-xl border-2 border-[#b94646] bg-[#fff1ec] px-3 py-2 text-xs font-bold text-[#8a2e2e]" role="alert">
               {error}
             </div>
           )}
 
           <form onSubmit={handleCreateRoom} className="space-y-3">
             <div>
-              <label htmlFor="roomName" className="block text-xs font-medium text-slate-400 mb-1">
+              <label htmlFor="roomName" className="mb-1 block text-xs font-bold text-[#5d5146]">
                 방 이름
               </label>
               <input
@@ -86,55 +106,59 @@ const CreateRoomForm: React.FC<CreateRoomFormProps> = ({ userId }) => {
                 value={roomName}
                 onChange={(e) => setRoomName(e.target.value)}
                 placeholder="방 이름을 입력하세요"
-                className="w-full px-3 py-2 text-sm bg-slate-800/80 border border-slate-600/70 rounded-xl
-                  text-slate-100 placeholder:text-slate-500
-                  focus:outline-none focus:ring-2 focus:ring-amber-400/60 focus:border-transparent"
+                className="min-h-11 w-full rounded-xl border-2 border-[#cfa87a] bg-[#fffef9] px-3 py-2 text-sm font-semibold
+                  text-[#3d352d] placeholder:text-[#8b7e70]
+                  focus:border-transparent focus:outline-none focus:ring-2 focus:ring-[#1f708b]"
                 disabled={isCreating}
                 maxLength={30}
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">인원 (순환 릴레이 - 각자 다음 사람의 맵을 달립니다)</label>
+            <fieldset>
+              <legend className="mb-1 block text-xs font-bold text-[#5d5146]">인원 (각자 다음 사람의 맵을 달려요)</legend>
               <div className="flex gap-1.5">
                 {[2, 3, 4].map((n) => (
                   <button
                     key={n}
                     type="button"
-                    className={`flex-1 py-1.5 rounded-xl text-sm font-bold border transition-colors ${
+                    className={`min-h-11 flex-1 rounded-xl border-2 py-2 text-sm font-black transition-colors ${
                       maxPlayers === n
-                        ? 'bg-amber-400 text-slate-900 border-amber-400'
-                        : 'bg-slate-800/80 text-slate-300 border-slate-600/60 hover:border-amber-400/50'
+                        ? 'border-[#5d4635] bg-[#f4c64f] text-[#3d352d]'
+                        : 'border-[#cfa87a] bg-[#fffef9] text-[#5d5146] hover:border-[#5d4635]'
                     }`}
                     onClick={() => setMaxPlayers(n)}
                     disabled={isCreating}
+                    aria-pressed={maxPlayers === n}
                   >
                     {n}명
                   </button>
                 ))}
               </div>
-            </div>
+            </fieldset>
 
             <div className="flex space-x-2 pt-1">
               <button
                 type="submit"
                 disabled={isCreating}
-                className="btn-game flex-1 py-2 text-sm"
+                className="btn-game min-h-11 flex-1 py-2 text-sm"
               >
                 {isCreating ? '생성 중...' : '방 만들기'}
               </button>
 
               <button
                 type="button"
-                onClick={() => setIsFormOpen(false)}
+                onClick={() => {
+                  setIsFormOpen(false);
+                  setError(null);
+                }}
                 disabled={isCreating}
-                className="btn-sub flex-1 py-2 text-sm"
+                className="btn-sub min-h-11 flex-1 py-2 text-sm"
               >
                 취소
               </button>
             </div>
           </form>
-        </>
+        </div>
       )}
     </div>
   );

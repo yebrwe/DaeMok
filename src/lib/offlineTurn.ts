@@ -1,9 +1,9 @@
 import { GamePhase, GameState } from '@/types/game';
 import { getNextTurnPlayerId } from '@/lib/gameUtils';
 
-export const OFFLINE_TURN_FORFEIT_GRACE_MS = 45_000;
+export const OFFLINE_TURN_SKIP_GRACE_MS = 45_000;
 
-export interface OfflineTurnForfeitCandidate {
+export interface OfflineTurnSkipCandidate {
   playerId: string;
   eligibleAt: number;
   delayMs: number;
@@ -13,11 +13,11 @@ function serverTimestampValue(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-export function getOfflineTurnForfeitCandidate(
+export function getOfflineTurnSkipCandidate(
   state: GameState | null | undefined,
   observerId: string,
   now = Date.now()
-): OfflineTurnForfeitCandidate | null {
+): OfflineTurnSkipCandidate | null {
   if (!state || state.phase !== GamePhase.PLAY || !state.currentTurn) return null;
 
   const observer = state.players?.[observerId];
@@ -39,7 +39,7 @@ export function getOfflineTurnForfeitCandidate(
     return null;
   }
 
-  const eligibleAt = lastSeen + OFFLINE_TURN_FORFEIT_GRACE_MS;
+  const eligibleAt = lastSeen + OFFLINE_TURN_SKIP_GRACE_MS;
   return {
     playerId: state.currentTurn,
     eligibleAt,
@@ -48,36 +48,30 @@ export function getOfflineTurnForfeitCandidate(
 }
 
 // Firebase transaction callbacks call this again against the latest server state.
-// A stale timer therefore cannot forfeit a player who has reconnected or already moved.
-export function applyOfflineTurnForfeit(
+// A stale timer therefore cannot skip a player who has reconnected or already moved.
+// Skipping never marks the runner as forfeited or finished: they resume from the same
+// position as soon as they reconnect, and the match can end only after real finishes.
+export function applyOfflineTurnSkip(
   state: GameState | null | undefined,
   expectedPlayerId: string,
   observerId: string,
   now = Date.now()
 ): GameState | null {
-  const candidate = getOfflineTurnForfeitCandidate(state, observerId, now);
+  const candidate = getOfflineTurnSkipCandidate(state, observerId, now);
   if (!state || !candidate || candidate.playerId !== expectedPlayerId || candidate.delayMs > 0) {
     return null;
   }
 
-  const forfeitedPlayer = state.players[expectedPlayerId];
-  const players = {
-    ...state.players,
-    [expectedPlayerId]: {
-      ...forfeitedPlayer,
-      forfeited: true,
-    },
-  };
-  const nextPlayerId = getNextTurnPlayerId(players, expectedPlayerId, state.turnOrder);
-  const forfeitedName = forfeitedPlayer.displayName || '플레이어';
+  const skippedPlayer = state.players[expectedPlayerId];
+  const nextPlayerId = getNextTurnPlayerId(state.players, expectedPlayerId, state.turnOrder);
+  if (!nextPlayerId || nextPlayerId === expectedPlayerId) return null;
+  const skippedName = skippedPlayer.displayName || '플레이어';
 
   return {
     ...state,
-    players,
     currentTurn: nextPlayerId,
-    turnMessage: nextPlayerId
-      ? `${forfeitedName}의 연결이 45초간 끊겨 기권 처리됐습니다. ${players[nextPlayerId]?.displayName || '플레이어'}의 턴`
-      : `${forfeitedName}의 연결이 45초간 끊겨 기권 처리됐습니다.`,
+    turnNumber: (state.turnNumber || 0) + 1,
+    turnMessage: `${skippedName}의 연결을 기다리는 동안 턴을 넘겼습니다. ${state.players[nextPlayerId]?.displayName || '플레이어'}의 턴`,
     turnMessageTimestamp: now,
   };
 }

@@ -41,8 +41,6 @@ const gameRules = loadTypeScript('src/lib/gameRules.ts', {
   '@/lib/gameUtils': utils,
   '@/lib/mazeSkills': mazeSkills,
 });
-const adventure = loadTypeScript('src/lib/adventure.ts');
-const adventureTown = loadTypeScript('src/lib/adventureTown.ts', { './adventure': adventure });
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -69,10 +67,30 @@ async function databaseRequest(databasePath, token, method, body) {
   const encoded = databasePath.split('/').filter(Boolean).map(encodeURIComponent).join('/');
   const endpoint = new URL(`/${encoded}.json`, DATABASE_URL);
   endpoint.searchParams.set('ns', NAMESPACE);
-  endpoint.searchParams.set('auth', token);
+  if (token) endpoint.searchParams.set('auth', token);
   const response = await fetch(endpoint, {
     method,
     headers: { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  let payload = text;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {}
+  return { ok: response.ok, status: response.status, payload };
+}
+
+async function databaseAdminRequest(databasePath, method, body) {
+  const encoded = databasePath.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+  const endpoint = new URL(`/${encoded}.json`, DATABASE_URL);
+  endpoint.searchParams.set('ns', NAMESPACE);
+  const response = await fetch(endpoint, {
+    method,
+    headers: {
+      authorization: 'Bearer owner',
+      'content-type': 'application/json',
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
@@ -132,12 +150,96 @@ async function expectDenied(label, promise) {
   assert.ok(result.status === 401 || result.status === 403, `${label} unexpected status ${result.status}`);
 }
 
+async function seedAdminFixture(databasePath, method, body) {
+  const result = await databaseAdminRequest(databasePath, method, body);
+  assert.equal(
+    result.ok,
+    true,
+    `admin fixture setup failed at ${databasePath} (${result.status}): ${JSON.stringify(result.payload)}`
+  );
+}
+
 async function main() {
+  const rulesDocument = JSON.parse(fs.readFileSync(path.join(ROOT, 'database.rules.json'), 'utf8'));
+  const mazeAuthorityRules = rulesDocument.rules.mazeAuthority;
+  const mazeViewRules = rulesDocument.rules.mazeViews;
+  const mazeViewManifestRules = rulesDocument.rules.mazeViewManifests;
+  const mazeAuthorityRankingRules = rulesDocument.rules.mazeAuthorityRankings;
+  const mazePresenceRules = rulesDocument.rules.mazePresence;
+  const userProfileRules = rulesDocument.rules.users.$uid;
+  for (const retiredRoot of [
+    'adventureAuthority',
+    'adventureViews',
+    'adventureRankings',
+    'adventureAuthorityRankings',
+    'adventurePresence',
+  ]) {
+    assert.equal(retiredRoot in rulesDocument.rules, false, `${retiredRoot} rules remain retired`);
+  }
+  assert.equal('adventure' in userProfileRules, false);
+  assert.equal('adventureGeneration' in userProfileRules, false);
+  assert.equal(userProfileRules.$other['.read'], false);
+  assert.equal(userProfileRules.$other['.validate'], false);
+  assert.equal(mazeAuthorityRules['.read'], false);
+  assert.equal(mazeAuthorityRules['.write'], false);
+  assert.equal(mazeViewRules['.read'], false);
+  assert.equal(mazeViewRules['.write'], false);
+  assert.equal(mazeViewRules.v1.publicRooms['.read'], 'auth != null');
+  assert.equal(mazeViewRules.v1.publicRooms['.write'], false);
+  assert.equal(
+    mazeViewRules.v1.memberRooms.$uid['.read'],
+    'auth != null && auth.uid === $uid'
+  );
+  assert.equal(mazeViewRules.v1.memberRooms.$uid['.write'], false);
+  assert.equal(mazeViewManifestRules['.read'], false);
+  assert.equal(mazeViewManifestRules['.write'], false);
+  assert.equal(mazeAuthorityRankingRules['.read'], false);
+  assert.equal(mazeAuthorityRankingRules['.write'], false);
+  assert.equal(mazeAuthorityRankingRules.v1['.read'], 'auth != null');
+  assert.equal(mazeAuthorityRankingRules.v1['.write'], false);
+  assert.equal(mazeAuthorityRankingRules.v1['.indexOn'][0], 'rating');
+  assert.equal(mazePresenceRules['.read'], false);
+  assert.equal(mazePresenceRules['.write'], false);
+  assert.equal(
+    mazePresenceRules.v1.rooms.$roomId.$uid['.read'],
+    'auth != null && auth.uid === $uid'
+  );
+  assert.equal(mazePresenceRules.v1.leases['.read'], false);
+  assert.equal(mazePresenceRules.v1.leases['.write'], false);
+  assert.equal(mazePresenceRules.v1.status.$roomId['.read'], 'auth != null');
+  assert.equal(mazePresenceRules.v1.status.$roomId['.write'], false);
+  assert.match(userProfileRules.displayName['.validate'], /length <= 50/);
+  assert.match(userProfileRules.photoURL['.validate'], /length <= 2048/);
+  assert.match(
+    userProfileRules.photoURL['.validate'],
+    /https:\/\/lh3\.googleusercontent\.com/
+  );
+
   const [owner, outsider, drawTarget] = await Promise.all([
     signUp('rules-owner'),
     signUp('rules-outsider'),
     signUp('rules-draw-target'),
   ]);
+  await expectAllowed(
+    'owner can persist bounded profile leaves used by ranking projection',
+    databaseRequest(`users/${owner.uid}`, owner.token, 'PATCH', {
+      displayName: 'Rules Ranger',
+      photoURL: 'https://lh3.googleusercontent.com/rules-ranger.png',
+    })
+  );
+  await expectDenied(
+    'profile display name over 50 characters is rejected',
+    databaseRequest(`users/${owner.uid}/displayName`, owner.token, 'PUT', 'x'.repeat(51))
+  );
+  await expectDenied(
+    'profile image outside the configured Google image host is rejected',
+    databaseRequest(
+      `users/${owner.uid}/photoURL`,
+      owner.token,
+      'PUT',
+      'https://example.com/forged.png'
+    )
+  );
   const canonical = gameRules.createCanonicalGameRuleSnapshot();
   const roomId = `rules-${Date.now()}`;
 
@@ -168,6 +270,28 @@ async function main() {
     databaseRequest(`rooms/${roomId}`, owner.token, 'PATCH', {
       [`maps/${owner.uid}`]: null,
       [`gameState/players/${owner.uid}/isReady`]: false,
+    })
+  );
+  await expectDenied(
+    'retired collapse wall cannot be submitted to a legacy setup room',
+    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
+      ...validMap(),
+      items: [{
+        type: 'collapseWall',
+        wallPosition: { row: 2, col: 2 },
+        wallDirection: 'right',
+      }],
+    })
+  );
+  await expectDenied(
+    'retired mirror wall cannot be submitted to a legacy setup room',
+    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
+      ...validMap(),
+      items: [{
+        type: 'mirrorWall',
+        wallPosition: { row: 2, col: 2 },
+        wallDirection: 'right',
+      }],
     })
   );
   await expectAllowed(
@@ -222,9 +346,26 @@ async function main() {
       [`gameState/players/${outsider.uid}/isReady`]: true,
     })
   );
+  // Human map building commonly takes longer than the one-minute timestamp
+  // freshness window. Starting a match preserves presence timestamps; it must
+  // not be rejected merely because an unchanged value has aged in setup.
+  const staleSetupLastSeen = Date.now() - 120_000;
+  assert.ok(staleSetupLastSeen < Date.now() - 60_000);
+  await seedAdminFixture(
+    `rooms/${roomId}/gameState/players/${owner.uid}/lastSeen`,
+    'PUT',
+    staleSetupLastSeen
+  );
+  await seedAdminFixture(
+    `rooms/${roomId}/gameState/players/${outsider.uid}/lastSeen`,
+    'PUT',
+    staleSetupLastSeen
+  );
   const setupRead = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
   assert.equal(setupRead.ok, true, 'setup state should be readable');
   assert.equal(setupRead.payload.maps, undefined, 'persistent game state must not contain maps');
+  assert.equal(setupRead.payload.players[owner.uid].lastSeen, staleSetupLastSeen);
+  assert.equal(setupRead.payload.players[outsider.uid].lastSeen, staleSetupLastSeen);
   const mapBeforePlay = await databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'GET');
   assert.equal(mapBeforePlay.ok, true, 'setup map should be readable');
   await expectDenied(
@@ -252,7 +393,6 @@ async function main() {
         ...setupRead.payload.players[owner.uid],
         isReady: true,
         isOnline: true,
-        lastSeen: Date.now(),
         finished: false,
         forfeited: false,
         moves: 0,
@@ -262,7 +402,6 @@ async function main() {
         ...setupRead.payload.players[outsider.uid],
         isReady: true,
         isOnline: true,
-        lastSeen: Date.now(),
         finished: false,
         forfeited: false,
         moves: 0,
@@ -270,8 +409,17 @@ async function main() {
     },
   };
   await expectAllowed(
-    'owner starts canonical play state',
+    'owner starts canonical play state while preserving stale presence timestamps',
     databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', playState)
+  );
+  await expectDenied(
+    'participants still cannot backdate a changed presence timestamp',
+    databaseRequest(
+      `rooms/${roomId}/gameState/players/${outsider.uid}/lastSeen`,
+      outsider.token,
+      'PUT',
+      staleSetupLastSeen - 1_000
+    )
   );
   await expectDenied(
     'current player cannot mutate opponent state',
@@ -343,7 +491,7 @@ async function main() {
   prematureForfeit.players[outsider.uid].forfeited = true;
   prematureForfeit.currentTurn = owner.uid;
   await expectDenied(
-    'connected participant cannot forfeit a temporary disconnect before 45 seconds',
+    'connected participant cannot forfeit a temporary disconnect',
     databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', prematureForfeit)
   );
 
@@ -353,24 +501,45 @@ async function main() {
   );
   const expiredOfflineRead = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
   const recoveredOfflineTurn = clone(expiredOfflineRead.payload);
-  recoveredOfflineTurn.players[outsider.uid].forfeited = true;
   recoveredOfflineTurn.currentTurn = owner.uid;
-  recoveredOfflineTurn.turnMessage = 'offline timeout';
+  recoveredOfflineTurn.turnNumber += 1;
+  recoveredOfflineTurn.turnMessage = 'offline turn skipped without surrender';
   recoveredOfflineTurn.turnMessageTimestamp = Date.now();
   await expectAllowed(
-    'connected participant atomically forfeits an offline current player after 45 seconds',
+    'connected participant atomically skips an expired offline turn without surrender',
     databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', recoveredOfflineTurn)
   );
   const recoveredOfflineRead = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
-  assert.equal(recoveredOfflineRead.payload.players[outsider.uid].forfeited, true);
+  assert.equal(recoveredOfflineRead.payload.players[outsider.uid].forfeited, false);
   assert.equal(recoveredOfflineRead.payload.currentTurn, owner.uid);
+  assert.equal(recoveredOfflineRead.payload.turnNumber, 3);
 
-  const forgedEndState = clone(recoveredOfflineRead.payload);
+  await expectDenied(
+    'a current player cannot voluntarily surrender',
+    databaseRequest(
+      `rooms/${roomId}/gameState/players/${owner.uid}/forfeited`,
+      owner.token,
+      'PUT',
+      true
+    )
+  );
+
+  // Historical rooms may already contain a forfeited runner. Keep the rest of
+  // this legacy END/ranking compatibility fixture without allowing any client
+  // to create a new surrender after the rule change.
+  await seedAdminFixture(
+    `rooms/${roomId}/gameState/players/${outsider.uid}/forfeited`,
+    'PUT',
+    true
+  );
+  const historicalForfeitRead = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
+
+  const forgedEndState = clone(historicalForfeitRead.payload);
   forgedEndState.phase = 'end';
   forgedEndState.currentTurn = null;
   forgedEndState.winner = owner.uid;
   forgedEndState.draw = null;
-  forgedEndState.turnNumber = 3;
+  forgedEndState.turnNumber = 4;
   forgedEndState.players[owner.uid].finished = true;
   forgedEndState.players[owner.uid].finishMoves = 2;
   forgedEndState.players[owner.uid].moves = 2;
@@ -647,7 +816,7 @@ async function main() {
       [drawTarget.uid]: {
         ...drawSetup.payload.players[drawTarget.uid],
         finished: false,
-        forfeited: true,
+        forfeited: false,
         moves: 0,
       },
     },
@@ -661,9 +830,15 @@ async function main() {
   drawEnd.currentTurn = null;
   drawEnd.draw = true;
   drawEnd.players[owner.uid].forfeited = true;
-  await expectAllowed(
-    'all-forfeit match ends as a global draw',
+  drawEnd.players[drawTarget.uid].forfeited = true;
+  await expectDenied(
+    'players cannot manufacture an all-surrender draw',
     databaseRequest(`rooms/${drawRoomId}/gameState`, owner.token, 'PUT', drawEnd)
+  );
+  await seedAdminFixture(
+    `rooms/${drawRoomId}/gameState`,
+    'PUT',
+    drawEnd
   );
   await expectAllowed(
     'participant may settle another participant in a global draw',
@@ -841,561 +1016,54 @@ async function main() {
     )
   );
 
-  const legacyAdventureNow = Date.now();
-  const legacyAdventureState = adventure.createInitialState('vanguard', 'Legacy Skill Adventurer', legacyAdventureNow);
-  const legacyGear = adventure.generateGear({
-    classId: 'vanguard', regionId: 'sunnyField', level: 1, slot: 'weapon', forcedTier: 'normal', now: legacyAdventureNow, rng: () => 0,
-  });
-  for (const key of ['tier', 'itemLevel', 'socketCount', 'socketedRunes', 'setId', 'uniqueId']) delete legacyGear[key];
-  const legacyAdventure = {
-    ...legacyAdventureState,
-    skillRanks: { skill1: 1, skill2: 0 },
-    inventory: [legacyGear],
-    rankingPower: adventure.deriveStats(legacyAdventureState).power,
-    rankingCollectionCount: 0,
-  };
-  delete legacyAdventure.runeInventory;
-  delete legacyAdventure.skillLoadout;
-  delete legacyAdventure.town;
-  await expectAllowed(
-    'v1 adventure save with legacy skills, gear, no rune inventory, and no town remains valid',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', legacyAdventure)
-  );
+  const retiredProfilePath = `users/${owner.uid}/adventure/v1`;
   await expectDenied(
-    'expanded skill ranks reject values above the maximum',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...legacyAdventure,
-      skillRanks: { ...legacyAdventure.skillRanks, skill6: 11 },
-      updatedAt: legacyAdventureNow + 1,
-      lastActiveAt: legacyAdventureNow + 1,
-    })
+    'retired game profile state cannot be created',
+    databaseRequest(retiredProfilePath, owner.token, 'PUT', { retired: false })
   );
+  await seedAdminFixture(retiredProfilePath, 'PUT', { retired: true });
   await expectDenied(
-    'expanded skill ranks reject unknown slots',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...legacyAdventure,
-      skillRanks: { ...legacyAdventure.skillRanks, skill7: 1 },
-      updatedAt: legacyAdventureNow + 2,
-      lastActiveAt: legacyAdventureNow + 2,
-    })
+    'retired game profile state is no longer readable',
+    databaseRequest(retiredProfilePath, owner.token, 'GET')
   );
   await expectAllowed(
-    'v1 adventure save can add the four expanded skill ranks',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...legacyAdventure,
-      skillRanks: { skill1: 1, skill2: 0, skill3: 0, skill4: 0, skill5: 0, skill6: 0 },
-      updatedAt: legacyAdventureNow + 3,
-      lastActiveAt: legacyAdventureNow + 3,
-    })
+    'account owner can delete stale retired profile state',
+    databaseRequest(retiredProfilePath, owner.token, 'DELETE')
   );
   await expectAllowed(
-    'adventure save accepts an ordered six-slot skill loadout',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...legacyAdventure,
-      skillRanks: { skill1: 1, skill2: 1, skill3: 1, skill4: 0, skill5: 0, skill6: 0 },
-      skillLoadout: ['skill3', 'skill1', 'skill2'],
-      updatedAt: legacyAdventureNow + 4,
-      lastActiveAt: legacyAdventureNow + 4,
-    })
+    'account owner can read an allowed profile leaf',
+    databaseRequest(`users/${owner.uid}/displayName`, owner.token, 'GET')
   );
   await expectDenied(
-    'adventure skill loadout rejects unknown skills',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...legacyAdventure,
-      skillLoadout: ['skill1', 'teleport'],
-      updatedAt: legacyAdventureNow + 5,
-      lastActiveAt: legacyAdventureNow + 5,
-    })
+    'bulk profile reads stay closed after private game state retirement',
+    databaseRequest(`users/${owner.uid}`, owner.token, 'GET')
   );
   await expectDenied(
-    'adventure skill loadout rejects more than six slots',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...legacyAdventure,
-      skillLoadout: ['skill1', 'skill2', 'skill3', 'skill4', 'skill5', 'skill6', 'skill1'],
-      updatedAt: legacyAdventureNow + 6,
-      lastActiveAt: legacyAdventureNow + 6,
-    })
+    'unknown profile state cannot replace the retired game branch',
+    databaseRequest(`users/${owner.uid}/campaign`, owner.token, 'PUT', { level: 1 })
   );
 
-  const socketedGear = adventure.generateGear({
-    classId: 'vanguard', regionId: 'sunnyField', level: 30, slot: 'weapon', forcedTier: 'normal', now: legacyAdventureNow, rng: () => 0,
-  });
-  socketedGear.socketedRunes = ['void', 'ember'];
-  const runeInventory = Object.fromEntries(adventure.RUNE_IDS.map((runeId) => [runeId, runeId === 'dusk' ? 2 : 0]));
-  const socketAdventure = {
-    ...legacyAdventure,
-    skillRanks: { skill1: 1, skill2: 0, skill3: 0, skill4: 0, skill5: 0, skill6: 0 },
-    inventory: [socketedGear],
-    runeInventory,
-    updatedAt: legacyAdventureNow + 4,
-    lastActiveAt: legacyAdventureNow + 4,
-  };
-  await expectAllowed(
-    'typed item tier, item level, ordered sockets, and rune inventory are persisted',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', socketAdventure)
-  );
-  await expectDenied(
-    'item tier must agree with the legacy rarity used by existing UI clients',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...socketAdventure,
-      inventory: [{ ...socketedGear, tier: 'unique' }],
-      updatedAt: legacyAdventureNow + 5,
-    })
-  );
-  await expectDenied(
-    'ordered socket payload rejects unknown runes',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...socketAdventure,
-      inventory: [{ ...socketedGear, socketedRunes: ['void', 'not-a-rune'] }],
-      updatedAt: legacyAdventureNow + 5,
-    })
-  );
-  await expectDenied(
-    'socket payload cannot exceed the declared capacity',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...socketAdventure,
-      inventory: [{ ...socketedGear, socketCount: 1 }],
-      updatedAt: legacyAdventureNow + 5,
-    })
-  );
-  await expectDenied(
-    'rune stacks are capped by the save schema',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...socketAdventure,
-      runeInventory: { ...runeInventory, crown: 1_000 },
-      updatedAt: legacyAdventureNow + 5,
-    })
-  );
-  await expectDenied(
-    'rune inventory rejects unknown keys',
-    databaseRequest(`users/${drawTarget.uid}/adventure/v1`, drawTarget.token, 'PUT', {
-      ...socketAdventure,
-      runeInventory: { ...runeInventory, forgedRune: 1 },
-      updatedAt: legacyAdventureNow + 5,
-    })
-  );
+  for (const retiredRoot of [
+    'adventureAuthority',
+    'adventureViews',
+    'adventureRankings',
+    'adventureAuthorityRankings',
+    'adventurePresence',
+  ]) {
+    const retiredPath = `${retiredRoot}/${owner.uid}`;
+    await seedAdminFixture(retiredPath, 'PUT', { retired: true });
+    await expectDenied(
+      `${retiredRoot} data is no longer readable`,
+      databaseRequest(retiredPath, owner.token, 'GET')
+    );
+    await expectDenied(
+      `${retiredRoot} data is no longer writable`,
+      databaseRequest(retiredPath, owner.token, 'PUT', { retired: false })
+    );
+    await seedAdminFixture(retiredPath, 'DELETE');
+  }
 
-  const adventureNow = Date.now();
-  const adventureState = adventure.createInitialState('ranger', 'Rules Adventurer', adventureNow);
-  const adventurePower = adventure.deriveStats(adventureState).power;
-  const persistedAdventure = {
-    ...adventureState,
-    rankingPower: adventurePower,
-    rankingCollectionCount: 0,
-  };
-  const adventureRanking = {
-    uid: owner.uid,
-    displayName: adventureState.name,
-    classId: adventureState.classId,
-    resetGeneration: adventureState.resetGeneration,
-    level: adventureState.level,
-    masteryLevel: adventureState.mastery.level,
-    power: adventurePower,
-    totalKills: adventureState.statistics.totalKills,
-    bossesKilled: adventureState.statistics.bossesKilled,
-    collectionCount: 0,
-    updatedAt: adventureNow,
-  };
-  await expectAllowed(
-    'adventure state and public ranking save atomically',
-    databaseRequest('', owner.token, 'PATCH', {
-      [`users/${owner.uid}/adventure/v1`]: persistedAdventure,
-      [`adventureRankings/${owner.uid}`]: adventureRanking,
-    })
-  );
-  const initialTown = adventureTown.createInitialTownState(persistedAdventure, adventureNow);
-  const townAdventure = {
-    ...persistedAdventure,
-    town: initialTown,
-    updatedAt: adventureNow + 1,
-    lastActiveAt: adventureNow + 1,
-  };
-  await expectAllowed(
-    'adventure save accepts a validated town hub state',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', townAdventure)
-  );
-  await expectAllowed(
-    'sold-out merchant stock survives Firebase as an absent array with an explicit marker',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...townAdventure,
-      town: { ...initialTown, merchantStock: [], merchantSoldOut: true },
-      updatedAt: adventureNow + 2,
-      lastActiveAt: adventureNow + 2,
-    })
-  );
-  const soldOutRoundTrip = await databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'GET');
-  assert.equal(soldOutRoundTrip.ok, true, 'sold-out town state remains readable');
-  assert.equal(soldOutRoundTrip.payload.town.merchantSoldOut, true);
-  assert.equal(soldOutRoundTrip.payload.town.merchantStock, undefined, 'RTDB removes the empty merchant array');
-  await expectDenied(
-    'town state rejects an unknown location',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...townAdventure,
-      town: { ...initialTown, location: 'dungeon' },
-      updatedAt: adventureNow + 2,
-      lastActiveAt: adventureNow + 2,
-    })
-  );
-  await expectDenied(
-    'town sold-out marker must be boolean',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...townAdventure,
-      town: { ...initialTown, merchantSoldOut: 'yes' },
-      updatedAt: adventureNow + 2,
-      lastActiveAt: adventureNow + 2,
-    })
-  );
-  await expectDenied(
-    'town sold-out marker cannot hide remaining merchant stock',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...townAdventure,
-      town: { ...initialTown, merchantSoldOut: true },
-      updatedAt: adventureNow + 2,
-      lastActiveAt: adventureNow + 2,
-    })
-  );
-  await expectDenied(
-    'town waypoint destination must match the active region',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...townAdventure,
-      town: { ...initialTown, lastFieldRegionId: 'mistForest' },
-      updatedAt: adventureNow + 2,
-      lastActiveAt: adventureNow + 2,
-    })
-  );
-  await expectDenied(
-    'town identifier must match its waypoint region',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...townAdventure,
-      town: { ...initialTown, townId: 'mistForest-town' },
-      updatedAt: adventureNow + 2,
-      lastActiveAt: adventureNow + 2,
-    })
-  );
-  await expectDenied(
-    'town waypoint cannot select a level-locked active region',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...townAdventure,
-      currentRegionId: 'mistForest',
-      town: { ...initialTown, townId: 'mistForest-town', lastFieldRegionId: 'mistForest' },
-      updatedAt: adventureNow + 2,
-      lastActiveAt: adventureNow + 2,
-    })
-  );
-  await expectDenied(
-    'town merchant stock cannot exceed eight items',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...townAdventure,
-      town: {
-        ...initialTown,
-        merchantStock: [
-          ...initialTown.merchantStock,
-          { ...initialTown.merchantStock[0], instanceId: 'rules-merchant-extra' },
-        ],
-      },
-      updatedAt: adventureNow + 2,
-      lastActiveAt: adventureNow + 2,
-    })
-  );
-  const oversizedStash = Array.from({ length: 121 }, (_, index) => ({
-    ...initialTown.merchantStock[0],
-    instanceId: `rules-stash-${index}`,
-  }));
-  await expectDenied(
-    'town stash cannot exceed one hundred twenty items',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...townAdventure,
-      town: { ...initialTown, stash: oversizedStash },
-      updatedAt: adventureNow + 2,
-      lastActiveAt: adventureNow + 2,
-    })
-  );
-  await expectDenied(
-    'an arena checkpoint cannot be created while the character is in town',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...townAdventure,
-      arenaCheckpoint: {
-        runId: 'rules-town-arena-run',
-        checkpoint: 1,
-        wave: 1,
-        totalWaves: 5,
-        outcome: 'ongoing',
-      },
-      updatedAt: adventureNow + 2,
-      lastActiveAt: adventureNow + 2,
-    })
-  );
-  const checkpointAdventure = {
-    ...townAdventure,
-    town: { ...initialTown, location: 'wilderness' },
-    arenaCheckpoint: {
-      runId: 'rules-arena-run',
-      checkpoint: 1,
-      wave: 1,
-      totalWaves: 5,
-      outcome: 'ongoing',
-    },
-    updatedAt: adventureNow + 3,
-    lastActiveAt: adventureNow + 3,
-  };
-  await expectAllowed(
-    'first arena checkpoint is persisted with the private character',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', checkpointAdventure)
-  );
-  await expectDenied(
-    'an ongoing arena checkpoint cannot be replaced by a different run ID',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...checkpointAdventure,
-      arenaCheckpoint: {
-        ...checkpointAdventure.arenaCheckpoint,
-        runId: 'rules-replayed-arena-run',
-      },
-      updatedAt: adventureNow + 4,
-      lastActiveAt: adventureNow + 4,
-    })
-  );
-  await expectAllowed(
-    'an unchanged arena checkpoint may be carried by a later character save',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...checkpointAdventure,
-      updatedAt: adventureNow + 4,
-      lastActiveAt: adventureNow + 4,
-    })
-  );
-  await expectDenied(
-    'coalesced checkpoints cannot advance waves faster than their checkpoint delta',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...checkpointAdventure,
-      arenaCheckpoint: { ...checkpointAdventure.arenaCheckpoint, checkpoint: 3, wave: 4 },
-      updatedAt: adventureNow + 5,
-    })
-  );
-  await expectDenied(
-    'an arena checkpoint cannot jump more than one wave',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...checkpointAdventure,
-      arenaCheckpoint: { ...checkpointAdventure.arenaCheckpoint, checkpoint: 2, wave: 3 },
-      updatedAt: adventureNow + 5,
-    })
-  );
-  await expectDenied(
-    'a new arena run cannot begin after wave one',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...checkpointAdventure,
-      arenaCheckpoint: {
-        ...checkpointAdventure.arenaCheckpoint,
-        runId: 'rules-skipped-arena-run',
-        wave: 3,
-      },
-      updatedAt: adventureNow + 5,
-    })
-  );
-  await expectDenied(
-    'an existing arena checkpoint cannot be erased by a stale character save',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...checkpointAdventure,
-      arenaCheckpoint: null,
-      updatedAt: adventureNow + 5,
-    })
-  );
-  await expectDenied(
-    'arena checkpoint schema rejects unrecognized fields',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...checkpointAdventure,
-      arenaCheckpoint: { ...checkpointAdventure.arenaCheckpoint, unexpected: true },
-      updatedAt: adventureNow + 5,
-    })
-  );
-  const advancedCheckpointAdventure = {
-    ...checkpointAdventure,
-    arenaCheckpoint: { ...checkpointAdventure.arenaCheckpoint, checkpoint: 2, wave: 2 },
-    updatedAt: adventureNow + 5,
-    lastActiveAt: adventureNow + 5,
-  };
-  await expectAllowed(
-    'the next arena checkpoint advances exactly once',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', advancedCheckpointAdventure)
-  );
-  await expectDenied(
-    'an older checkpoint cannot replay after the run advances',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', checkpointAdventure)
-  );
-  const coalescedCheckpointAdventure = {
-    ...advancedCheckpointAdventure,
-    arenaCheckpoint: { ...advancedCheckpointAdventure.arenaCheckpoint, checkpoint: 4, wave: 3 },
-    updatedAt: adventureNow + 6,
-    lastActiveAt: adventureNow + 6,
-  };
-  await expectAllowed(
-    'multiple locally settled kills may coalesce into one monotonic Firebase save',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', coalescedCheckpointAdventure)
-  );
-  await expectAllowed(
-    'returning to town may atomically clear the active arena checkpoint',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...coalescedCheckpointAdventure,
-      town: { ...coalescedCheckpointAdventure.town, location: 'town' },
-      arenaCheckpoint: null,
-      updatedAt: adventureNow + 7,
-      lastActiveAt: adventureNow + 7,
-    })
-  );
-  const initialCoalescedCheckpointAdventure = {
-    ...townAdventure,
-    town: { ...initialTown, location: 'wilderness' },
-    arenaCheckpoint: {
-      runId: 'rules-initial-coalesced-run',
-      checkpoint: 2,
-      wave: 1,
-      totalWaves: 1,
-      outcome: 'ongoing',
-    },
-    updatedAt: adventureNow + 8,
-    lastActiveAt: adventureNow + 8,
-  };
-  await expectAllowed(
-    'the first Firebase checkpoint may contain multiple same-frame kills',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', initialCoalescedCheckpointAdventure)
-  );
-  const defeatedCoalescedCheckpointAdventure = {
-    ...initialCoalescedCheckpointAdventure,
-    arenaCheckpoint: {
-      ...initialCoalescedCheckpointAdventure.arenaCheckpoint,
-      checkpoint: 3,
-      outcome: 'defeat',
-    },
-    updatedAt: adventureNow + 9,
-    lastActiveAt: adventureNow + 9,
-  };
-  await expectAllowed(
-    'the coalesced run can settle its next checkpoint as a defeat',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', defeatedCoalescedCheckpointAdventure)
-  );
-  await expectAllowed(
-    'the first save of a restarted run may also contain multiple same-frame kills',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...defeatedCoalescedCheckpointAdventure,
-      arenaCheckpoint: {
-        ...defeatedCoalescedCheckpointAdventure.arenaCheckpoint,
-        runId: 'rules-restarted-coalesced-run',
-        checkpoint: 2,
-        outcome: 'ongoing',
-      },
-      updatedAt: adventureNow + 10,
-      lastActiveAt: adventureNow + 10,
-    })
-  );
-  await expectDenied(
-    'other users cannot read a private adventure character',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, outsider.token, 'GET')
-  );
-  await expectDenied(
-    'other users cannot overwrite an adventure character',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, outsider.token, 'PUT', persistedAdventure)
-  );
-  await expectDenied(
-    'adventure ranking cannot disagree with the persisted character',
-    databaseRequest(`adventureRankings/${owner.uid}`, owner.token, 'PUT', {
-      ...adventureRanking,
-      power: adventurePower + 1,
-      updatedAt: adventureNow + 1,
-    })
-  );
-  await expectDenied(
-    'an older adventure save cannot overwrite newer progress',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', {
-      ...persistedAdventure,
-      updatedAt: adventureNow - 1,
-    })
-  );
-  await expectDenied(
-    'adventure reset generation cannot advance without clearing state and ranking',
-    databaseRequest(`users/${owner.uid}/adventureGeneration`, owner.token, 'PUT', 1)
-  );
-  await expectDenied(
-    'adventure reset generation cannot skip forward',
-    databaseRequest('', owner.token, 'PATCH', {
-      [`users/${owner.uid}/adventureGeneration`]: 2,
-      [`users/${owner.uid}/adventure/v1`]: null,
-      [`adventureRankings/${owner.uid}`]: null,
-    })
-  );
-  await expectAllowed(
-    'adventure reset atomically advances one generation and clears state and ranking',
-    databaseRequest('', owner.token, 'PATCH', {
-      [`users/${owner.uid}/adventureGeneration`]: 1,
-      [`users/${owner.uid}/adventure/v1`]: null,
-      [`adventureRankings/${owner.uid}`]: null,
-    })
-  );
-  await expectDenied(
-    'a previous-generation save cannot resurrect the character',
-    databaseRequest(`users/${owner.uid}/adventure/v1`, owner.token, 'PUT', persistedAdventure)
-  );
-  const nextGenerationAdventure = {
-    ...persistedAdventure,
-    resetGeneration: 1,
-    updatedAt: adventureNow + 1,
-    lastActiveAt: adventureNow + 1,
-  };
-  const nextGenerationRanking = {
-    ...adventureRanking,
-    resetGeneration: 1,
-    updatedAt: adventureNow + 1,
-  };
-  await expectAllowed(
-    'a new character and ranking save in the current reset generation',
-    databaseRequest('', owner.token, 'PATCH', {
-      [`users/${owner.uid}/adventure/v1`]: nextGenerationAdventure,
-      [`adventureRankings/${owner.uid}`]: nextGenerationRanking,
-    })
-  );
-  const presence = (connectionId) => ({
-    uid: owner.uid,
-    displayName: `Rules Adventurer ${connectionId}`,
-    connectedAt: Date.now(),
-    lastSeen: Date.now(),
-  });
-  await expectAllowed(
-    'first adventure tab registers presence',
-    databaseRequest(`adventurePresence/${owner.uid}/0`, owner.token, 'PUT', presence('A'))
-  );
-  await expectAllowed(
-    'second adventure tab registers presence independently',
-    databaseRequest(`adventurePresence/${owner.uid}/1`, owner.token, 'PUT', presence('B'))
-  );
-  await expectDenied(
-    'another user cannot forge adventure presence',
-    databaseRequest(`adventurePresence/${owner.uid}/2`, outsider.token, 'PUT', presence('X'))
-  );
-  await expectDenied(
-    'adventure presence slots are capped at eight per user',
-    databaseRequest(`adventurePresence/${owner.uid}/8`, owner.token, 'PUT', presence('overflow'))
-  );
-  await expectDenied(
-    'stale adventure presence cannot be registered permanently',
-    databaseRequest(`adventurePresence/${owner.uid}/2`, owner.token, 'PUT', {
-      ...presence('stale'),
-      connectedAt: 0,
-      lastSeen: 0,
-    })
-  );
-  await expectAllowed(
-    'one adventure tab disconnects without deleting the other',
-    databaseRequest(`adventurePresence/${owner.uid}/0`, owner.token, 'DELETE')
-  );
-  const remainingPresence = await databaseRequest(`adventurePresence/${owner.uid}`, owner.token, 'GET');
-  assert.deepEqual(
-    Object.entries(remainingPresence.payload || {}).filter(([, value]) => value != null).map(([key]) => key),
-    ['1'],
-    'one adventure connection remains online'
-  );
-  await expectAllowed(
-    'last adventure tab disconnects',
-    databaseRequest(`adventurePresence/${owner.uid}/1`, owner.token, 'DELETE')
-  );
-
-  console.log('DATABASE RULES: maze turns/rankings and private adventure item/rune/state/ranking/presence validation passed');
+  console.log('DATABASE RULES: maze turns, rankings, authority views, and retired-path denial passed');
 }
 
 main().catch((error) => {

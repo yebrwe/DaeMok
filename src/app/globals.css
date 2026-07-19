@@ -71,7 +71,7 @@ body {
       disabled:opacity-40 disabled:pointer-events-none;
   }
 
-  /* 위험 버튼 (포기 등) */
+  /* 위험 작업 버튼 */
   .btn-danger {
     @apply bg-gradient-to-b from-red-500 to-red-600 text-white font-bold rounded-xl
       shadow-md shadow-red-950/50 hover:from-red-400 hover:to-red-500
@@ -110,7 +110,7 @@ body {
       -webkit-overflow-scrolling: touch;
     }
 
-    .grid {
+    [data-maze-board-grid] {
       max-width: 100%;
       margin: 0 auto;
     }
@@ -123,5 +123,109 @@ body {
   }
   50% {
     box-shadow: 0 0 14px rgba(251, 191, 36, 0.55);
+  }
+}
+
+/* Gameplay controls use device-friendly breakpoints instead of width-only Tailwind `sm` rules. */
+.game-desktop-direction-buttons,
+.game-desktop-messages {
+  display: none;
+}
+
+.game-mobile-status {
+  display: flex;
+}
+
+.room-game-header[data-game-phase='play'] .room-player-strip,
+.room-game-header[data-game-phase='end'] .room-player-strip {
+  display: none;
+}
+
+.game-online-board-stage {
+  padding-top: 120px;
+}
+
+.game-online-board-stage-finished {
+  padding-bottom: 0.5rem;
+}
+
+.game-online-board-stage-pad {
+  padding-bottom: calc(206px + env(safe-area-inset-bottom, 0px));
+}
+
+.game-online-board-stage-compact {
+  padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+}
+
+@media (min-width: 933px) and (hover: hover) and (pointer: fine) {
+  .game-mobile-direction-dock,
+  .game-mobile-direction-pad,
+  .game-mobile-pad-toggle,
+  .game-mobile-status {
+    display: none !important;
+  }
+
+  .game-desktop-direction-buttons,
+  .game-desktop-messages {
+    display: flex;
+  }
+
+  .room-game-header[data-game-phase='play'] .room-player-strip,
+  .room-game-header[data-game-phase='end'] .room-player-strip {
+    display: flex;
+  }
+
+  .game-online-board-stage {
+    padding-top: 112px;
+  }
+
+  .game-online-board-stage-pad,
+  .game-online-board-stage-compact {
+    padding-bottom: 66px;
+  }
+
+  .game-practice-board-stage {
+    left: 0.5rem;
+    right: 0.5rem;
+    bottom: calc(60px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .game-practice-skill-notice {
+    bottom: 64px;
+  }
+}
+
+@media (max-width: 932px) and (max-height: 500px) and (orientation: landscape),
+  (pointer: coarse) and (max-height: 500px) and (orientation: landscape) {
+  .game-mobile-direction-dock {
+    top: 54px;
+    right: 0 !important;
+    bottom: calc(58px + env(safe-area-inset-bottom, 0px)) !important;
+    left: auto !important;
+    width: calc(148px + env(safe-area-inset-right, 0px));
+    height: auto !important;
+    padding-right: env(safe-area-inset-right, 0px);
+    border-top: 0;
+    border-left: 1px solid #e5cfad;
+  }
+
+  [data-testid='online-mobile-direction-dock'] {
+    top: 108px;
+  }
+
+  .game-online-board-stage-pad {
+    padding-top: 108px;
+    padding-right: calc(156px + env(safe-area-inset-right, 0px));
+    padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .game-practice-board-stage[data-mobile-pad-visible='true'] {
+    right: calc(156px + env(safe-area-inset-right, 0px));
+    bottom: calc(60px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .game-practice-skill-notice {
+    right: calc(156px + env(safe-area-inset-right, 0px));
+    bottom: 64px;
   }
 }

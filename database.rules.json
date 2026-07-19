@@ -2,68 +2,147 @@
   "rules": {
     "rooms": {
       ".read": "auth != null",
-
       "$roomId": {
         ".write": "auth != null && ((!data.exists() && newData.child('createdBy').val() === auth.uid) || (data.exists() && !newData.exists() && (data.child('createdBy').val() === auth.uid || !data.child('lastActivity').exists() || data.child('lastActivity').val() < now - 7200000 || (data.child('ownerPresenceReady').val() === true && data.child('ownerDisconnectedAt').isNumber() && data.child('ownerDisconnectedAt').val() <= now - 2500 && !data.child('connections').child(data.child('createdBy').val()).hasChildren())) && (data.child('gameState').child('phase').val() !== 'end' || ((!data.child('gameState').child('turnOrder').child('0').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('0').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true) && (!data.child('gameState').child('turnOrder').child('1').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('1').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true) && (!data.child('gameState').child('turnOrder').child('2').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('2').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true) && (!data.child('gameState').child('turnOrder').child('3').exists() || root.child('mazeRankings').child(data.child('gameState').child('turnOrder').child('3').val()).child('settledMatches').child($roomId + ':' + data.child('gameState').child('matchNumber').val()).val() === true)))))",
         ".validate": "newData.hasChildren(['createdBy', 'rulesVersion', 'ruleSnapshot', 'gameState'])",
-
         "rulesVersion": {
           ".validate": "newData.isNumber() && newData.val() === 3 && (!data.exists() || newData.val() === data.val())"
         },
         "ruleSnapshot": {
           ".validate": "newData.hasChildren(['version', 'wallBudget', 'itemCosts', 'itemLimits', 'maxSkillLoadout', 'skillIds'])",
-          "version": { ".validate": "newData.isNumber() && newData.val() === 3" },
-          "wallBudget": { ".validate": "newData.isNumber() && newData.val() === 24" },
-          "maxSkillLoadout": { ".validate": "newData.isNumber() && newData.val() === 1" },
+          "version": {
+            ".validate": "newData.isNumber() && newData.val() === 3"
+          },
+          "wallBudget": {
+            ".validate": "newData.isNumber() && newData.val() === 24"
+          },
+          "maxSkillLoadout": {
+            ".validate": "newData.isNumber() && newData.val() === 1"
+          },
           "itemCosts": {
             ".validate": "newData.hasChildren(['oneTimeWall', 'mine', 'wormhole', 'radar', 'smoke', 'steelWall', 'fireWall', 'poisonWall', 'iceWall', 'windWall', 'collapseWall', 'phaseWall', 'mirrorWall', 'thornWall', 'crystalWall'])",
-            "oneTimeWall": { ".validate": "newData.isNumber() && newData.val() === 7" },
-            "mine": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "wormhole": { ".validate": "newData.isNumber() && newData.val() === 7" },
-            "radar": { ".validate": "newData.isNumber() && newData.val() === 4" },
-            "smoke": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "steelWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "fireWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "poisonWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "iceWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "windWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "collapseWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "phaseWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "mirrorWall": { ".validate": "newData.isNumber() && newData.val() === 5" },
-            "thornWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "crystalWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "$other": { ".validate": false }
+            "oneTimeWall": {
+              ".validate": "newData.isNumber() && newData.val() === 7"
+            },
+            "mine": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "wormhole": {
+              ".validate": "newData.isNumber() && newData.val() === 7"
+            },
+            "radar": {
+              ".validate": "newData.isNumber() && newData.val() === 4"
+            },
+            "smoke": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "steelWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "fireWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "poisonWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "iceWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "windWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "collapseWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "phaseWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "mirrorWall": {
+              ".validate": "newData.isNumber() && newData.val() === 5"
+            },
+            "thornWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "crystalWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "$other": {
+              ".validate": false
+            }
           },
           "itemLimits": {
             ".validate": "newData.hasChildren(['oneTimeWall', 'mine', 'wormhole', 'radar', 'smoke', 'steelWall', 'fireWall', 'poisonWall', 'iceWall', 'windWall', 'collapseWall', 'phaseWall', 'mirrorWall', 'thornWall', 'crystalWall'])",
-            "oneTimeWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "mine": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "wormhole": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "radar": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "smoke": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "steelWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "fireWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "poisonWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "iceWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "windWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "collapseWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "phaseWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "mirrorWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "thornWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "crystalWall": { ".validate": "newData.isNumber() && newData.val() === 1" },
-            "$other": { ".validate": false }
+            "oneTimeWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "mine": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "wormhole": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "radar": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "smoke": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "steelWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "fireWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "poisonWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "iceWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "windWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "collapseWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "phaseWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "mirrorWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "thornWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "crystalWall": {
+              ".validate": "newData.isNumber() && newData.val() === 1"
+            },
+            "$other": {
+              ".validate": false
+            }
           },
           "skillIds": {
+            "0": {
+              ".validate": "newData.isString() && newData.val() === 'scoutPulse'"
+            },
+            "1": {
+              ".validate": "newData.isString() && newData.val() === 'breach'"
+            },
+            "2": {
+              ".validate": "newData.isString() && newData.val() === 'anchor'"
+            },
+            "3": {
+              ".validate": "newData.isString() && newData.val() === 'dash'"
+            },
             ".validate": "newData.hasChildren(['0', '1', '2', '3'])",
-            "0": { ".validate": "newData.isString() && newData.val() === 'scoutPulse'" },
-            "1": { ".validate": "newData.isString() && newData.val() === 'breach'" },
-            "2": { ".validate": "newData.isString() && newData.val() === 'anchor'" },
-            "3": { ".validate": "newData.isString() && newData.val() === 'dash'" },
-            "$other": { ".validate": false }
+            "$other": {
+              ".validate": false
+            }
           },
-          "$other": { ".validate": false }
+          "$other": {
+            ".validate": false
+          }
         },
-
         "players": {
           "$slot": {
             ".write": "auth != null && ($slot === '0' || ($slot === '1' && root.child('rooms').child($roomId).child('maxPlayers').val() >= 2) || ($slot === '2' && root.child('rooms').child($roomId).child('maxPlayers').val() >= 3) || ($slot === '3' && root.child('rooms').child($roomId).child('maxPlayers').val() >= 4)) && ((root.child('rooms').child($roomId).child('createdBy').val() === auth.uid && root.child('rooms').child($roomId).child('gameState').child('phase').val() === 'end') || (root.child('rooms').child($roomId).child('gameState').child('phase').val() === 'setup' && ((data.exists() && data.val() === auth.uid && !newData.exists()) || (!data.exists() && newData.val() === auth.uid && ($slot === '0' || root.child('rooms').child($roomId).child('players').child('0').val() !== auth.uid) && ($slot === '1' || root.child('rooms').child($roomId).child('players').child('1').val() !== auth.uid) && ($slot === '2' || root.child('rooms').child($roomId).child('players').child('2').val() !== auth.uid) && ($slot === '3' || root.child('rooms').child($roomId).child('players').child('3').val() !== auth.uid)))))",
@@ -81,12 +160,10 @@
           ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').val() === auth.uid",
           ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000"
         },
-
         "lastActivity": {
           ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting' && (root.child('rooms').child($roomId).child('createdBy').val() === auth.uid || root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).exists())",
           ".validate": "newData.isNumber() && (newData.val() === data.val() || (newData.val() >= now - 60000 && newData.val() <= now + 60000))"
         },
-
         "status": {
           ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').val() === auth.uid && (newData.val() !== 'deleting' || root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'end' || ((!root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('0').exists() || root.child('mazeRankings').child(root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('0').val()).child('settledMatches').child($roomId + ':' + root.child('rooms').child($roomId).child('gameState').child('matchNumber').val()).val() === true) && (!root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('1').exists() || root.child('mazeRankings').child(root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('1').val()).child('settledMatches').child($roomId + ':' + root.child('rooms').child($roomId).child('gameState').child('matchNumber').val()).val() === true) && (!root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('2').exists() || root.child('mazeRankings').child(root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('2').val()).child('settledMatches').child($roomId + ':' + root.child('rooms').child($roomId).child('gameState').child('matchNumber').val()).val() === true) && (!root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('3').exists() || root.child('mazeRankings').child(root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('3').val()).child('settledMatches').child($roomId + ':' + root.child('rooms').child($roomId).child('gameState').child('matchNumber').val()).val() === true)))"
         },
@@ -96,7 +173,6 @@
         "deletedAt": {
           ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').val() === auth.uid"
         },
-
         "joinedPlayers": {
           "$uid": {
             ".write": "auth != null && $uid === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
@@ -117,10 +193,18 @@
             "$connectionId": {
               ".write": "auth != null && $uid === auth.uid && ($connectionId === '0' || $connectionId === '1' || $connectionId === '2' || $connectionId === '3' || $connectionId === '4' || $connectionId === '5' || $connectionId === '6' || $connectionId === '7') && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting' && (root.child('rooms').child($roomId).child('createdBy').val() === auth.uid || root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).exists() || root.child('rooms').child($roomId).child('spectators').child(auth.uid).exists() || root.child('rooms').child($roomId).child('joinedPlayers').child(auth.uid).exists() || root.child('rooms').child($roomId).child('members').child(auth.uid).exists())",
               ".validate": "newData.hasChildren(['connectedAt', 'lastSeen', 'session'])",
-              "connectedAt": { ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000" },
-              "lastSeen": { ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000" },
-              "session": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80" },
-              "$other": { ".validate": false }
+              "connectedAt": {
+                ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000"
+              },
+              "lastSeen": {
+                ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000"
+              },
+              "session": {
+                ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+              },
+              "$other": {
+                ".validate": false
+              }
             }
           }
         },
@@ -129,19 +213,28 @@
             ".write": "auth != null && $uid === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'"
           }
         },
-
         "maps": {
           ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').val() === auth.uid && root.child('rooms').child($roomId).child('gameState').child('phase').val() === 'end' && ((!root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('0').exists() || root.child('mazeRankings').child(root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('0').val()).child('settledMatches').child($roomId + ':' + root.child('rooms').child($roomId).child('gameState').child('matchNumber').val()).val() === true) && (!root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('1').exists() || root.child('mazeRankings').child(root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('1').val()).child('settledMatches').child($roomId + ':' + root.child('rooms').child($roomId).child('gameState').child('matchNumber').val()).val() === true) && (!root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('2').exists() || root.child('mazeRankings').child(root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('2').val()).child('settledMatches').child($roomId + ':' + root.child('rooms').child($roomId).child('gameState').child('matchNumber').val()).val() === true) && (!root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('3').exists() || root.child('mazeRankings').child(root.child('rooms').child($roomId).child('gameState').child('turnOrder').child('3').val()).child('settledMatches').child($roomId + ':' + root.child('rooms').child($roomId).child('gameState').child('matchNumber').val()).val() === true))",
           "$ownerId": {
             ".write": "auth != null && $ownerId === auth.uid && root.child('rooms').child($roomId).child('gameState').child('players').child($ownerId).exists() && root.child('rooms').child($roomId).child('gameState').child('phase').val() === 'setup' && (root.child('rooms').child($roomId).child('gameState').child('players').child($ownerId).child('isReady').val() !== true || (!newData.exists() && newData.parent().parent().child('gameState').child('players').child($ownerId).child('isReady').val() !== true))",
-            ".validate": "newData.child('rulesVersion').isNumber() && newData.child('rulesVersion').val() === root.child('rooms').child($roomId).child('rulesVersion').val() && newData.child('skillLoadout').isString() && (newData.child('skillLoadout').val() === 'scoutPulse' || newData.child('skillLoadout').val() === 'breach' || newData.child('skillLoadout').val() === 'anchor' || newData.child('skillLoadout').val() === 'dash')"
+            ".validate": "newData.child('rulesVersion').isNumber() && newData.child('rulesVersion').val() === root.child('rooms').child($roomId).child('rulesVersion').val() && newData.child('skillLoadout').isString() && (newData.child('skillLoadout').val() === 'scoutPulse' || newData.child('skillLoadout').val() === 'breach' || newData.child('skillLoadout').val() === 'anchor' || newData.child('skillLoadout').val() === 'dash')",
+            "item": {
+              "type": {
+                ".validate": "newData.val() !== 'collapseWall' && newData.val() !== 'mirrorWall'"
+              }
+            },
+            "items": {
+              "$itemIndex": {
+                "type": {
+                  ".validate": "newData.val() !== 'collapseWall' && newData.val() !== 'mirrorWall'"
+                }
+              }
+            }
           }
         },
-
         "gameState": {
-          ".write": "auth != null && ((data.child('phase').val() !== 'play' && root.child('rooms').child($roomId).child('createdBy').val() === auth.uid) || (data.child('phase').val() === 'play' && data.child('players').child(auth.uid).exists() && newData.child('turnOrder').child('0').val() === data.child('turnOrder').child('0').val() && newData.child('turnOrder').child('1').val() === data.child('turnOrder').child('1').val() && newData.child('turnOrder').child('2').val() === data.child('turnOrder').child('2').val() && newData.child('turnOrder').child('3').val() === data.child('turnOrder').child('3').val() && (!data.child('turnOrder').child('0').exists() || (newData.child('assignments').child(data.child('turnOrder').child('0').val()).val() === data.child('assignments').child(data.child('turnOrder').child('0').val()).val() && newData.child('players').child(data.child('turnOrder').child('0').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']) && newData.child('itemState').child(data.child('turnOrder').child('0').val()).exists())) && (!data.child('turnOrder').child('1').exists() || (newData.child('assignments').child(data.child('turnOrder').child('1').val()).val() === data.child('assignments').child(data.child('turnOrder').child('1').val()).val() && newData.child('players').child(data.child('turnOrder').child('1').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']) && newData.child('itemState').child(data.child('turnOrder').child('1').val()).exists())) && (!data.child('turnOrder').child('2').exists() || (newData.child('assignments').child(data.child('turnOrder').child('2').val()).val() === data.child('assignments').child(data.child('turnOrder').child('2').val()).val() && newData.child('players').child(data.child('turnOrder').child('2').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']) && newData.child('itemState').child(data.child('turnOrder').child('2').val()).exists())) && (!data.child('turnOrder').child('3').exists() || (newData.child('assignments').child(data.child('turnOrder').child('3').val()).val() === data.child('assignments').child(data.child('turnOrder').child('3').val()).val() && newData.child('players').child(data.child('turnOrder').child('3').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']) && newData.child('itemState').child(data.child('turnOrder').child('3').val()).exists())) && (data.child('currentTurn').val() === auth.uid || !data.child('currentTurn').exists() || !data.child('players').child(data.child('currentTurn').val()).exists() || data.child('players').child(data.child('currentTurn').val()).child('finished').val() === true || data.child('players').child(data.child('currentTurn').val()).child('forfeited').val() === true || (newData.child('players').child(auth.uid).child('forfeited').val() === true && data.child('players').child(auth.uid).child('forfeited').val() !== true) || (data.child('players').child(auth.uid).child('finished').val() === true && newData.child('phase').val() === 'end') || (data.child('currentTurn').exists() && data.child('currentTurn').val() !== auth.uid && data.child('players').child(auth.uid).child('isOnline').val() === true && newData.child('players').child(auth.uid).child('isOnline').val() === true && data.child('players').child(data.child('currentTurn').val()).child('isOnline').val() === false && data.child('players').child(data.child('currentTurn').val()).child('lastSeen').isNumber() && data.child('players').child(data.child('currentTurn').val()).child('lastSeen').val() <= now - 45000 && data.child('players').child(data.child('currentTurn').val()).child('finished').val() !== true && data.child('players').child(data.child('currentTurn').val()).child('forfeited').val() !== true && data.child('players').child(data.child('currentTurn').val()).child('hasLeft').val() !== true && newData.child('players').child(data.child('currentTurn').val()).child('forfeited').val() === true && newData.child('currentTurn').val() !== data.child('currentTurn').val()))))",
+          ".write": "auth != null && ((data.child('phase').val() !== 'play' && root.child('rooms').child($roomId).child('createdBy').val() === auth.uid) || (data.child('phase').val() === 'play' && data.child('players').child(auth.uid).exists() && newData.child('turnOrder').child('0').val() === data.child('turnOrder').child('0').val() && newData.child('turnOrder').child('1').val() === data.child('turnOrder').child('1').val() && newData.child('turnOrder').child('2').val() === data.child('turnOrder').child('2').val() && newData.child('turnOrder').child('3').val() === data.child('turnOrder').child('3').val() && (!data.child('turnOrder').child('0').exists() || (newData.child('assignments').child(data.child('turnOrder').child('0').val()).val() === data.child('assignments').child(data.child('turnOrder').child('0').val()).val() && newData.child('players').child(data.child('turnOrder').child('0').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']) && newData.child('itemState').child(data.child('turnOrder').child('0').val()).exists())) && (!data.child('turnOrder').child('1').exists() || (newData.child('assignments').child(data.child('turnOrder').child('1').val()).val() === data.child('assignments').child(data.child('turnOrder').child('1').val()).val() && newData.child('players').child(data.child('turnOrder').child('1').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']) && newData.child('itemState').child(data.child('turnOrder').child('1').val()).exists())) && (!data.child('turnOrder').child('2').exists() || (newData.child('assignments').child(data.child('turnOrder').child('2').val()).val() === data.child('assignments').child(data.child('turnOrder').child('2').val()).val() && newData.child('players').child(data.child('turnOrder').child('2').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']) && newData.child('itemState').child(data.child('turnOrder').child('2').val()).exists())) && (!data.child('turnOrder').child('3').exists() || (newData.child('assignments').child(data.child('turnOrder').child('3').val()).val() === data.child('assignments').child(data.child('turnOrder').child('3').val()).val() && newData.child('players').child(data.child('turnOrder').child('3').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']) && newData.child('itemState').child(data.child('turnOrder').child('3').val()).exists())) && (data.child('currentTurn').val() === auth.uid || !data.child('currentTurn').exists() || !data.child('players').child(data.child('currentTurn').val()).exists() || data.child('players').child(data.child('currentTurn').val()).child('finished').val() === true || data.child('players').child(data.child('currentTurn').val()).child('forfeited').val() === true || (newData.child('players').child(auth.uid).child('forfeited').val() === true && data.child('players').child(auth.uid).child('forfeited').val() !== true) || (data.child('players').child(auth.uid).child('finished').val() === true && newData.child('phase').val() === 'end') || (data.child('currentTurn').exists() && data.child('currentTurn').val() !== auth.uid && data.child('players').child(auth.uid).child('isOnline').val() === true && newData.child('players').child(auth.uid).child('isOnline').val() === true && data.child('players').child(data.child('currentTurn').val()).child('isOnline').val() === false && data.child('players').child(data.child('currentTurn').val()).child('lastSeen').isNumber() && data.child('players').child(data.child('currentTurn').val()).child('lastSeen').val() <= now - 45000 && data.child('players').child(data.child('currentTurn').val()).child('finished').val() !== true && data.child('players').child(data.child('currentTurn').val()).child('forfeited').val() !== true && data.child('players').child(data.child('currentTurn').val()).child('hasLeft').val() !== true && newData.child('players').child(data.child('currentTurn').val()).child('forfeited').val() === data.child('players').child(data.child('currentTurn').val()).child('forfeited').val() && newData.child('players').child(data.child('currentTurn').val()).child('hasLeft').val() === data.child('players').child(data.child('currentTurn').val()).child('hasLeft').val() && newData.child('currentTurn').val() !== data.child('currentTurn').val() && newData.child('turnNumber').val() === data.child('turnNumber').val() + 1))))",
           ".validate": "newData.hasChildren(['rulesVersion', 'matchNumber', 'phase', 'players']) && (data.child('phase').val() !== 'end' || newData.child('phase').val() === 'end' || ((!data.child('turnOrder').child('0').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('0').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true) && (!data.child('turnOrder').child('1').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('1').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true) && (!data.child('turnOrder').child('2').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('2').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true) && (!data.child('turnOrder').child('3').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('3').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true)))",
-
           "phase": {
             ".validate": "newData.isString() && (newData.val() === 'setup' || newData.val() === 'play' || newData.val() === 'end') && ((!data.exists() && newData.val() === 'setup') || newData.val() === data.val() || (data.val() === 'setup' && newData.val() === 'play') || (data.val() === 'play' && newData.val() === 'end') || (data.val() === 'end' && newData.val() === 'setup')) && (newData.val() !== 'end' || (newData.parent().child('turnOrder').child('0').exists() && !newData.parent().child('currentTurn').exists() && (!newData.parent().child('turnOrder').child('0').exists() || (newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).exists() && (newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('hasLeft').val() === true))) && (!newData.parent().child('turnOrder').child('1').exists() || (newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).exists() && (newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('hasLeft').val() === true))) && (!newData.parent().child('turnOrder').child('2').exists() || (newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).exists() && (newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('hasLeft').val() === true))) && (!newData.parent().child('turnOrder').child('3').exists() || (newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).exists() && (newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('hasLeft').val() === true))) && ((newData.parent().child('winner').exists() && newData.parent().child('draw').val() !== true) || (!newData.parent().child('winner').exists() && newData.parent().child('draw').val() === true))))"
           },
@@ -151,7 +244,6 @@
           "draw": {
             ".validate": "newData.parent().child('phase').val() === 'end' && newData.val() === true && !newData.parent().child('winner').exists() && ((!(newData.parent().child('turnOrder').child('0').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').isNumber()) && !(newData.parent().child('turnOrder').child('1').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').isNumber()) && !(newData.parent().child('turnOrder').child('2').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').isNumber()) && !(newData.parent().child('turnOrder').child('3').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').isNumber())) || (((newData.parent().child('turnOrder').child('0').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').isNumber()) && (newData.parent().child('turnOrder').child('1').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').isNumber()) && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() === newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() && (!(newData.parent().child('turnOrder').child('0').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('1').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('2').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('3').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').val())) || ((newData.parent().child('turnOrder').child('0').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').isNumber()) && (newData.parent().child('turnOrder').child('2').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').isNumber()) && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() === newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val() && (!(newData.parent().child('turnOrder').child('0').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('1').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('2').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('3').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').val())) || ((newData.parent().child('turnOrder').child('0').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').isNumber()) && (newData.parent().child('turnOrder').child('3').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').isNumber()) && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() === newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').val() && (!(newData.parent().child('turnOrder').child('0').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('1').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('2').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('3').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').val())) || ((newData.parent().child('turnOrder').child('1').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').isNumber()) && (newData.parent().child('turnOrder').child('2').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').isNumber()) && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() === newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val() && (!(newData.parent().child('turnOrder').child('0').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('1').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('2').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('3').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').val())) || ((newData.parent().child('turnOrder').child('1').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').isNumber()) && (newData.parent().child('turnOrder').child('3').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').isNumber()) && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() === newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').val() && (!(newData.parent().child('turnOrder').child('0').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('1').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('2').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('3').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').val())) || ((newData.parent().child('turnOrder').child('2').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').isNumber()) && (newData.parent().child('turnOrder').child('3').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').isNumber()) && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val() === newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').val() && (!(newData.parent().child('turnOrder').child('0').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('1').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('2').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val()) && (!(newData.parent().child('turnOrder').child('3').exists() && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() !== true && newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').isNumber()) || newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finishMoves').val() <= newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finishMoves').val()))))"
           },
-
           "rulesVersion": {
             ".validate": "newData.isNumber() && newData.val() === 3"
           },
@@ -161,14 +253,12 @@
           "maps": {
             ".validate": "!newData.exists()"
           },
-
           "turnOrder": {
             ".write": "auth != null && data.parent().child('phase').val() === 'setup' && data.parent().child('players').child(auth.uid).exists()"
           },
           "turnNumber": {
             ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() % 1 === 0 && (data.parent().child('phase').val() !== 'play' || newData.val() === data.val() || newData.val() === data.val() + 1)"
           },
-
           "players": {
             "$playerId": {
               ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting' && (data.exists() || root.child('rooms').child($roomId).child('players').child('0').val() === auth.uid || root.child('rooms').child($roomId).child('players').child('1').val() === auth.uid || root.child('rooms').child($roomId).child('players').child('2').val() === auth.uid || root.child('rooms').child($roomId).child('players').child('3').val() === auth.uid) && (data.parent().parent().child('phase').val() !== 'play' || data.parent().parent().child('currentTurn').val() === auth.uid || (newData.child('forfeited').val() === true && data.child('forfeited').val() !== true))",
@@ -197,7 +287,7 @@
                 ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || newData.val() === data.val() || ($playerId === auth.uid && data.parent().child('finished').val() !== true && newData.parent().child('finished').val() === true && newData.isNumber() && newData.val() === newData.parent().child('moves').val())"
               },
               "forfeited": {
-                ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val() || ($playerId === root.child('rooms').child($roomId).child('gameState').child('currentTurn').val() && $playerId !== auth.uid && root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).child('isOnline').val() === true && root.child('rooms').child($roomId).child('gameState').child('players').child($playerId).child('isOnline').val() === false && root.child('rooms').child($roomId).child('gameState').child('players').child($playerId).child('lastSeen').isNumber() && root.child('rooms').child($roomId).child('gameState').child('players').child($playerId).child('lastSeen').val() <= now - 45000 && data.val() !== true && newData.val() === true)"
+                ".validate": "((data.parent().parent().parent().child('phase').val() !== 'play' && newData.parent().parent().parent().child('phase').val() !== 'play') || newData.val() === data.val() || (!data.exists() && newData.val() === false))"
               },
               "moves": {
                 ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || newData.val() === data.val() || ($playerId === auth.uid && root.child('rooms').child($roomId).child('gameState').child('currentTurn').val() === auth.uid && data.isNumber() && newData.isNumber() && newData.val() >= data.val() + 1 && newData.val() <= data.val() + 3 && newData.parent().parent().parent().child('turnNumber').val() === root.child('rooms').child($roomId).child('gameState').child('turnNumber').val() + 1)"
@@ -216,45 +306,77 @@
               },
               "hasLeft": {
                 ".write": "auth != null && $playerId === auth.uid && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting'",
-                ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val()"
+                ".validate": "((data.parent().parent().parent().child('phase').val() !== 'play' && newData.parent().parent().parent().child('phase').val() !== 'play') || newData.val() === data.val() || (!data.exists() && newData.val() === false))"
               },
               "lastSeen": {
                 ".write": "auth != null && root.child('rooms').child($roomId).child('createdBy').exists() && root.child('rooms').child($roomId).child('status').val() !== 'deleting' && ($playerId === auth.uid || (root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).exists() && !root.child('rooms').child($roomId).child('connections').child($playerId).hasChildren()))",
-                ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000 && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val() || !root.child('rooms').child($roomId).child('connections').child($playerId).hasChildren())"
+                ".validate": "newData.isNumber() && (newData.val() === data.val() || (newData.val() >= now - 60000 && newData.val() <= now + 60000)) && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val() || !root.child('rooms').child($roomId).child('connections').child($playerId).hasChildren())"
               }
             }
           }
         }
       }
     },
-
     "mazeRankings": {
       ".read": "auth != null",
-      ".indexOn": ["rating"],
+      ".indexOn": [
+        "rating"
+      ],
       "$uid": {
         ".write": "auth != null && newData.exists() && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('phase').val() === 'end' && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('players').child(auth.uid).exists() && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('players').child($uid).exists()",
         ".validate": "newData.hasChildren(['uid', 'displayName', 'wins', 'losses', 'draws', 'played', 'rating', 'bestMoves', 'lastRoomId', 'lastMatchNumber', 'updatedAt', 'settlementCount', 'settledMatches', 'settlementTrail']) && newData.child('uid').val() === $uid && newData.child('played').val() === newData.child('wins').val() + newData.child('losses').val() + newData.child('draws').val() && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('phase').val() === 'end' && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('matchNumber').val() === newData.child('lastMatchNumber').val() && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('players').child($uid).exists() && !data.child('settledMatches').child(newData.child('lastRoomId').val() + ':' + newData.child('lastMatchNumber').val()).exists() && newData.child('settledMatches').child(newData.child('lastRoomId').val() + ':' + newData.child('lastMatchNumber').val()).val() === true && ((!data.exists() && newData.child('played').val() === 1 && newData.child('settlementCount').val() === 1 && ((newData.child('wins').val() === 1 && newData.child('losses').val() === 0 && newData.child('draws').val() === 0 && newData.child('rating').val() === 1020 && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('winner').val() === $uid) || (newData.child('wins').val() === 0 && newData.child('losses').val() === 0 && newData.child('draws').val() === 1 && newData.child('rating').val() === 1000 && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('draw').val() === true) || (newData.child('wins').val() === 0 && newData.child('losses').val() === 1 && newData.child('draws').val() === 0 && newData.child('rating').val() === 988 && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('winner').val() !== $uid))) || (data.exists() && newData.child('played').val() === data.child('played').val() + 1 && newData.child('settlementCount').val() === data.child('settlementCount').val() + 1 && ((newData.child('wins').val() === data.child('wins').val() + 1 && newData.child('losses').val() === data.child('losses').val() && newData.child('draws').val() === data.child('draws').val() && newData.child('rating').val() === data.child('rating').val() + 20 && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('winner').val() === $uid) || (newData.child('wins').val() === data.child('wins').val() && newData.child('losses').val() === data.child('losses').val() && newData.child('draws').val() === data.child('draws').val() + 1 && newData.child('rating').val() === data.child('rating').val() && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('draw').val() === true) || (newData.child('wins').val() === data.child('wins').val() && newData.child('losses').val() === data.child('losses').val() + 1 && newData.child('draws').val() === data.child('draws').val() && newData.child('rating').val() === (data.child('rating').val() >= 12 ? data.child('rating').val() - 12 : 0) && root.child('rooms').child(newData.child('lastRoomId').val()).child('gameState').child('winner').val() !== $uid))))",
-        "uid": { ".validate": "newData.isString() && newData.val() === $uid" },
-        "displayName": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50" },
-        "photoURL": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2048" },
-        "wins": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0" },
-        "losses": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0" },
-        "draws": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0" },
-        "played": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 1000000000 && newData.val() % 1 === 0" },
-        "rating": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0" },
-        "bestMoves": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0 && ((!data.exists() && newData.val() === 0) || (data.exists() && newData.val() === data.val()) || (root.child('rooms').child(newData.parent().child('lastRoomId').val()).child('gameState').child('players').child($uid).child('finished').val() === true && root.child('rooms').child(newData.parent().child('lastRoomId').val()).child('gameState').child('players').child($uid).child('forfeited').val() !== true && root.child('rooms').child(newData.parent().child('lastRoomId').val()).child('gameState').child('players').child($uid).child('finishMoves').isNumber() && newData.val() === root.child('rooms').child(newData.parent().child('lastRoomId').val()).child('gameState').child('players').child($uid).child('finishMoves').val() && (!data.exists() || data.val() === 0 || newData.val() < data.val())))" },
-        "lastRoomId": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 128" },
-        "lastMatchNumber": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() % 1 === 0" },
-        "updatedAt": { ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000 && (!data.exists() || newData.val() >= data.val())" },
-        "settlementCount": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 1000000000 && newData.val() % 1 === 0 && newData.parent().child('settlementTrail').isString() && (!data.parent().exists() || newData.parent().child('settledMatches').child(data.parent().child('lastRoomId').val() + ':' + data.parent().child('lastMatchNumber').val()).val() === true)" },
-        "settlementTrail": { ".validate": "newData.isString() && newData.val().length > 2 && newData.val().length <= 1000000 && ((!data.parent().exists() && newData.val() === '|' + newData.parent().child('lastRoomId').val() + ':' + newData.parent().child('lastMatchNumber').val() + '|') || (data.parent().exists() && data.isString() && !data.val().contains('|' + newData.parent().child('lastRoomId').val() + ':' + newData.parent().child('lastMatchNumber').val() + '|') && newData.val() === data.val() + newData.parent().child('lastRoomId').val() + ':' + newData.parent().child('lastMatchNumber').val() + '|'))" },
-        "settledMatches": {
-          "$matchKey": { ".validate": "newData.val() === true && $matchKey.length > 0 && $matchKey.length <= 160" }
+        "uid": {
+          ".validate": "newData.isString() && newData.val() === $uid"
         },
-        "$other": { ".validate": false }
+        "displayName": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
+        },
+        "photoURL": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2048"
+        },
+        "wins": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0"
+        },
+        "losses": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0"
+        },
+        "draws": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0"
+        },
+        "played": {
+          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 1000000000 && newData.val() % 1 === 0"
+        },
+        "rating": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0"
+        },
+        "bestMoves": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0 && ((!data.exists() && newData.val() === 0) || (data.exists() && newData.val() === data.val()) || (root.child('rooms').child(newData.parent().child('lastRoomId').val()).child('gameState').child('players').child($uid).child('finished').val() === true && root.child('rooms').child(newData.parent().child('lastRoomId').val()).child('gameState').child('players').child($uid).child('forfeited').val() !== true && root.child('rooms').child(newData.parent().child('lastRoomId').val()).child('gameState').child('players').child($uid).child('finishMoves').isNumber() && newData.val() === root.child('rooms').child(newData.parent().child('lastRoomId').val()).child('gameState').child('players').child($uid).child('finishMoves').val() && (!data.exists() || data.val() === 0 || newData.val() < data.val())))"
+        },
+        "lastRoomId": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 128"
+        },
+        "lastMatchNumber": {
+          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() % 1 === 0"
+        },
+        "updatedAt": {
+          ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000 && (!data.exists() || newData.val() >= data.val())"
+        },
+        "settlementCount": {
+          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 1000000000 && newData.val() % 1 === 0 && newData.parent().child('settlementTrail').isString() && (!data.parent().exists() || newData.parent().child('settledMatches').child(data.parent().child('lastRoomId').val() + ':' + data.parent().child('lastMatchNumber').val()).val() === true)"
+        },
+        "settlementTrail": {
+          ".validate": "newData.isString() && newData.val().length > 2 && newData.val().length <= 1000000 && ((!data.parent().exists() && newData.val() === '|' + newData.parent().child('lastRoomId').val() + ':' + newData.parent().child('lastMatchNumber').val() + '|') || (data.parent().exists() && data.isString() && !data.val().contains('|' + newData.parent().child('lastRoomId').val() + ':' + newData.parent().child('lastMatchNumber').val() + '|') && newData.val() === data.val() + newData.parent().child('lastRoomId').val() + ':' + newData.parent().child('lastMatchNumber').val() + '|'))"
+        },
+        "settledMatches": {
+          "$matchKey": {
+            ".validate": "newData.val() === true && $matchKey.length > 0 && $matchKey.length <= 160"
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
       }
     },
-
     "userStatus": {
       "$uid": {
         ".read": "auth != null && $uid === auth.uid",
@@ -264,334 +386,109 @@
         }
       }
     },
-
     "users": {
       "$uid": {
-        ".read": "auth != null && $uid === auth.uid",
-        ".write": "auth != null && $uid === auth.uid && (!newData.parent().parent().child('adventureRankings').child($uid).exists() || newData.child('adventure').child('v1').exists())",
-        "adventure": {
-          "v1": {
-            ".validate": "newData.hasChildren(['version', 'resetGeneration', 'name', 'classId', 'level', 'exp', 'mastery', 'gold', 'hp', 'baseStats', 'statPoints', 'skillPoints', 'skillRanks', 'potions', 'currentRegionId', 'killCounts', 'bossKills', 'statistics', 'createdAt', 'updatedAt', 'lastActiveAt', 'rankingPower', 'rankingCollectionCount']) && (!data.child('arenaCheckpoint').exists() || newData.child('arenaCheckpoint').exists() || (newData.child('town').exists() && newData.child('town').child('location').val() === 'town')) && (!newData.child('arenaCheckpoint').exists() || (newData.child('town').exists() && newData.child('town').child('location').val() === 'wilderness')) && (!newData.parent().parent().parent().parent().child('adventureRankings').child($uid).exists() || (newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('uid').val() === $uid && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('resetGeneration').val() === newData.child('resetGeneration').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('classId').val() === newData.child('classId').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('level').val() === newData.child('level').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('masteryLevel').val() === newData.child('mastery').child('level').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('power').val() === newData.child('rankingPower').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('totalKills').val() === newData.child('statistics').child('totalKills').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('bossesKilled').val() === newData.child('statistics').child('bossesKilled').val() && newData.parent().parent().parent().parent().child('adventureRankings').child($uid).child('collectionCount').val() === newData.child('rankingCollectionCount').val()))",
-            "version": {
-              ".validate": "newData.isNumber() && newData.val() === 1"
-            },
-            "resetGeneration": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0 && ((newData.parent().parent().parent().child('adventureGeneration').exists() && newData.val() === newData.parent().parent().parent().child('adventureGeneration').val()) || (!newData.parent().parent().parent().child('adventureGeneration').exists() && newData.val() === 0))"
-            },
-            "name": {
-              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 16"
-            },
-            "classId": {
-              ".validate": "newData.isString() && (newData.val() === 'vanguard' || newData.val() === 'ranger' || newData.val() === 'mystic')"
-            },
-            "level": {
-              ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 99 && newData.val() % 1 === 0"
-            },
-            "exp": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0"
-            },
-            "mastery": {
-              ".validate": "newData.hasChildren(['level', 'exp'])",
-              "level": {
-                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 50 && newData.val() % 1 === 0"
-              },
-              "exp": {
-                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000000 && newData.val() % 1 === 0"
-              },
-              "$other": {
-                ".validate": false
-              }
-            },
-            "gold": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9007199254740991 && newData.val() % 1 === 0"
-            },
-            "hp": {
-              ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 1000000 && newData.val() % 1 === 0"
-            },
-            "baseStats": {
-              ".validate": "newData.hasChildren(['strength', 'vitality', 'defense', 'agility'])",
-              "$stat": {
-                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 500 && newData.val() % 1 === 0"
-              }
-            },
-            "statPoints": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
-            },
-            "skillPoints": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
-            },
-            "skillRanks": {
-              ".validate": "newData.hasChildren(['skill1', 'skill2'])",
-              "skill1": {
-                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 10 && newData.val() % 1 === 0"
-              },
-              "skill2": {
-                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
-              },
-              "skill3": {
-                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
-              },
-              "skill4": {
-                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
-              },
-              "skill5": {
-                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
-              },
-              "skill6": {
-                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
-              },
-              "$other": {
-                ".validate": false
-              }
-            },
-            "skillLoadout": {
-              ".validate": "newData.hasChildren()",
-              "$index": {
-                ".validate": "($index === '0' || $index === '1' || $index === '2' || $index === '3' || $index === '4' || $index === '5') && newData.isString() && (newData.val() === 'skill1' || newData.val() === 'skill2' || newData.val() === 'skill3' || newData.val() === 'skill4' || newData.val() === 'skill5' || newData.val() === 'skill6')"
-              }
-            },
-            "equipment": {
-              "$slot": {
-                ".validate": "($slot === 'weapon' || $slot === 'armor' || $slot === 'accessory') && newData.hasChildren(['instanceId', 'itemKey', 'definitionId', 'materialId', 'prefixId', 'suffixId', 'rarity', 'quality', 'level', 'enhance', 'stats', 'acquiredAt']) && ((!newData.child('tier').exists() && !newData.child('itemLevel').exists() && !newData.child('socketCount').exists() && !newData.child('socketedRunes').exists() && !newData.child('setId').exists() && !newData.child('uniqueId').exists()) || (newData.child('tier').exists() && newData.child('itemLevel').exists() && newData.child('socketCount').exists() && ((newData.child('tier').val() === 'set' && newData.child('setId').exists() && !newData.child('uniqueId').exists()) || (newData.child('tier').val() === 'unique' && newData.child('uniqueId').exists() && !newData.child('setId').exists()) || ((newData.child('tier').val() === 'normal' || newData.child('tier').val() === 'magic' || newData.child('tier').val() === 'rare') && !newData.child('setId').exists() && !newData.child('uniqueId').exists()))))",
-                "tier": {
-                  ".validate": "newData.isString() && ((newData.val() === 'normal' && newData.parent().child('rarity').val() === 'common') || (newData.val() === 'magic' && newData.parent().child('rarity').val() === 'uncommon') || (newData.val() === 'rare' && newData.parent().child('rarity').val() === 'rare') || (newData.val() === 'set' && newData.parent().child('rarity').val() === 'epic') || (newData.val() === 'unique' && newData.parent().child('rarity').val() === 'legendary'))"
-                },
-                "itemLevel": {
-                  ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 99 && newData.val() % 1 === 0 && newData.val() === newData.parent().child('level').val()"
-                },
-                "socketCount": {
-                  ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 4 && newData.val() % 1 === 0"
-                },
-                "socketedRunes": {
-                  ".validate": "newData.parent().child('socketCount').exists()",
-                  "$index": {
-                    ".validate": "(($index === '0' && newData.parent().parent().child('socketCount').val() >= 1) || ($index === '1' && newData.parent().parent().child('socketCount').val() >= 2) || ($index === '2' && newData.parent().parent().child('socketCount').val() >= 3) || ($index === '3' && newData.parent().parent().child('socketCount').val() >= 4)) && newData.isString() && (newData.val() === 'ember' || newData.val() === 'tide' || newData.val() === 'gale' || newData.val() === 'stone' || newData.val() === 'thorn' || newData.val() === 'dawn' || newData.val() === 'dusk' || newData.val() === 'blood' || newData.val() === 'ward' || newData.val() === 'echo' || newData.val() === 'void' || newData.val() === 'storm' || newData.val() === 'frost' || newData.val() === 'venom' || newData.val() === 'crown')"
-                  }
-                },
-                "setId": {
-                  ".validate": "newData.parent().child('tier').val() === 'set' && newData.isString() && (newData.val() === 'ironCovenant' || newData.val() === 'windstalker' || newData.val() === 'astralRite' || newData.val() === 'ashenPilgrim' || newData.val() === 'graveborn' || newData.val() === 'tempest')"
-                },
-                "uniqueId": {
-                  ".validate": "newData.parent().child('tier').val() === 'unique' && newData.isString() && (newData.val() === 'oathbreaker' || newData.val() === 'nightpiercer' || newData.val() === 'cinderOracle' || newData.val() === 'plagueEdge' || newData.val() === 'bloodforgedAegis' || newData.val() === 'frostboundCarapace' || newData.val() === 'stormhide' || newData.val() === 'graveward' || newData.val() === 'executionersHourglass' || newData.val() === 'seraphTear' || newData.val() === 'voidEye' || newData.val() === 'emberCrown')"
-                }
-              }
-            },
-            "inventory": {
-              "$index": {
-                ".validate": "$index.matches(/^([0-9]|[1-5][0-9])$/) && newData.hasChildren(['instanceId', 'itemKey', 'definitionId', 'materialId', 'prefixId', 'suffixId', 'rarity', 'quality', 'level', 'enhance', 'stats', 'acquiredAt']) && ((!newData.child('tier').exists() && !newData.child('itemLevel').exists() && !newData.child('socketCount').exists() && !newData.child('socketedRunes').exists() && !newData.child('setId').exists() && !newData.child('uniqueId').exists()) || (newData.child('tier').exists() && newData.child('itemLevel').exists() && newData.child('socketCount').exists() && ((newData.child('tier').val() === 'set' && newData.child('setId').exists() && !newData.child('uniqueId').exists()) || (newData.child('tier').val() === 'unique' && newData.child('uniqueId').exists() && !newData.child('setId').exists()) || ((newData.child('tier').val() === 'normal' || newData.child('tier').val() === 'magic' || newData.child('tier').val() === 'rare') && !newData.child('setId').exists() && !newData.child('uniqueId').exists()))))",
-                "tier": {
-                  ".validate": "newData.isString() && ((newData.val() === 'normal' && newData.parent().child('rarity').val() === 'common') || (newData.val() === 'magic' && newData.parent().child('rarity').val() === 'uncommon') || (newData.val() === 'rare' && newData.parent().child('rarity').val() === 'rare') || (newData.val() === 'set' && newData.parent().child('rarity').val() === 'epic') || (newData.val() === 'unique' && newData.parent().child('rarity').val() === 'legendary'))"
-                },
-                "itemLevel": {
-                  ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 99 && newData.val() % 1 === 0 && newData.val() === newData.parent().child('level').val()"
-                },
-                "socketCount": {
-                  ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 4 && newData.val() % 1 === 0"
-                },
-                "socketedRunes": {
-                  ".validate": "newData.parent().child('socketCount').exists()",
-                  "$index": {
-                    ".validate": "(($index === '0' && newData.parent().parent().child('socketCount').val() >= 1) || ($index === '1' && newData.parent().parent().child('socketCount').val() >= 2) || ($index === '2' && newData.parent().parent().child('socketCount').val() >= 3) || ($index === '3' && newData.parent().parent().child('socketCount').val() >= 4)) && newData.isString() && (newData.val() === 'ember' || newData.val() === 'tide' || newData.val() === 'gale' || newData.val() === 'stone' || newData.val() === 'thorn' || newData.val() === 'dawn' || newData.val() === 'dusk' || newData.val() === 'blood' || newData.val() === 'ward' || newData.val() === 'echo' || newData.val() === 'void' || newData.val() === 'storm' || newData.val() === 'frost' || newData.val() === 'venom' || newData.val() === 'crown')"
-                  }
-                },
-                "setId": {
-                  ".validate": "newData.parent().child('tier').val() === 'set' && newData.isString() && (newData.val() === 'ironCovenant' || newData.val() === 'windstalker' || newData.val() === 'astralRite' || newData.val() === 'ashenPilgrim' || newData.val() === 'graveborn' || newData.val() === 'tempest')"
-                },
-                "uniqueId": {
-                  ".validate": "newData.parent().child('tier').val() === 'unique' && newData.isString() && (newData.val() === 'oathbreaker' || newData.val() === 'nightpiercer' || newData.val() === 'cinderOracle' || newData.val() === 'plagueEdge' || newData.val() === 'bloodforgedAegis' || newData.val() === 'frostboundCarapace' || newData.val() === 'stormhide' || newData.val() === 'graveward' || newData.val() === 'executionersHourglass' || newData.val() === 'seraphTear' || newData.val() === 'voidEye' || newData.val() === 'emberCrown')"
-                }
-              }
-            },
-            "runeInventory": {
-              ".validate": "newData.hasChildren(['ember', 'tide', 'gale', 'stone', 'thorn', 'dawn', 'dusk', 'blood', 'ward', 'echo', 'void', 'storm', 'frost', 'venom', 'crown'])",
-              "$runeId": {
-                ".validate": "($runeId === 'ember' || $runeId === 'tide' || $runeId === 'gale' || $runeId === 'stone' || $runeId === 'thorn' || $runeId === 'dawn' || $runeId === 'dusk' || $runeId === 'blood' || $runeId === 'ward' || $runeId === 'echo' || $runeId === 'void' || $runeId === 'storm' || $runeId === 'frost' || $runeId === 'venom' || $runeId === 'crown') && newData.isNumber() && newData.val() >= 0 && newData.val() <= 999 && newData.val() % 1 === 0"
-              }
-            },
-            "potions": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
-            },
-            "currentRegionId": {
-              ".validate": "newData.isString() && (newData.val() === 'sunnyField' || (newData.val() === 'mistForest' && newData.parent().child('level').val() >= 5) || (newData.val() === 'ancientRuins' && newData.parent().child('level').val() >= 12) || (newData.val() === 'dragonCrater' && newData.parent().child('level').val() >= 22))"
-            },
-            "town": {
-              ".validate": "newData.hasChildren(['location', 'townId', 'lastFieldRegionId', 'merchantSoldOut', 'merchantRefreshAt']) && newData.child('lastFieldRegionId').val() === newData.parent().child('currentRegionId').val() && newData.child('townId').val() === newData.child('lastFieldRegionId').val() + '-town' && ((newData.child('merchantSoldOut').val() === true && !newData.child('merchantStock').exists()) || (newData.child('merchantSoldOut').val() === false && newData.child('merchantStock').exists()))",
-              "location": {
-                ".validate": "newData.isString() && (newData.val() === 'town' || newData.val() === 'wilderness')"
-              },
-              "townId": {
-                ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 48"
-              },
-              "lastFieldRegionId": {
-                ".validate": "newData.isString() && (newData.val() === 'sunnyField' || newData.val() === 'mistForest' || newData.val() === 'ancientRuins' || newData.val() === 'dragonCrater')"
-              },
-              "stash": {
-                ".validate": "newData.hasChildren()",
-                "$index": {
-                  ".validate": "$index.matches(/^([0-9]|[1-9][0-9]|1[01][0-9])$/) && newData.hasChildren(['instanceId', 'itemKey', 'definitionId', 'materialId', 'prefixId', 'suffixId', 'rarity', 'quality', 'level', 'enhance', 'stats', 'acquiredAt']) && newData.child('instanceId').isString() && newData.child('instanceId').val().length > 0 && newData.child('instanceId').val().length <= 120 && newData.child('itemKey').isString() && newData.child('itemKey').val().length > 0 && newData.child('itemKey').val().length <= 320 && newData.child('definitionId').isString() && newData.child('definitionId').val().length > 0 && newData.child('definitionId').val().length <= 80 && newData.child('materialId').isString() && newData.child('materialId').val().length > 0 && newData.child('materialId').val().length <= 80 && newData.child('prefixId').isString() && newData.child('prefixId').val().length > 0 && newData.child('prefixId').val().length <= 80 && newData.child('suffixId').isString() && newData.child('suffixId').val().length > 0 && newData.child('suffixId').val().length <= 80 && newData.child('rarity').isString() && (newData.child('rarity').val() === 'common' || newData.child('rarity').val() === 'uncommon' || newData.child('rarity').val() === 'rare' || newData.child('rarity').val() === 'epic' || newData.child('rarity').val() === 'legendary') && newData.child('quality').isString() && (newData.child('quality').val() === 'standard' || newData.child('quality').val() === 'refined' || newData.child('quality').val() === 'masterwork') && newData.child('level').isNumber() && newData.child('level').val() >= 1 && newData.child('level').val() <= 99 && newData.child('level').val() % 1 === 0 && newData.child('enhance').isNumber() && newData.child('enhance').val() >= 0 && newData.child('enhance').val() <= 10 && newData.child('enhance').val() % 1 === 0 && newData.child('stats').hasChildren(['maxHp', 'attack', 'defense', 'crit']) && newData.child('stats').child('maxHp').isNumber() && newData.child('stats').child('maxHp').val() >= 0 && newData.child('stats').child('maxHp').val() % 1 === 0 && newData.child('stats').child('attack').isNumber() && newData.child('stats').child('attack').val() >= 0 && newData.child('stats').child('attack').val() % 1 === 0 && newData.child('stats').child('defense').isNumber() && newData.child('stats').child('defense').val() >= 0 && newData.child('stats').child('defense').val() % 1 === 0 && newData.child('stats').child('crit').isNumber() && newData.child('stats').child('crit').val() >= 0 && newData.child('stats').child('crit').val() % 1 === 0 && newData.child('acquiredAt').isNumber() && newData.child('acquiredAt').val() >= 0 && newData.child('acquiredAt').val() <= now + 60000"
-                }
-              },
-              "merchantStock": {
-                ".validate": "newData.hasChildren()",
-                "$index": {
-                  ".validate": "$index.matches(/^[0-7]$/) && newData.hasChildren(['instanceId', 'itemKey', 'definitionId', 'materialId', 'prefixId', 'suffixId', 'rarity', 'quality', 'level', 'enhance', 'stats', 'acquiredAt']) && newData.child('instanceId').isString() && newData.child('instanceId').val().length > 0 && newData.child('instanceId').val().length <= 120 && newData.child('itemKey').isString() && newData.child('itemKey').val().length > 0 && newData.child('itemKey').val().length <= 320 && newData.child('definitionId').isString() && newData.child('definitionId').val().length > 0 && newData.child('definitionId').val().length <= 80 && newData.child('materialId').isString() && newData.child('materialId').val().length > 0 && newData.child('materialId').val().length <= 80 && newData.child('prefixId').isString() && newData.child('prefixId').val().length > 0 && newData.child('prefixId').val().length <= 80 && newData.child('suffixId').isString() && newData.child('suffixId').val().length > 0 && newData.child('suffixId').val().length <= 80 && newData.child('rarity').isString() && (newData.child('rarity').val() === 'common' || newData.child('rarity').val() === 'uncommon' || newData.child('rarity').val() === 'rare' || newData.child('rarity').val() === 'epic' || newData.child('rarity').val() === 'legendary') && newData.child('quality').isString() && (newData.child('quality').val() === 'standard' || newData.child('quality').val() === 'refined' || newData.child('quality').val() === 'masterwork') && newData.child('level').isNumber() && newData.child('level').val() >= 1 && newData.child('level').val() <= 99 && newData.child('level').val() % 1 === 0 && newData.child('enhance').isNumber() && newData.child('enhance').val() >= 0 && newData.child('enhance').val() <= 10 && newData.child('enhance').val() % 1 === 0 && newData.child('stats').hasChildren(['maxHp', 'attack', 'defense', 'crit']) && newData.child('stats').child('maxHp').isNumber() && newData.child('stats').child('maxHp').val() >= 0 && newData.child('stats').child('maxHp').val() % 1 === 0 && newData.child('stats').child('attack').isNumber() && newData.child('stats').child('attack').val() >= 0 && newData.child('stats').child('attack').val() % 1 === 0 && newData.child('stats').child('defense').isNumber() && newData.child('stats').child('defense').val() >= 0 && newData.child('stats').child('defense').val() % 1 === 0 && newData.child('stats').child('crit').isNumber() && newData.child('stats').child('crit').val() >= 0 && newData.child('stats').child('crit').val() % 1 === 0 && newData.child('acquiredAt').isNumber() && newData.child('acquiredAt').val() >= 0 && newData.child('acquiredAt').val() <= now + 60000"
-                }
-              },
-              "merchantSoldOut": {
-                ".validate": "newData.isBoolean()"
-              },
-              "merchantRefreshAt": {
-                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9007199254740991 && newData.val() % 1 === 0"
-              },
-              "$other": {
-                ".validate": false
-              }
-            },
-            "arenaCheckpoint": {
-              ".validate": "newData.parent().child('town').exists() && newData.parent().child('town').child('location').val() === 'wilderness' && newData.hasChildren(['runId', 'checkpoint', 'wave', 'totalWaves', 'outcome']) && newData.child('wave').val() <= newData.child('totalWaves').val() && (newData.child('outcome').val() === 'ongoing' || (newData.child('outcome').val() === 'victory' && newData.child('wave').val() === newData.child('totalWaves').val()) || newData.child('outcome').val() === 'defeat') && ((!data.exists() && newData.child('wave').val() <= newData.child('checkpoint').val()) || (data.exists() && ((newData.child('runId').val() === data.child('runId').val() && newData.child('checkpoint').val() === data.child('checkpoint').val() && newData.child('wave').val() === data.child('wave').val() && newData.child('totalWaves').val() === data.child('totalWaves').val() && newData.child('outcome').val() === data.child('outcome').val()) || (data.child('outcome').val() !== 'ongoing' && newData.child('runId').val() !== data.child('runId').val() && newData.child('wave').val() <= newData.child('checkpoint').val()) || (newData.child('runId').val() === data.child('runId').val() && data.child('outcome').val() === 'ongoing' && newData.child('checkpoint').val() > data.child('checkpoint').val() && newData.child('totalWaves').val() === data.child('totalWaves').val() && newData.child('wave').val() >= data.child('wave').val() && newData.child('wave').val() <= data.child('wave').val() + newData.child('checkpoint').val() - data.child('checkpoint').val()))))",
-              "runId": {
-                ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
-              },
-              "checkpoint": {
-                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 1000000 && newData.val() % 1 === 0"
-              },
-              "wave": {
-                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 100 && newData.val() % 1 === 0"
-              },
-              "totalWaves": {
-                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 100 && newData.val() % 1 === 0"
-              },
-              "outcome": {
-                ".validate": "newData.isString() && (newData.val() === 'ongoing' || newData.val() === 'victory' || newData.val() === 'defeat')"
-              },
-              "$other": {
-                ".validate": false
-              }
-            },
-            "killCounts": {
-              ".validate": "newData.hasChildren(['field_slime', 'field_boar', 'field_bandit', 'field_boss', 'forest_wolf', 'forest_spider', 'forest_treant', 'forest_boss', 'ruins_sentinel', 'ruins_gargoyle', 'ruins_mage', 'ruins_boss', 'crater_drake', 'crater_golem', 'crater_cultist', 'crater_boss'])",
-              "$enemyId": {
-                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9007199254740991 && newData.val() % 1 === 0"
-              }
-            },
-            "bossKills": {
-              ".validate": "newData.hasChildren(['sunnyField', 'mistForest', 'ancientRuins', 'dragonCrater'])",
-              "$regionId": {
-                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
-              }
-            },
-            "statistics": {
-              ".validate": "newData.hasChildren(['battlesWon', 'battlesLost', 'totalKills', 'bossesKilled', 'damageDealt', 'damageTaken', 'goldEarned', 'goldSpent', 'potionsUsed', 'equipmentFound', 'equipmentSold', 'enhancements', 'skillUpgrades', 'offlineKills'])",
-              "$statistic": {
-                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9007199254740991 && newData.val() % 1 === 0"
-              }
-            },
-            "createdAt": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000"
-            },
-            "updatedAt": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000 && (!data.exists() || newData.val() >= data.val())"
-            },
-            "lastActiveAt": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000"
-            },
-            "rankingPower": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 20000 && newData.val() % 1 === 0"
-            },
-            "rankingCollectionCount": {
-              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 66240 && newData.val() % 1 === 0"
-            }
-          }
-        },
-        "adventureGeneration": {
-          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 1000000 && newData.val() % 1 === 0 && ((!data.exists() && newData.val() === 1) || (data.exists() && newData.val() === data.val() + 1)) && !newData.parent().child('adventure').child('v1').exists() && !newData.parent().parent().parent().child('adventureRankings').child($uid).exists()"
-        }
-      }
-    },
-
-    "adventureRankings": {
-      ".read": "auth != null",
-      ".indexOn": ["power"],
-      "$uid": {
         ".write": "auth != null && $uid === auth.uid",
-        ".validate": "newData.hasChildren(['uid', 'displayName', 'resetGeneration', 'classId', 'level', 'masteryLevel', 'power', 'totalKills', 'bossesKilled', 'collectionCount', 'updatedAt']) && newData.parent().parent().child('users').child($uid).child('adventure').child('v1').exists() && newData.child('resetGeneration').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('resetGeneration').val() && newData.child('classId').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('classId').val() && newData.child('level').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('level').val() && newData.child('masteryLevel').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('mastery').child('level').val() && newData.child('power').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('rankingPower').val() && newData.child('totalKills').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('statistics').child('totalKills').val() && newData.child('bossesKilled').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('statistics').child('bossesKilled').val() && newData.child('collectionCount').val() === newData.parent().parent().child('users').child($uid).child('adventure').child('v1').child('rankingCollectionCount').val()",
-        "uid": {
-          ".validate": "newData.isString() && newData.val() === auth.uid"
-        },
         "displayName": {
+          ".read": "auth != null && $uid === auth.uid",
           ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
         },
-        "resetGeneration": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0 && newData.val() === newData.parent().parent().parent().child('users').child($uid).child('adventure').child('v1').child('resetGeneration').val()"
-        },
         "photoURL": {
-          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2048"
-        },
-        "classId": {
-          ".validate": "newData.isString() && (newData.val() === 'vanguard' || newData.val() === 'ranger' || newData.val() === 'mystic')"
-        },
-        "level": {
-          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 99 && newData.val() % 1 === 0"
-        },
-        "masteryLevel": {
-          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 50 && newData.val() % 1 === 0"
-        },
-        "power": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 20000 && newData.val() % 1 === 0"
-        },
-        "totalKills": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9007199254740991 && newData.val() % 1 === 0"
-        },
-        "bossesKilled": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && newData.val() % 1 === 0"
-        },
-        "collectionCount": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 66240 && newData.val() % 1 === 0"
-        },
-        "updatedAt": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now + 60000 && (!data.exists() || newData.val() >= data.val())"
+          ".read": "auth != null && $uid === auth.uid",
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2048 && (newData.val() === 'https://lh3.googleusercontent.com' || newData.val().beginsWith('https://lh3.googleusercontent.com/'))"
         },
         "$other": {
+          ".read": false,
           ".validate": false
         }
       }
     },
-
-    "adventurePresence": {
-      ".read": "auth != null",
-      "$uid": {
-        ".write": "auth != null && $uid === auth.uid",
-        "$connectionId": {
-          ".validate": "($connectionId === '0' || $connectionId === '1' || $connectionId === '2' || $connectionId === '3' || $connectionId === '4' || $connectionId === '5' || $connectionId === '6' || $connectionId === '7') && newData.hasChildren(['uid', 'displayName', 'connectedAt', 'lastSeen'])",
-          "uid": {
-            ".validate": "newData.isString() && newData.val() === auth.uid"
-          },
-          "displayName": {
-            ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
-          },
-          "photoURL": {
-            ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 2048"
-          },
-          "connectedAt": {
-            ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000"
-          },
-          "lastSeen": {
-            ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000"
-          },
-          "$other": {
-            ".validate": false
+    "mazeAuthority": {
+      ".read": false,
+      ".write": false
+    },
+    "mazeViews": {
+      ".read": false,
+      ".write": false,
+      "v1": {
+        "publicRooms": {
+          ".read": "auth != null",
+          ".write": false
+        },
+        "memberRooms": {
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid",
+            ".write": false
           }
         }
       }
     },
-
+    "mazeViewManifests": {
+      ".read": false,
+      ".write": false
+    },
+    "mazeAuthorityRankings": {
+      ".read": false,
+      ".write": false,
+      "v1": {
+        ".read": "auth != null",
+        ".write": false,
+        ".indexOn": [
+          "rating"
+        ]
+      }
+    },
+    "mazePresence": {
+      ".read": false,
+      ".write": false,
+      "v1": {
+        "rooms": {
+          "$roomId": {
+            "$uid": {
+              ".read": "auth != null && auth.uid === $uid",
+              "$connectionId": {
+                ".write": "auth != null && auth.uid === $uid && ($connectionId === '0' || $connectionId === '1' || $connectionId === '2' || $connectionId === '3' || $connectionId === '4' || $connectionId === '5' || $connectionId === '6' || $connectionId === '7') && (!newData.exists() || (root.child('mazeViews').child('v1').child('publicRooms').child($roomId).exists() && newData.child('uid').val() === auth.uid && newData.child('generation').val() === root.child('mazeViews').child('v1').child('publicRooms').child($roomId).child('generation').val()))",
+                ".validate": "!newData.exists() || newData.hasChildren(['uid', 'generation', 'session', 'connectedAt', 'lastSeen'])",
+                "uid": {
+                  ".validate": "newData.isString() && newData.val() === $uid"
+                },
+                "generation": {
+                  ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() % 1 === 0 && newData.val() === root.child('mazeViews').child('v1').child('publicRooms').child($roomId).child('generation').val()"
+                },
+                "session": {
+                  ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+                },
+                "connectedAt": {
+                  ".validate": "newData.isNumber() && (newData.val() === data.val() || (newData.val() >= now - 60000 && newData.val() <= now + 60000))"
+                },
+                "lastSeen": {
+                  ".validate": "newData.isNumber() && newData.val() >= now - 60000 && newData.val() <= now + 60000 && (!data.exists() || newData.val() >= data.val())"
+                },
+                "$other": {
+                  ".validate": false
+                }
+              }
+            }
+          }
+        },
+        "leases": {
+          ".read": false,
+          ".write": false
+        },
+        "status": {
+          "$roomId": {
+            ".read": "auth != null",
+            ".write": false
+          }
+        }
+      }
+    },
     "userRooms": {
       "$uid": {
         ".read": "auth != null && $uid === auth.uid",
         ".write": "auth != null && $uid === auth.uid"
       }
     },
-
     "status": {
       ".read": "auth != null",
       "$uid": {

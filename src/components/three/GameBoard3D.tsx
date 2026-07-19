@@ -2,7 +2,7 @@
 
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { Canvas, useFrame, useThree, ThreeEvent } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
 import {
   CollisionWall,
@@ -15,6 +15,11 @@ import {
   SpecialWallType,
 } from '@/types/game';
 import { BOARD_SIZE, isSamePosition, isWallItemType } from '@/lib/gameUtils';
+import {
+  applyMazeToonRendering,
+  MAZE_TOON_RENDER_CONTRACT,
+  uninstallMazeToonRendering,
+} from '@/lib/mazeToonRendering';
 
 // ===== 보드 배치 상수 =====
 const TILE = 1; // 타일 한 변 크기
@@ -24,26 +29,41 @@ const WALL_HEIGHT = 0.5;
 const WALL_THICKNESS = 0.16;
 const CENTER = ((BOARD_SIZE - 1) * SPACING) / 2;
 
-// 3인칭 카메라: 보드 전체가 여유 있게 보이는 최대 시야 (줌 고정)
+// 고정 직교 카메라: 방향 조작과 화면 방향이 항상 일치하는 토이 디오라마 시점
 const SPAN = BOARD_SIZE * SPACING;
-const TP_CAMERA_POS: [number, number, number] = [CENTER, SPAN * 1.6, CENTER + SPAN * 1.7];
+const ORTHO_CAMERA_POS: [number, number, number] = [CENTER, SPAN * 1.35, CENTER + SPAN * 1.45];
+const BOARD_BACKGROUND = 'radial-gradient(circle at 50% 4%, #3f7377 0%, #24515b 48%, #112f3a 100%)';
 
 // 색상 팔레트
 const COLORS = {
-  tileA: '#f1e9d8',
-  tileB: '#e0d3b8',
-  tileHover: '#bfdbfe',
-  base: '#7c5a3a',
-  baseSide: '#5f452d',
-  wall: '#eab308', // 노란 벽 (설치된 장애물)
-  wallPreview: '#fde047',
-  fakeWall: '#22d3ee',
-  collision: '#ef4444', // 충돌한 벽 (빨강)
-  reveal: '#f59e0b', // 게임 종료 후 공개된 벽
-  start: '#22c55e',
-  end: '#ef4444',
-  player: '#3b82f6',
+  tileA: '#fff4d6',
+  tileB: '#f2d39b',
+  tileHover: '#31b7a6',
+  base: '#7c3f22',
+  baseSide: '#4b2418',
+  wall: '#263242', // 2D 보드와 같은 짙은 잉크색 일반 벽
+  wallPreview: '#f5a524',
+  fakeWall: '#008e95',
+  collision: '#e5484d', // 충돌한 벽 (선명한 빨강)
+  reveal: '#d76a22', // 게임 종료 후 공개된 벽
+  start: '#12a66a',
+  end: '#d9365f',
+  player: '#2674d9',
 };
+
+function usePrefersReducedMotion() {
+  const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(media.matches);
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+
+  return reducedMotion;
+}
 
 // 보드 위 액션 이펙트 (지뢰 폭발/웜홀/탐지 파동/충돌 스파크/골인 축포)
 export interface BoardFx {
@@ -128,15 +148,21 @@ function WallBox({ seg, color, opacity = 1, height = WALL_HEIGHT }: { seg: WallS
   const [x, , z] = segmentToWorld(seg);
   const size = segmentSize(seg);
   return (
-    <mesh position={[x, height / 2, z]} castShadow>
-      <boxGeometry args={[size[0], height, size[2]]} />
+    <RoundedBox
+      args={[size[0], height, size[2]]}
+      radius={Math.min(0.055, height * 0.16)}
+      smoothness={3}
+      position={[x, height / 2, z]}
+      castShadow
+      receiveShadow
+    >
       <meshStandardMaterial
         color={color}
         transparent={opacity < 1}
         opacity={opacity}
-        roughness={0.4}
+        roughness={0.74}
       />
-    </mesh>
+    </RoundedBox>
   );
 }
 
@@ -151,16 +177,16 @@ function FakeWallBox({ seg, consumed = false }: { seg: WallSegment; consumed?: b
   return (
     <group>
       {offsets.map((offset) => (
-        <mesh
+        <RoundedBox
           key={offset}
+          args={seg.type === 'H'
+            ? [pieceLength, height, WALL_THICKNESS]
+            : [WALL_THICKNESS, height, pieceLength]}
+          radius={Math.min(0.045, height * 0.16)}
+          smoothness={3}
           position={seg.type === 'H' ? [x + offset, height / 2, z] : [x, height / 2, z + offset]}
           castShadow={!consumed}
         >
-          <boxGeometry
-            args={seg.type === 'H'
-              ? [pieceLength, height, WALL_THICKNESS]
-              : [WALL_THICKNESS, height, pieceLength]}
-          />
           <meshStandardMaterial
             color={COLORS.fakeWall}
             emissive={COLORS.fakeWall}
@@ -169,7 +195,7 @@ function FakeWallBox({ seg, consumed = false }: { seg: WallSegment; consumed?: b
             opacity={consumed ? 0.32 : 1}
             roughness={0.35}
           />
-        </mesh>
+        </RoundedBox>
       ))}
     </group>
   );
@@ -188,44 +214,44 @@ interface SpecialWallStyle {
 
 const SPECIAL_WALL_STYLES: Record<SpecialWallType, SpecialWallStyle> = {
   steelWall: {
-    color: '#94a3b8', accent: '#e2e8f0', emissive: '#000000', emissiveIntensity: 0,
-    metalness: 0.92, roughness: 0.2, opacity: 1,
+    color: '#526579', accent: '#d7e1e8', emissive: '#000000', emissiveIntensity: 0,
+    metalness: 0.74, roughness: 0.34, opacity: 1,
   },
   fireWall: {
-    color: '#f97316', accent: '#facc15', emissive: '#ef4444', emissiveIntensity: 0.85,
-    metalness: 0.05, roughness: 0.48, opacity: 0.95,
+    color: '#d94b2b', accent: '#ffc43d', emissive: '#c73520', emissiveIntensity: 0.46,
+    metalness: 0.03, roughness: 0.62, opacity: 0.96,
   },
   poisonWall: {
-    color: '#65a30d', accent: '#bef264', emissive: '#84cc16', emissiveIntensity: 0.28,
-    metalness: 0, roughness: 0.72, opacity: 0.82,
+    color: '#4d8b21', accent: '#b7e33f', emissive: '#3f741b', emissiveIntensity: 0.14,
+    metalness: 0, roughness: 0.78, opacity: 0.94,
   },
   iceWall: {
-    color: '#bae6fd', accent: '#ffffff', emissive: '#38bdf8', emissiveIntensity: 0.2,
-    metalness: 0.12, roughness: 0.08, opacity: 0.58,
+    color: '#3ba7c4', accent: '#e8fbff', emissive: '#237e9a', emissiveIntensity: 0.12,
+    metalness: 0.08, roughness: 0.16, opacity: 0.84,
   },
   windWall: {
-    color: '#7dd3fc', accent: '#e0f2fe', emissive: '#0ea5e9', emissiveIntensity: 0.32,
-    metalness: 0, roughness: 0.24, opacity: 0.48, wireframe: true,
+    color: '#168aa3', accent: '#e5fbff', emissive: '#0d677a', emissiveIntensity: 0.18,
+    metalness: 0, roughness: 0.36, opacity: 0.72, wireframe: true,
   },
   collapseWall: {
-    color: '#44403c', accent: '#a8a29e', emissive: '#000000', emissiveIntensity: 0,
-    metalness: 0.08, roughness: 1, opacity: 1,
+    color: '#5a4335', accent: '#bf9a72', emissive: '#000000', emissiveIntensity: 0,
+    metalness: 0.04, roughness: 1, opacity: 1,
   },
   phaseWall: {
-    color: '#a78bfa', accent: '#f0abfc', emissive: '#8b5cf6', emissiveIntensity: 0.62,
-    metalness: 0.18, roughness: 0.22, opacity: 0.5,
+    color: '#7048b6', accent: '#eb62c1', emissive: '#593296', emissiveIntensity: 0.32,
+    metalness: 0.1, roughness: 0.34, opacity: 0.72,
   },
   mirrorWall: {
-    color: '#e2e8f0', accent: '#ffffff', emissive: '#cbd5e1', emissiveIntensity: 0.08,
-    metalness: 1, roughness: 0.03, opacity: 0.96,
+    color: '#81959d', accent: '#f2fbfb', emissive: '#52676e', emissiveIntensity: 0.04,
+    metalness: 0.82, roughness: 0.08, opacity: 0.96,
   },
   thornWall: {
-    color: '#be123c', accent: '#fda4af', emissive: '#881337', emissiveIntensity: 0.16,
-    metalness: 0.1, roughness: 0.82, opacity: 1,
+    color: '#b72b4d', accent: '#ff9d94', emissive: '#821b35', emissiveIntensity: 0.08,
+    metalness: 0.04, roughness: 0.84, opacity: 1,
   },
   crystalWall: {
-    color: '#2dd4bf', accent: '#f0abfc', emissive: '#14b8a6', emissiveIntensity: 0.58,
-    metalness: 0.24, roughness: 0.16, opacity: 0.88,
+    color: '#008e83', accent: '#f064b5', emissive: '#006c65', emissiveIntensity: 0.32,
+    metalness: 0.14, roughness: 0.26, opacity: 0.9,
   },
 };
 
@@ -270,8 +296,14 @@ function SpecialWallBox({
 
   return (
     <group name={`${type}:${consumed ? 'consumed' : inactiveCollapse ? 'armed' : openedPhase ? 'open' : 'closed'}`}>
-      <mesh position={[x, height / 2, z]} castShadow={!consumed}>
-        <boxGeometry args={[size[0], height, size[2]]} />
+      <RoundedBox
+        args={[size[0], height, size[2]]}
+        radius={Math.min(0.052, height * 0.16)}
+        smoothness={3}
+        position={[x, height / 2, z]}
+        castShadow={!consumed}
+        receiveShadow
+      >
         <meshPhysicalMaterial
           color={style.color}
           emissive={style.emissive}
@@ -285,13 +317,17 @@ function SpecialWallBox({
           depthWrite={opacity >= 0.7}
           wireframe={style.wireframe || openedPhase}
         />
-      </mesh>
+      </RoundedBox>
 
-      <mesh position={[x, height + 0.025, z]} castShadow={false}>
-        <boxGeometry args={seg.type === 'H'
+      <RoundedBox
+        args={seg.type === 'H'
           ? [size[0] * 0.82, 0.05, WALL_THICKNESS * 0.55]
           : [WALL_THICKNESS * 0.55, 0.05, size[2] * 0.82]}
-        />
+        radius={0.018}
+        smoothness={2}
+        position={[x, height + 0.025, z]}
+        castShadow={false}
+      >
         <meshStandardMaterial
           color={style.accent}
           emissive={style.emissive}
@@ -301,7 +337,7 @@ function SpecialWallBox({
           roughness={style.roughness}
           metalness={style.metalness}
         />
-      </mesh>
+      </RoundedBox>
 
       {!consumed && detailedCrystals && detailOffsets.map((offset) => (
         <mesh key={`crystal-${offset}`} position={detailPosition(offset, height + 0.11)}>
@@ -401,6 +437,7 @@ function Tile({
   onCellClick,
   placeMode = 'wall',
   isPendingEntrance = false,
+  reducedMotion = false,
 }: {
   position: Position;
   selectable: boolean;
@@ -410,6 +447,7 @@ function Tile({
   onCellClick?: (p: Position) => void;
   placeMode?: 'wall' | ItemType;
   isPendingEntrance?: boolean;
+  reducedMotion?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const checker = (position.row + position.col) % 2 === 0;
@@ -428,7 +466,10 @@ function Tile({
 
   return (
     <group position={cellToWorld(position)}>
-      <mesh
+      <RoundedBox
+        args={[TILE, 0.16, TILE]}
+        radius={0.065}
+        smoothness={3}
         receiveShadow
         onClick={handleClick}
         onPointerOver={(e) => {
@@ -442,15 +483,14 @@ function Tile({
           if (selectable) document.body.style.cursor = 'auto';
         }}
       >
-        <boxGeometry args={[TILE, 0.16, TILE]} />
-        <meshStandardMaterial color={color} roughness={0.8} />
-      </mesh>
+        <meshStandardMaterial color={color} roughness={0.88} />
+      </RoundedBox>
 
       {/* 시작점 패드 (은은한 펄스) */}
-      {isStart && <StartPad />}
+      {isStart && <StartPad reducedMotion={reducedMotion} />}
 
       {/* 도착점 패드 + 펄럭이는 깃발 */}
-      {isEnd && <GoalFlag />}
+      {isEnd && <GoalFlag reducedMotion={reducedMotion} />}
 
       {/* 시작/도착 선택 모드 호버 미리보기 */}
       {hovered && selectable && selectionMode !== 'none' && !isStart && !isEnd && (
@@ -492,11 +532,13 @@ function Tile({
 }
 
 // 시작점 패드 - 은은한 펄스
-function StartPad() {
+function StartPad({ reducedMotion = false }: { reducedMotion?: boolean }) {
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
   useFrame((state) => {
     if (matRef.current) {
-      matRef.current.emissiveIntensity = 0.2 + Math.abs(Math.sin(state.clock.elapsedTime * 1.6)) * 0.25;
+      matRef.current.emissiveIntensity = reducedMotion
+        ? 0.25
+        : 0.2 + Math.abs(Math.sin(state.clock.elapsedTime * 1.6)) * 0.25;
     }
   });
   return (
@@ -508,11 +550,11 @@ function StartPad() {
 }
 
 // 도착점 깃발 - 좌우로 살랑이는 애니메이션
-function GoalFlag() {
+function GoalFlag({ reducedMotion = false }: { reducedMotion?: boolean }) {
   const flagRef = useRef<THREE.Mesh>(null);
   useFrame((state) => {
     if (flagRef.current) {
-      flagRef.current.rotation.y = Math.sin(state.clock.elapsedTime * 2.4) * 0.35;
+      flagRef.current.rotation.y = reducedMotion ? 0 : Math.sin(state.clock.elapsedTime * 2.4) * 0.35;
     }
   });
   return (
@@ -544,12 +586,14 @@ function Pawn({
   color,
   fx,
   celebrating = false,
+  reducedMotion = false,
 }: {
   position: Position;
   via?: Position[] | null; // 경유지 - 지뢰 넉백(뒤로 폴짝 2번) 등 경로 이동
   color: string;
   fx?: BoardFx | null;
   celebrating?: boolean;
+  reducedMotion?: boolean;
 }) {
   const outerRef = useRef<THREE.Group>(null); // 위치 이동 담당
   const innerRef = useRef<THREE.Group>(null); // 점프/흔들림/회전/스케일 담당
@@ -562,12 +606,15 @@ function Pawn({
   const transitRef = useRef<{ phase: 'suck' | 'emerge'; progress: number } | null>(null);
 
   // 이동 경로: 경유지(via)를 거쳐 최종 칸까지 한 칸씩 폴짝폴짝
+  const viaKey = (via ?? []).map((point) => `${point.row},${point.col}`).join('|');
   const waypoints = useMemo(() => {
     return [...(via ?? []), position].map((p) => {
       const [x, , z] = cellToWorld(p);
       return new THREE.Vector3(x, 0, z);
     });
-  }, [position, via]);
+    // Coordinates, rather than Firebase object identity, define an animation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [position.row, position.col, viaKey]);
 
   const queueRef = useRef<THREE.Vector3[]>([]);
   const lastWaypointsRef = useRef<THREE.Vector3[] | null>(null);
@@ -592,11 +639,19 @@ function Pawn({
 
     const now = state.clock.elapsedTime;
 
+    if (reducedMotion && transitRef.current) {
+      transitRef.current = null;
+      wormholePendingRef.current = false;
+      inner.position.set(0, 0, 0);
+      inner.rotation.set(0, yawRef.current, 0);
+      inner.scale.set(1, 1, 1);
+    }
+
     // 이펙트 트리거 감지
     if (fx && fx.key !== lastFxKeyRef.current) {
       lastFxKeyRef.current = fx.key;
       if (fx.type === 'bump') bumpUntilRef.current = now + 0.5;
-      if (fx.type === 'wormhole') wormholePendingRef.current = true;
+      if (fx.type === 'wormhole' && !reducedMotion) wormholePendingRef.current = true;
     }
 
     // 다음 웨이포인트 (도착하면 큐에서 꺼내 다음 칸으로)
@@ -610,7 +665,7 @@ function Pawn({
     }
 
     // ---- 웜홀 트랜싯 (스파게티화) ----
-    const transit = transitRef.current;
+    const transit = reducedMotion ? null : transitRef.current;
     if (transit) {
       transit.progress = Math.min(1, transit.progress + delta / 0.5);
       const p = transit.progress;
@@ -642,7 +697,10 @@ function Pawn({
     }
 
     // 원거리 점프: 웜홀이면 스파게티화 트랜싯, 그 외(관전 전환 등)는 뿅 팝
-    if (dist > SPACING * 1.6) {
+    if (reducedMotion) {
+      outer.position.copy(target);
+      dist = 0;
+    } else if (dist > SPACING * 1.6) {
       if (wormholePendingRef.current) {
         wormholePendingRef.current = false;
         transitRef.current = { phase: 'suck', progress: 0 };
@@ -667,12 +725,12 @@ function Pawn({
     }
 
     // 칸 이동 호핑 (한 칸 = 한 번의 포물선 점프) + 대기 숨쉬기
-    const hop = Math.sin(Math.min(dist / SPACING, 1) * Math.PI) * 0.34;
-    const idle = dist < 0.02 ? Math.abs(Math.sin(now * 2.2)) * 0.03 : 0;
+    const hop = reducedMotion ? 0 : Math.sin(Math.min(dist / SPACING, 1) * Math.PI) * 0.34;
+    const idle = reducedMotion || dist >= 0.02 ? 0 : Math.abs(Math.sin(now * 2.2)) * 0.03;
     let y = hop + idle;
 
     // 골인 세리머니: 빙글빙글 + 폴짝폴짝
-    if (celebrating) {
+    if (celebrating && !reducedMotion) {
       inner.rotation.y += delta * 7;
       y += Math.abs(Math.sin(now * 6)) * 0.35;
     }
@@ -680,7 +738,7 @@ function Pawn({
     // 충돌 부들부들
     let jx = 0;
     let jz = 0;
-    if (now < bumpUntilRef.current) {
+    if (!reducedMotion && now < bumpUntilRef.current) {
       const k = (bumpUntilRef.current - now) / 0.5;
       jx = Math.sin(now * 55) * 0.06 * k;
       jz = Math.cos(now * 43) * 0.05 * k;
@@ -688,7 +746,7 @@ function Pawn({
 
     // 순간이동 팝 (작아졌다 커지며 등장)
     let scale = 1;
-    if (now < popUntilRef.current) {
+    if (!reducedMotion && now < popUntilRef.current) {
       const p = 1 - (popUntilRef.current - now) / 0.4;
       scale = 0.3 + 0.7 * (1 - Math.pow(1 - p, 2));
     }
@@ -697,13 +755,22 @@ function Pawn({
     inner.scale.setScalar(scale);
 
     // 숨쉬기 스쿼시
-    const breathe = dist < 0.02 && !celebrating ? 1 + Math.sin(now * 2.2) * 0.02 : 1;
+    const breathe = !reducedMotion && dist < 0.02 && !celebrating ? 1 + Math.sin(now * 2.2) * 0.02 : 1;
     inner.scale.y = scale * breathe;
   });
 
   return (
-    <group ref={outerRef} position={initialPosRef.current}>
+    <group name="maze-toon-actor-pawn" ref={outerRef} position={initialPosRef.current}>
       <group ref={innerRef}>
+        {/* 둥근 귀와 팔다리를 더한 작은 원목 동물 말 */}
+        <mesh position={[0.115, 0.79, 0]} scale={[0.72, 1.05, 0.72]} castShadow>
+          <sphereGeometry args={[0.09, 16, 12]} />
+          <meshStandardMaterial color={color} roughness={0.78} />
+        </mesh>
+        <mesh position={[-0.115, 0.79, 0]} scale={[0.72, 1.05, 0.72]} castShadow>
+          <sphereGeometry args={[0.09, 16, 12]} />
+          <meshStandardMaterial color={color} roughness={0.78} />
+        </mesh>
         {/* 몸통 */}
         <mesh position={[0, 0.33, 0]} castShadow>
           <cylinderGeometry args={[0.14, 0.24, 0.42, 24]} />
@@ -713,6 +780,32 @@ function Pawn({
         <mesh position={[0, 0.64, 0]} castShadow>
           <sphereGeometry args={[0.17, 24, 24]} />
           <meshStandardMaterial color={color} roughness={0.3} />
+        </mesh>
+        {/* 주둥이와 코 */}
+        <mesh position={[0, 0.61, 0.155]} scale={[1.25, 0.78, 0.58]}>
+          <sphereGeometry args={[0.085, 14, 10]} />
+          <meshStandardMaterial color="#ffe8cf" roughness={0.9} />
+        </mesh>
+        <mesh position={[0, 0.645, 0.204]}>
+          <sphereGeometry args={[0.025, 10, 8]} />
+          <meshStandardMaterial color="#59443e" roughness={0.85} />
+        </mesh>
+        {/* 짧은 팔과 발 */}
+        <mesh position={[0.2, 0.38, 0.025]} scale={[0.65, 1.25, 0.65]} rotation={[0, 0, -0.35]} castShadow>
+          <sphereGeometry args={[0.075, 12, 10]} />
+          <meshStandardMaterial color={color} roughness={0.8} />
+        </mesh>
+        <mesh position={[-0.2, 0.38, 0.025]} scale={[0.65, 1.25, 0.65]} rotation={[0, 0, 0.35]} castShadow>
+          <sphereGeometry args={[0.075, 12, 10]} />
+          <meshStandardMaterial color={color} roughness={0.8} />
+        </mesh>
+        <mesh position={[0.105, 0.115, 0.08]} scale={[1.1, 0.55, 1.35]} castShadow>
+          <sphereGeometry args={[0.09, 12, 10]} />
+          <meshStandardMaterial color="#ffe8cf" roughness={0.9} />
+        </mesh>
+        <mesh position={[-0.105, 0.115, 0.08]} scale={[1.1, 0.55, 1.35]} castShadow>
+          <sphereGeometry args={[0.09, 12, 10]} />
+          <meshStandardMaterial color="#ffe8cf" roughness={0.9} />
         </mesh>
         {/* 눈 (이동 방향을 바라보는 캐릭터 느낌) */}
         <mesh position={[0.06, 0.68, 0.13]}>
@@ -745,7 +838,7 @@ const BURST_DIRS: Array<[number, number, number]> = [
 ];
 
 // 지뢰 폭발: 팽창하는 화염구 + 사방으로 튀는 파편
-function MineExplosionFX({ at, delay = 0 }: { at: Position; delay?: number }) {
+function MineExplosionFX({ at, delay = 0, reducedMotion = false }: { at: Position; delay?: number; reducedMotion?: boolean }) {
   const [x, , z] = cellToWorld(at);
   const fireRef = useRef<THREE.Mesh>(null);
   const fireMatRef = useRef<THREE.MeshStandardMaterial>(null);
@@ -767,11 +860,12 @@ function MineExplosionFX({ at, delay = 0 }: { at: Position; delay?: number }) {
     const p = t / LIFE;
 
     if (fireRef.current && fireMatRef.current) {
-      fireRef.current.scale.setScalar(0.2 + p * 1.6);
+      fireRef.current.scale.setScalar(reducedMotion ? 0.85 : 0.2 + p * 1.6);
       fireMatRef.current.opacity = Math.max(0, 0.95 * (1 - p * 1.2));
     }
     debrisRefs.current.forEach((m, i) => {
       if (!m) return;
+      if (reducedMotion) return;
       const d = BURST_DIRS[i % BURST_DIRS.length];
       m.position.x += d[0] * delta * 1.6;
       m.position.z += d[2] * delta * 1.6;
@@ -800,7 +894,7 @@ function MineExplosionFX({ at, delay = 0 }: { at: Position; delay?: number }) {
 }
 
 // 웜홀 이동: 입구/출구에서 확장되며 사라지는 보라 고리
-function WormholeFX({ at, to, delay = 0 }: { at: Position; to?: Position; delay?: number }) {
+function WormholeFX({ at, to, delay = 0, reducedMotion = false }: { at: Position; to?: Position; delay?: number; reducedMotion?: boolean }) {
   const [ex, , ez] = cellToWorld(at);
   const exit = to ? cellToWorld(to) : null;
   const inRef = useRef<THREE.Mesh>(null);
@@ -821,15 +915,15 @@ function WormholeFX({ at, to, delay = 0 }: { at: Position; to?: Position; delay?
     // 입구 링: 말이 빨려들어가는 동안 확장
     const p1 = Math.max(0, Math.min(1, t / 0.6));
     if (inRef.current && inMat.current) {
-      inRef.current.scale.setScalar(0.4 + p1 * 2.2);
-      inRef.current.rotation.z += 0.15;
+      inRef.current.scale.setScalar(reducedMotion ? 1 : 0.4 + p1 * 2.2);
+      if (!reducedMotion) inRef.current.rotation.z += 0.15;
       inMat.current.opacity = t < 0 ? 0 : Math.max(0, 0.9 * (1 - p1));
     }
     // 출구 링: 말이 솟아나오는 시점(흡입 완료 후)에 확장
     const p2 = Math.max(0, Math.min(1, (t - 0.5) / 0.6));
     if (outRef.current && outMat.current) {
-      outRef.current.scale.setScalar(0.4 + p2 * 2.2);
-      outRef.current.rotation.z -= 0.15;
+      outRef.current.scale.setScalar(reducedMotion ? 1 : 0.4 + p2 * 2.2);
+      if (!reducedMotion) outRef.current.rotation.z -= 0.15;
       outMat.current.opacity = p2 > 0 ? Math.max(0, 0.9 * (1 - p2)) : 0;
     }
   });
@@ -853,7 +947,7 @@ function WormholeFX({ at, to, delay = 0 }: { at: Position; to?: Position; delay?
 }
 
 // 탐지기: 바닥을 훑고 지나가는 레이더 파동
-function RadarFX({ at }: { at: Position }) {
+function RadarFX({ at, reducedMotion = false }: { at: Position; reducedMotion?: boolean }) {
   const [x, , z] = cellToWorld(at);
   const ringRef = useRef<THREE.Mesh>(null);
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
@@ -870,7 +964,7 @@ function RadarFX({ at }: { at: Position }) {
     }
     const p = t / LIFE;
     if (ringRef.current && matRef.current) {
-      const r = 0.3 + p * SPACING * 2.2;
+      const r = reducedMotion ? SPACING : 0.3 + p * SPACING * 2.2;
       ringRef.current.scale.setScalar(r);
       matRef.current.opacity = Math.max(0, 0.8 * (1 - p));
     }
@@ -887,7 +981,7 @@ function RadarFX({ at }: { at: Position }) {
 }
 
 // 벽 충돌: 부딪힌 지점에서 튀는 스파크
-function BumpFX({ at, dir }: { at: Position; dir?: Direction }) {
+function BumpFX({ at, dir, reducedMotion = false }: { at: Position; dir?: Direction; reducedMotion?: boolean }) {
   const [x, , z] = cellToWorld(at);
   const offset = dir ? DIR_VECTOR[dir] : [0, 0];
   const px = x + offset[0] * (SPACING / 2);
@@ -906,6 +1000,10 @@ function BumpFX({ at, dir }: { at: Position; dir?: Direction }) {
     }
     sparkRefs.current.forEach((m, i) => {
       if (!m) return;
+      if (reducedMotion) {
+        m.scale.setScalar(Math.max(0.01, 1 - t / LIFE));
+        return;
+      }
       const d = BURST_DIRS[(i * 2) % BURST_DIRS.length];
       m.position.x += d[0] * delta * 0.9;
       m.position.z += d[2] * delta * 0.9;
@@ -930,7 +1028,7 @@ function BumpFX({ at, dir }: { at: Position; dir?: Direction }) {
 }
 
 // 골인: 도착점에서 터지는 축포
-function GoalFX({ at }: { at: Position }) {
+function GoalFX({ at, reducedMotion = false }: { at: Position; reducedMotion?: boolean }) {
   const [x, , z] = cellToWorld(at);
   const confettiRefs = useRef<Array<THREE.Mesh | null>>([]);
   const startRef = useRef<number | null>(null);
@@ -947,6 +1045,7 @@ function GoalFX({ at }: { at: Position }) {
     }
     confettiRefs.current.forEach((m, i) => {
       if (!m) return;
+      if (reducedMotion) return;
       const d = BURST_DIRS[i % BURST_DIRS.length];
       m.position.x += d[0] * delta * 1.1;
       m.position.z += d[2] * delta * 1.1;
@@ -970,22 +1069,29 @@ function GoalFX({ at }: { at: Position }) {
   );
 }
 
-function FxLayer({ fx }: { fx?: BoardFx | null }) {
+function FxLayer({ fx, reducedMotion = false }: { fx?: BoardFx | null; reducedMotion?: boolean }) {
   if (!fx || !fx.at) return null;
+  let effect: React.ReactNode = null;
   switch (fx.type) {
     case 'mine':
-      return <MineExplosionFX key={fx.key} at={fx.at} delay={fx.delay ?? 0} />;
+      effect = <MineExplosionFX key={fx.key} at={fx.at} delay={fx.delay ?? 0} reducedMotion={reducedMotion} />;
+      break;
     case 'wormhole':
-      return <WormholeFX key={fx.key} at={fx.at} to={fx.to} delay={fx.delay ?? 0} />;
+      effect = <WormholeFX key={fx.key} at={fx.at} to={fx.to} delay={fx.delay ?? 0} reducedMotion={reducedMotion} />;
+      break;
     case 'radar':
-      return <RadarFX key={fx.key} at={fx.at} />;
+      effect = <RadarFX key={fx.key} at={fx.at} reducedMotion={reducedMotion} />;
+      break;
     case 'bump':
-      return <BumpFX key={fx.key} at={fx.at} dir={fx.dir} />;
+      effect = <BumpFX key={fx.key} at={fx.at} dir={fx.dir} reducedMotion={reducedMotion} />;
+      break;
     case 'goal':
-      return <GoalFX key={fx.key} at={fx.at} />;
+      effect = <GoalFX key={fx.key} at={fx.at} reducedMotion={reducedMotion} />;
+      break;
     default:
       return null;
   }
+  return <group name="maze-toon-effect-action">{effect}</group>;
 }
 
 // ===== 맵 아이템 표시 =====
@@ -997,6 +1103,7 @@ function ItemVisuals({
   visible,
   setup = false,
   distinguishOneTimeWalls = false,
+  reducedMotion = false,
 }: {
   item: MapItem;
   consumed: boolean;
@@ -1005,17 +1112,18 @@ function ItemVisuals({
   visible: boolean;
   setup?: boolean;
   distinguishOneTimeWalls?: boolean;
+  reducedMotion?: boolean;
 }) {
   if (!visible) return null;
 
   if (item.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
     const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
     if (!seg) return null;
-    // 위장 벽: 어디서든 일반 벽과 픽셀 단위로 동일하게 - 제작 중엔 노란 벽,
-    // 종료 공개 시엔 공개 벽과 같은 색. 통과된 뒤엔 표시하지 않음
+    // 위장 벽: 상대 시점에서는 일반 벽과 같은 불투명 블록으로 렌더링한다.
+    // 첫 충돌로 소비된 뒤 통과 가능해지는 판정은 엔진이 담당한다.
     if (consumed) return distinguishOneTimeWalls ? <FakeWallBox seg={seg} consumed /> : null;
     if (setup || distinguishOneTimeWalls) return <FakeWallBox seg={seg} />;
-    return <WallBox seg={seg} color={COLORS.reveal} opacity={0.75} />;
+    return <WallBox seg={seg} color={COLORS.wall} />;
   }
 
   if (
@@ -1037,7 +1145,7 @@ function ItemVisuals({
   }
 
   if (item.type === 'mine' && item.position) {
-    return <MineVisual position={item.position} consumed={consumed} />;
+    return <MineVisual position={item.position} consumed={consumed} reducedMotion={reducedMotion} />;
   }
 
   if (item.type === 'smoke' && item.position) {
@@ -1045,19 +1153,21 @@ function ItemVisuals({
   }
 
   if (item.type === 'wormhole' && item.entrance && item.exit) {
-    return <WormholeVisual entrance={item.entrance} exit={item.exit} consumed={consumed} />;
+    return <WormholeVisual entrance={item.entrance} exit={item.exit} consumed={consumed} reducedMotion={reducedMotion} />;
   }
 
   return null;
 }
 
-function MineVisual({ position, consumed }: { position: Position; consumed: boolean }) {
+function MineVisual({ position, consumed, reducedMotion = false }: { position: Position; consumed: boolean; reducedMotion?: boolean }) {
   const lampRef = useRef<THREE.MeshStandardMaterial>(null);
   const [x, , z] = cellToWorld(position);
 
   useFrame((state) => {
     if (lampRef.current) {
-      lampRef.current.emissiveIntensity = 0.4 + Math.abs(Math.sin(state.clock.elapsedTime * 3)) * 1.2;
+      lampRef.current.emissiveIntensity = reducedMotion
+        ? 0.72
+        : 0.4 + Math.abs(Math.sin(state.clock.elapsedTime * 3)) * 1.2;
     }
   });
 
@@ -1110,7 +1220,7 @@ function SmokeVisual({ position, consumed }: { position: Position; consumed: boo
   );
 }
 
-function WormholeVisual({ entrance, exit, consumed }: { entrance: Position; exit: Position; consumed: boolean }) {
+function WormholeVisual({ entrance, exit, consumed, reducedMotion = false }: { entrance: Position; exit: Position; consumed: boolean; reducedMotion?: boolean }) {
   const entranceRef = useRef<THREE.Group>(null);
   const exitRef = useRef<THREE.Group>(null);
   const [ex, , ez] = cellToWorld(entrance);
@@ -1118,6 +1228,7 @@ function WormholeVisual({ entrance, exit, consumed }: { entrance: Position; exit
   const opacity = consumed ? 0.35 : 0.9;
 
   useFrame((_, delta) => {
+    if (reducedMotion) return;
     const speed = consumed ? 0.4 : 2.2;
     if (entranceRef.current) entranceRef.current.rotation.y += delta * speed;
     if (exitRef.current) exitRef.current.rotation.y -= delta * speed * 0.7;
@@ -1180,28 +1291,95 @@ interface GameBoard3DProps {
   compact?: boolean; // 동시 보드용 저비용 렌더링
 }
 
-function CompactBoardCamera({ enabled }: { enabled: boolean }) {
-  const { camera, size } = useThree();
+function FixedBoardCamera({ compact }: { compact: boolean }) {
+  const { camera, gl, size } = useThree();
 
   useEffect(() => {
-    if (!enabled || !(camera instanceof THREE.PerspectiveCamera)) return;
+    if (!(camera instanceof THREE.OrthographicCamera)) return;
 
-    // 2x2 타일에서는 시점을 더 높이고, 세로로 긴 모바일 칸은 거리를 늘린다.
-    const aspect = size.width / Math.max(size.height, 1);
-    const distanceScale = Math.min(2.4, Math.max(1, 0.92 / Math.max(aspect, 0.4)));
-    camera.position.set(
-      CENTER,
-      SPAN * 2.1 * distanceScale,
-      CENTER + SPAN * 1.1 * distanceScale
+    const boardWidth = BOARD_SIZE * SPACING - GAP + (compact ? 1.25 : 1.5);
+    const projectedBoardHeight = (BOARD_SIZE * SPACING - GAP) * 0.72 + (compact ? 1.45 : 1.7);
+    const usableWidth = size.width * (compact ? 0.9 : 0.88);
+    const usableHeight = size.height * (compact ? 0.88 : 0.84);
+    const nextZoom = Math.max(
+      8,
+      Math.min(usableWidth / boardWidth, usableHeight / projectedBoardHeight),
     );
+
+    camera.position.set(...ORTHO_CAMERA_POS);
     camera.lookAt(CENTER, 0, CENTER);
+    camera.zoom = nextZoom;
+    camera.near = 0.1;
+    camera.far = 80;
     camera.updateProjectionMatrix();
-  }, [camera, enabled, size.height, size.width]);
+    gl.domElement.dataset.mazeCamera = 'fixed-orthographic';
+    gl.domElement.dataset.mazeCameraZoom = nextZoom.toFixed(2);
+  }, [camera, compact, gl, size.height, size.width]);
+
+  useEffect(() => () => {
+    delete gl.domElement.dataset.mazeCamera;
+    delete gl.domElement.dataset.mazeCameraZoom;
+  }, [gl]);
 
   return null;
 }
 
-const BoardContents: React.FC<GameBoard3DProps> = ({
+function ResponsiveBoardQuality({ compact }: { compact: boolean }) {
+  const gl = useThree((state) => state.gl);
+  const size = useThree((state) => state.size);
+  const setDpr = useThree((state) => state.setDpr);
+
+  useEffect(() => {
+    const deviceDpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio;
+    const maximumDpr = compact ? 1.25 : size.width <= 700 ? 1.5 : 2;
+    const dpr = Math.max(1, Math.min(deviceDpr || 1, maximumDpr));
+    setDpr(dpr);
+    gl.domElement.dataset.mazeRenderDpr = dpr.toFixed(2);
+    gl.domElement.dataset.mazeRenderQuality = compact ? 'compact' : 'full';
+    return () => {
+      delete gl.domElement.dataset.mazeRenderDpr;
+      delete gl.domElement.dataset.mazeRenderQuality;
+    };
+  }, [compact, gl, setDpr, size.width]);
+
+  return null;
+}
+
+function MazeToonRenderController() {
+  const gl = useThree((state) => state.gl);
+  const scene = useThree((state) => state.scene);
+  const elapsed = useRef(0);
+
+  const reconcile = useCallback(() => {
+    const diagnostics = applyMazeToonRendering(scene);
+    gl.domElement.dataset.mazeToonVersion = MAZE_TOON_RENDER_CONTRACT.version;
+    gl.domElement.dataset.mazeToonMaterials = String(diagnostics.materialCount);
+    gl.domElement.dataset.mazeToonDrawCalls = String(gl.info.render.calls);
+  }, [gl, scene]);
+
+  useEffect(() => {
+    reconcile();
+    const initialFrame = window.requestAnimationFrame(reconcile);
+    return () => {
+      window.cancelAnimationFrame(initialFrame);
+      uninstallMazeToonRendering(scene);
+      delete gl.domElement.dataset.mazeToonVersion;
+      delete gl.domElement.dataset.mazeToonMaterials;
+      delete gl.domElement.dataset.mazeToonDrawCalls;
+    };
+  }, [gl, reconcile, scene]);
+
+  useFrame((_, delta) => {
+    elapsed.current += delta;
+    if (elapsed.current < 0.1) return;
+    elapsed.current = 0;
+    reconcile();
+  });
+
+  return null;
+}
+
+const BoardContents: React.FC<GameBoard3DProps & { reducedMotion?: boolean }> = ({
   gamePhase,
   startPosition,
   endPosition,
@@ -1226,6 +1404,7 @@ const BoardContents: React.FC<GameBoard3DProps> = ({
   fx = null,
   pawnVia = null,
   celebrating = false,
+  reducedMotion = false,
 }) => {
   const isSetup = gamePhase === GamePhase.SETUP;
 
@@ -1263,6 +1442,7 @@ const BoardContents: React.FC<GameBoard3DProps> = ({
           onCellClick={onCellClick}
           placeMode={placeMode}
           isPendingEntrance={!!pendingCell && isSamePosition(position, pendingCell)}
+          reducedMotion={reducedMotion}
         />
       );
     }
@@ -1271,16 +1451,27 @@ const BoardContents: React.FC<GameBoard3DProps> = ({
   const boardSpan = BOARD_SIZE * SPACING - GAP;
 
   return (
-    <group>
+    <group name="maze-toon-environment-board">
       {/* 보드 받침대 */}
-      <mesh position={[CENTER, -0.22, CENTER]} receiveShadow>
-        <boxGeometry args={[boardSpan + 0.7, 0.28, boardSpan + 0.7]} />
+      <RoundedBox
+        args={[boardSpan + 0.7, 0.28, boardSpan + 0.7]}
+        radius={0.12}
+        smoothness={4}
+        position={[CENTER, -0.22, CENTER]}
+        receiveShadow
+        castShadow
+      >
         <meshStandardMaterial color={COLORS.base} roughness={0.9} />
-      </mesh>
-      <mesh position={[CENTER, -0.4, CENTER]}>
-        <boxGeometry args={[boardSpan + 1.0, 0.12, boardSpan + 1.0]} />
+      </RoundedBox>
+      <RoundedBox
+        args={[boardSpan + 1.0, 0.12, boardSpan + 1.0]}
+        radius={0.05}
+        smoothness={3}
+        position={[CENTER, -0.4, CENTER]}
+        receiveShadow
+      >
         <meshStandardMaterial color={COLORS.baseSide} roughness={1} />
-      </mesh>
+      </RoundedBox>
 
       {/* 타일 */}
       {tiles}
@@ -1336,15 +1527,23 @@ const BoardContents: React.FC<GameBoard3DProps> = ({
           visible={isSetup || revealItems}
           setup={isSetup}
           distinguishOneTimeWalls={distinguishOneTimeWalls}
+          reducedMotion={reducedMotion}
         />
       ))}
 
       {/* 액션 이펙트 */}
-      <FxLayer fx={fx} />
+      <FxLayer fx={fx} reducedMotion={reducedMotion} />
 
       {/* 플레이어 캐릭터 */}
       {playerPosition && (
-        <Pawn position={playerPosition} via={pawnVia} color={pawnColor || COLORS.player} fx={fx} celebrating={celebrating} />
+        <Pawn
+          position={playerPosition}
+          via={pawnVia}
+          color={pawnColor || COLORS.player}
+          fx={fx}
+          celebrating={celebrating}
+          reducedMotion={reducedMotion}
+        />
       )}
     </group>
   );
@@ -1357,6 +1556,7 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
     fullscreen = false,
     compact = false,
   } = props;
+  const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     return () => {
@@ -1366,45 +1566,53 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
 
   return (
     <div
+      data-testid="game-board-3d"
+      data-maze-render-style="inked-toy"
+      data-reduced-motion={reducedMotion ? 'true' : 'false'}
+      style={{ background: BOARD_BACKGROUND }}
       className={
         fullscreen
-          ? 'absolute inset-0 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950'
-          : `w-full max-w-2xl mx-auto ${heightClassName} rounded-2xl overflow-hidden border border-slate-700/60 shadow-xl shadow-black/50 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950`
+          ? 'absolute inset-0'
+          : `w-full max-w-2xl mx-auto ${heightClassName} rounded-2xl overflow-hidden border border-amber-900/20 shadow-xl shadow-emerald-950/20`
       }
     >
       <Canvas
-        shadows={!compact}
-        dpr={compact ? [1, 1.25] : [1, 2]}
-        camera={{ position: TP_CAMERA_POS, fov: 42 }}
+        orthographic
+        shadows
+        dpr={[1, 2]}
+        camera={{ position: ORTHO_CAMERA_POS, zoom: 48, near: 0.1, far: 80 }}
+        gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
+        onCreated={({ gl }) => {
+          gl.outputColorSpace = THREE.SRGBColorSpace;
+          gl.toneMapping = THREE.ACESFilmicToneMapping;
+          gl.toneMappingExposure = 0.98;
+          gl.shadowMap.type = THREE.PCFShadowMap;
+        }}
       >
-        <CompactBoardCamera enabled={compact} />
+        <ResponsiveBoardQuality compact={compact} />
+        <FixedBoardCamera compact={compact} />
+        <MazeToonRenderController />
 
-        {/* 조명 */}
-        <ambientLight intensity={0.75} />
+        {/* 선명한 명암 밴드와 따뜻한 키라이트를 함께 쓰는 잉크드 토이 조명 */}
+        <ambientLight intensity={0.52} color="#fff0d0" />
         <directionalLight
           position={[CENTER + 6, 10, CENTER - 5]}
-          intensity={1.2}
-          castShadow={!compact}
-          shadow-mapSize-width={1024}
-          shadow-mapSize-height={1024}
+          color="#ffd18a"
+          intensity={1.45}
+          castShadow
+          shadow-mapSize-width={compact ? 512 : 1024}
+          shadow-mapSize-height={compact ? 512 : 1024}
           shadow-camera-left={-8}
           shadow-camera-right={8}
           shadow-camera-top={8}
           shadow-camera-bottom={-8}
+          shadow-bias={-0.00025}
+          shadow-radius={compact ? 2 : 4}
         />
-        <hemisphereLight args={['#bfdbfe', '#a8a29e', 0.4]} />
+        <directionalLight position={[CENTER - 5, 5, CENTER + 6]} color="#76bcc2" intensity={0.24} />
+        <hemisphereLight args={['#dff6ef', '#5a2d22', 0.32]} />
 
-        <BoardContents {...props} />
-
-        {!compact && (
-          <OrbitControls
-            makeDefault
-            target={[CENTER, 0, CENTER]}
-            enablePan={false}
-            enableZoom={false}
-            maxPolarAngle={Math.PI * 0.44}
-          />
-        )}
+        <BoardContents {...props} reducedMotion={reducedMotion} />
       </Canvas>
     </div>
   );

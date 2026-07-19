@@ -46,7 +46,7 @@ const roomLifecycle = loadTypeScript('src/lib/roomLifecycle.ts', {
 });
 
 const LAST_SEEN = 1_000_000;
-const GRACE = offlineTurn.OFFLINE_TURN_FORFEIT_GRACE_MS;
+const GRACE = offlineTurn.OFFLINE_TURN_SKIP_GRACE_MS;
 
 function player(id, overrides = {}) {
   return {
@@ -77,7 +77,7 @@ function playState(overrides = {}) {
   };
 }
 
-const beforeGrace = offlineTurn.getOfflineTurnForfeitCandidate(
+const beforeGrace = offlineTurn.getOfflineTurnSkipCandidate(
   playState(),
   'b',
   LAST_SEEN + GRACE - 1
@@ -85,56 +85,60 @@ const beforeGrace = offlineTurn.getOfflineTurnForfeitCandidate(
 assert.equal(beforeGrace.playerId, 'a');
 assert.equal(beforeGrace.delayMs, 1, 'temporary disconnect keeps its turn during the grace period');
 assert.equal(
-  offlineTurn.applyOfflineTurnForfeit(playState(), 'a', 'b', LAST_SEEN + GRACE - 1),
+  offlineTurn.applyOfflineTurnSkip(playState(), 'a', 'b', LAST_SEEN + GRACE - 1),
   null,
-  'a player cannot be forfeited before 45 seconds'
+  'a player turn cannot be skipped before 45 seconds'
 );
 
 const reconnected = playState();
 reconnected.players.a.isOnline = true;
 assert.equal(
-  offlineTurn.getOfflineTurnForfeitCandidate(reconnected, 'b', LAST_SEEN + GRACE),
+  offlineTurn.getOfflineTurnSkipCandidate(reconnected, 'b', LAST_SEEN + GRACE),
   null,
-  'reconnection cancels offline forfeiture'
+  'reconnection cancels the offline turn skip'
 );
 
 const disconnectedObserver = playState();
 disconnectedObserver.players.b.isOnline = false;
 assert.equal(
-  offlineTurn.getOfflineTurnForfeitCandidate(disconnectedObserver, 'b', LAST_SEEN + GRACE),
+  offlineTurn.getOfflineTurnSkipCandidate(disconnectedObserver, 'b', LAST_SEEN + GRACE),
   null,
   'an offline participant cannot recover another turn'
 );
 
-const recovered = offlineTurn.applyOfflineTurnForfeit(
+const recovered = offlineTurn.applyOfflineTurnSkip(
   playState(),
   'a',
   'b',
   LAST_SEEN + GRACE
 );
-assert.ok(recovered, 'eligible offline current player is forfeited');
-assert.equal(recovered.players.a.forfeited, true);
+assert.ok(recovered, 'eligible offline current player turn is skipped');
+assert.equal(recovered.players.a.forfeited, false, 'a turn skip never forfeits the runner');
+assert.deepEqual(recovered.players.a.position, { row: 0, col: 0 });
+assert.equal(recovered.players.a.moves, 0, 'a turn skip never fabricates a move');
 assert.equal(recovered.currentTurn, 'b', 'turn advances using the canonical turn order');
-assert.match(recovered.turnMessage, /45초간/);
+assert.equal(recovered.turnNumber, 1);
+assert.match(recovered.turnMessage, /턴을 넘겼습니다/);
 assert.equal(
-  offlineTurn.applyOfflineTurnForfeit(playState(), 'c', 'b', LAST_SEEN + GRACE),
+  offlineTurn.applyOfflineTurnSkip(playState(), 'c', 'b', LAST_SEEN + GRACE),
   null,
-  'a stale timer cannot forfeit a different current player'
+  'a stale timer cannot skip a different current player'
 );
 
 const finalRecoveryInput = playState();
 finalRecoveryInput.players.b = player('b', { finished: true, finishMoves: 8 });
 finalRecoveryInput.players.c = player('c', { forfeited: true });
-const finalRecovery = offlineTurn.applyOfflineTurnForfeit(
+const finalRecovery = offlineTurn.applyOfflineTurnSkip(
   finalRecoveryInput,
   'a',
   'b',
   LAST_SEEN + GRACE
 );
-const settled = gameTurn.settleCompletedGameState(finalRecovery);
-assert.equal(settled.phase, types.GamePhase.END, 'offline recovery settles END when everyone is done');
-assert.equal(settled.winner, 'b');
-assert.equal(settled.currentTurn, null);
+assert.equal(finalRecovery, null, 'the final unfinished runner must reconnect and finish');
+const unsettled = gameTurn.settleCompletedGameState(finalRecoveryInput);
+assert.equal(unsettled.phase, types.GamePhase.PLAY, 'disconnect cannot settle the match');
+assert.equal(unsettled.winner ?? null, null, 'disconnect cannot manufacture a winner');
+assert.equal(unsettled.currentTurn, 'a');
 
 assert.equal(
   roomLifecycle.shouldPreserveGamePlayerOnLeave(types.GamePhase.END),
@@ -142,6 +146,21 @@ assert.equal(
   'END player records remain available until idempotent stats settlement completes'
 );
 assert.equal(roomLifecycle.shouldPreserveGamePlayerOnLeave(types.GamePhase.PLAY), true);
+assert.equal(
+  roomLifecycle.canLeaveRoomWithoutForfeit(types.GamePhase.PLAY, true),
+  false,
+  'a PLAY participant cannot leave through the legacy API either'
+);
+assert.equal(
+  roomLifecycle.canLeaveRoomWithoutForfeit(types.GamePhase.PLAY, false),
+  true,
+  'a PLAY spectator can leave without changing the match'
+);
+assert.equal(
+  roomLifecycle.canLeaveRoomWithoutForfeit(types.GamePhase.END, true),
+  true,
+  'a participant may leave after every runner has finished'
+);
 assert.equal(
   roomLifecycle.shouldPreserveGamePlayerOnLeave(types.GamePhase.SETUP),
   false,
@@ -163,4 +182,4 @@ assert.equal(
   'a participant who left is excluded from the restart roster'
 );
 
-console.log('OFFLINE TURN: 45s grace, reconnect cancellation, atomic turn advance, END settlement, and record retention passed');
+console.log('OFFLINE TURN: 45s grace, reconnect cancellation, non-forfeit turn skip, mandatory finish, and record retention passed');

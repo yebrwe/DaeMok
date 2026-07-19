@@ -6,18 +6,20 @@ import { CellType, CollisionWall, Direction, GamePhase, ItemType, MapItem, Obsta
 import { BOARD_SIZE, ITEM_LABELS, isSamePosition, isSameWallSegment, isWallItemType } from '@/lib/gameUtils';
 
 const ITEM_WALL_STYLES: Record<WallItemType, string> = {
-  oneTimeWall: 'bg-cyan-400 ring-cyan-100',
-  steelWall: 'bg-zinc-300 ring-zinc-50',
-  fireWall: 'bg-red-500 ring-orange-200',
-  poisonWall: 'bg-lime-500 ring-lime-100',
-  iceWall: 'bg-cyan-200 ring-sky-50',
-  windWall: 'bg-sky-500 ring-white',
+  oneTimeWall: 'bg-cyan-500 ring-cyan-100',
+  steelWall: 'bg-zinc-600 ring-zinc-100',
+  fireWall: 'bg-orange-600 ring-yellow-200',
+  poisonWall: 'bg-lime-600 ring-lime-100',
+  iceWall: 'bg-sky-400 ring-white',
+  windWall: 'bg-blue-600 ring-cyan-100',
   collapseWall: 'bg-stone-500 ring-stone-200',
-  phaseWall: 'bg-violet-500 ring-fuchsia-200',
-  mirrorWall: 'bg-slate-50 ring-cyan-200',
-  thornWall: 'bg-rose-600 ring-rose-200',
-  crystalWall: 'bg-fuchsia-500 ring-pink-100',
+  phaseWall: 'bg-violet-700 ring-fuchsia-200',
+  mirrorWall: 'bg-slate-100 ring-cyan-500',
+  thornWall: 'bg-rose-700 ring-rose-100',
+  crystalWall: 'bg-fuchsia-700 ring-pink-100',
 };
+
+const NORMAL_WALL_STYLE = 'bg-[#263242] ring-1 ring-[#f4c64f] shadow-sm shadow-slate-950/60';
 
 interface GameBoardProps {
   gamePhase: GamePhase;
@@ -42,6 +44,7 @@ interface GameBoardProps {
   validTargetCells?: Position[]; // 아이템 배치 시 안전하게 선택 가능한 셀
   revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들 (일반 벽처럼 노란색으로 표시)
   placeMode?: 'wall' | ItemType;
+  compact?: boolean; // 좁은 편집 화면에서 보드 전체가 팔레트 위에 보이도록 최대 셀 크기 제한
 }
 
 const GameBoard: React.FC<GameBoardProps> = ({
@@ -67,6 +70,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
   validTargetCells = [],
   revealedWalls = [],
   placeMode = 'wall',
+  compact = false,
 }) => {
   // 탐지기로 밝혀진 벽인지 (1회성 벽도 일반 벽으로 위장되어 포함됨)
   const isRadarRevealed = (position: Position, direction: Direction): boolean =>
@@ -108,7 +112,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
           data-wall-state="armed"
           className="absolute inset-0 flex items-center justify-center"
         >
-          <div className={horizontal ? 'h-1/2 w-3/4 bg-amber-400' : 'h-3/4 w-1/2 bg-amber-400'} />
+          <div className={`${horizontal ? 'h-1/2 w-3/4' : 'h-3/4 w-1/2'} ${NORMAL_WALL_STYLE}`} />
         </div>
       );
     }
@@ -288,9 +292,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
       placeMode === 'wormhole'
     );
     
+    const cellSizeClasses = compact
+      ? 'h-10 w-10 sm:h-[41px] sm:w-[41px]'
+      : 'w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14';
     const cellClasses = `
-      relative w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14
-      ${cellType === 'empty' || cellType === 'player' ? 'bg-white' : ''}
+      relative ${cellSizeClasses}
+      ${cellType === 'empty' || cellType === 'player' ? 'bg-[#fffdf7] shadow-[inset_0_0_0_1px_#d7dee8]' : ''}
       ${isValidTarget ? 'ring-2 ring-inset ring-emerald-400 bg-emerald-50' : ''}
       ${isInteractive ? 'cell-hit-target cursor-pointer' : ''}
       touch-action-none transition-colors duration-300 ease-in-out
@@ -481,12 +488,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
           <>
           {isHovered && !isBlocked && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-3/4 h-1/2 bg-yellow-300" />
+              <div className="h-1/2 w-3/4 rounded-sm bg-amber-400 ring-2 ring-white" />
             </div>
           )}
           {isBlocked && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-3/4 h-1/2 bg-yellow-500" />
+              <div className={`h-1/2 w-3/4 rounded-sm ${NORMAL_WALL_STYLE}`} />
             </div>
           )}
           </>
@@ -494,13 +501,13 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 플레이 단계: 충돌한 벽만 빨간색으로 표시 */}
         {gamePhase === GamePhase.PLAY && isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-3/4 h-1/2 bg-red-500" />
+            <div className="h-1/2 w-3/4 rounded-sm bg-red-600 ring-2 ring-red-200" />
           </div>
         )}
         {/* 게임 종료: 아직 충돌하지 않은 벽 공개 */}
         {gamePhase === GamePhase.PLAY && revealObstacles && isBlocked && !isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-3/4 h-1/2 bg-amber-400" />
+            <div className={`h-1/2 w-3/4 rounded-sm ${NORMAL_WALL_STYLE}`} />
           </div>
         )}
         {renderItemWall(position, direction, 'horizontal')}
@@ -508,7 +515,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
           isRadarRevealed(position, direction) && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-3/4 h-1/2 bg-yellow-500" />
+            <div className={`h-1/2 w-3/4 rounded-sm ${NORMAL_WALL_STYLE}`} />
           </div>
         )}
       </div>
@@ -602,12 +609,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
           <>
           {isHovered && !isBlocked && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-1/2 h-3/4 bg-yellow-300" />
+              <div className="h-3/4 w-1/2 rounded-sm bg-amber-400 ring-2 ring-white" />
             </div>
           )}
           {isBlocked && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-1/2 h-3/4 bg-yellow-500" />
+              <div className={`h-3/4 w-1/2 rounded-sm ${NORMAL_WALL_STYLE}`} />
             </div>
           )}
           </>
@@ -615,13 +622,13 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 플레이 단계: 충돌한 벽만 빨간색으로 표시 */}
         {gamePhase === GamePhase.PLAY && isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-1/2 h-3/4 bg-red-500" />
+            <div className="h-3/4 w-1/2 rounded-sm bg-red-600 ring-2 ring-red-200" />
           </div>
         )}
         {/* 게임 종료: 아직 충돌하지 않은 벽 공개 */}
         {gamePhase === GamePhase.PLAY && revealObstacles && isBlocked && !isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-1/2 h-3/4 bg-amber-400" />
+            <div className={`h-3/4 w-1/2 rounded-sm ${NORMAL_WALL_STYLE}`} />
           </div>
         )}
         {renderItemWall(position, direction, 'vertical')}
@@ -629,7 +636,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
           isRadarRevealed(position, direction) && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-1/2 h-3/4 bg-yellow-500" />
+            <div className={`h-3/4 w-1/2 rounded-sm ${NORMAL_WALL_STYLE}`} />
           </div>
         )}
       </div>
@@ -681,7 +688,8 @@ const GameBoard: React.FC<GameBoardProps> = ({
       }}
     >
       <div
-        className="grid gap-0 border-4 border-slate-600 bg-slate-300 p-1 sm:p-2 rounded-xl shadow-xl shadow-black/40 touch-action-none overflow-auto mx-auto"
+        data-maze-board-grid
+        className={`mx-auto grid gap-0 overflow-auto rounded-xl border-4 border-slate-950 bg-slate-600 p-1 shadow-[0_5px_0_#0f172a,0_14px_28px_rgb(0_0_0/0.38)] touch-action-none ${compact ? '' : 'sm:p-2'}`}
         style={{
           gridTemplateColumns: `repeat(${BOARD_SIZE * 2 - 1}, auto)`,
           gridTemplateRows: `repeat(${BOARD_SIZE * 2 - 1}, auto)`

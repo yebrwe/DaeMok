@@ -4,10 +4,8 @@ import React from 'react';
 import { CloudFog, Eye } from 'lucide-react';
 import { CollisionWall, GameMap, GamePhase, Obstacle, Position } from '@/types/game';
 import { getMapItems, getVisibleCollisionWalls } from '@/lib/gameUtils';
-import GameBoard from './GameBoard';
 import GameBoard3D, { BoardFx } from './three/GameBoard3D';
-
-export type LiveBoardViewMode = 'third' | '2d';
+import type { LiveBoardVisualAction } from '@/lib/liveBoardVisuals';
 
 export interface LiveBoardEntry {
   runnerId: string;
@@ -29,6 +27,8 @@ export interface LiveBoardEntry {
   revealedWalls?: Obstacle[];
   fx?: BoardFx | null;
   via?: Position[] | null;
+  visualAction?: LiveBoardVisualAction;
+  visualSequence?: number;
   celebrating?: boolean;
   revealObstacles?: boolean;
   revealMapSecrets?: boolean;
@@ -41,95 +41,27 @@ interface LiveBoardGridProps {
   boards: LiveBoardEntry[];
   currentTurnId?: string | null;
   myPlayerId?: string | null;
-  viewMode?: LiveBoardViewMode;
   gameEnded?: boolean;
   className?: string;
   emptyState?: React.ReactNode;
-  renderOverlay?: (board: LiveBoardEntry) => React.ReactNode;
 }
 
 function boardStatus(board: LiveBoardEntry, isCurrentTurn: boolean, isMine: boolean): string {
-  if (board.forfeited) return '포기';
+  if (board.forfeited) return '이전 기록';
   if (board.finished) return `${board.finishMoves ?? board.moves}턴 완주`;
   if (isCurrentTurn) return isMine ? '내 턴' : '현재 턴';
   return '대기';
 }
 
-const Responsive2DBoard: React.FC<React.PropsWithChildren> = ({ children }) => {
-  const viewportRef = React.useRef<HTMLDivElement>(null);
-  const surfaceRef = React.useRef<HTMLDivElement>(null);
-  const [scale, setScale] = React.useState(1);
-
-  const fitBoard = React.useCallback(() => {
-    const viewport = viewportRef.current;
-    const surface = surfaceRef.current;
-    if (!viewport || !surface) return;
-
-    const styles = window.getComputedStyle(viewport);
-    const availableWidth = viewport.clientWidth
-      - Number.parseFloat(styles.paddingLeft)
-      - Number.parseFloat(styles.paddingRight);
-    const availableHeight = viewport.clientHeight
-      - Number.parseFloat(styles.paddingTop)
-      - Number.parseFloat(styles.paddingBottom);
-    const naturalWidth = surface.offsetWidth;
-    const naturalHeight = surface.offsetHeight;
-    if (availableWidth <= 0 || availableHeight <= 0 || naturalWidth <= 0 || naturalHeight <= 0) return;
-
-    // Round down so subpixel layout cannot crop the final border on either axis.
-    const nextScale = Math.max(
-      0.1,
-      Math.floor(Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight) * 1000) / 1000
-    );
-    setScale((current) => Math.abs(current - nextScale) < 0.001 ? current : nextScale);
-  }, []);
-
-  React.useLayoutEffect(() => {
-    fitBoard();
-    const animationFrame = window.requestAnimationFrame(fitBoard);
-    const resizeObserver = new ResizeObserver(fitBoard);
-    if (viewportRef.current) resizeObserver.observe(viewportRef.current);
-    if (surfaceRef.current) resizeObserver.observe(surfaceRef.current);
-    window.addEventListener('resize', fitBoard);
-
-    return () => {
-      window.cancelAnimationFrame(animationFrame);
-      resizeObserver.disconnect();
-      window.removeEventListener('resize', fitBoard);
-    };
-  }, [fitBoard]);
-
-  return (
-    <div
-      ref={viewportRef}
-      className="absolute inset-x-0 bottom-0 top-7 flex min-h-0 min-w-0 items-center justify-center overflow-hidden bg-slate-900 p-1"
-      data-testid="board-2d-viewport"
-    >
-      <div
-        ref={surfaceRef}
-        className="inline-flex shrink-0 origin-center"
-        data-testid="board-2d-surface"
-        data-board-scale={scale.toFixed(3)}
-        style={{ transform: `scale(${scale})` }}
-      >
-        {children}
-      </div>
-    </div>
-  );
-};
-
 const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
   boards,
   currentTurnId = null,
   myPlayerId = null,
-  viewMode = 'third',
   gameEnded = false,
   className = '',
   emptyState = null,
-  renderOverlay,
 }) => {
   const visibleBoards = boards.slice(0, 4);
-
   if (visibleBoards.length === 0) {
     return <div className={`flex h-full w-full items-center justify-center ${className}`}>{emptyState}</div>;
   }
@@ -137,94 +69,81 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
   const layoutClass = visibleBoards.length === 1
     ? 'grid-cols-1 grid-rows-1'
     : visibleBoards.length === 2
-      ? 'grid-cols-1 grid-rows-2 sm:grid-cols-2 sm:grid-rows-1'
+      ? 'grid-cols-2 grid-rows-1'
       : 'grid-cols-2 grid-rows-2';
   return (
-    <div className={`grid h-full w-full min-h-0 min-w-0 gap-1.5 sm:gap-2 ${layoutClass} ${className}`}>
-      {visibleBoards.map((board) => {
-        const isCurrentTurn = !gameEnded && currentTurnId === board.runnerId;
-        const isMine = myPlayerId === board.runnerId;
-        const isMapOwner = !!myPlayerId && myPlayerId === board.mapOwnerId && myPlayerId !== board.runnerId;
-        const showMapSecrets = gameEnded || isMapOwner || !!board.revealMapSecrets;
-        const revealObstacles = gameEnded || isMapOwner || !!board.revealObstacles;
-        const visibleItems = showMapSecrets ? getMapItems(board.map) : [];
-        const visibleCollisions = getVisibleCollisionWalls(
-          board.collisions || [],
-          board.map,
-          board.itemsConsumed || {}
-        );
-        const status = boardStatus(board, isCurrentTurn, isMine);
+    <div
+      className={`flex h-full w-full min-h-0 min-w-0 flex-col gap-1.5 sm:gap-2 ${className}`}
+      data-mounted-board-count={visibleBoards.length}
+    >
+      <div className={`grid h-full w-full min-h-0 min-w-0 flex-1 gap-1.5 sm:gap-2 ${layoutClass}`}>
+        {visibleBoards.map((board) => {
+          const isCurrentTurn = !gameEnded && currentTurnId === board.runnerId;
+          const isMine = myPlayerId === board.runnerId;
+          const isMapOwner = !!myPlayerId && myPlayerId === board.mapOwnerId && myPlayerId !== board.runnerId;
+          const showMapSecrets = gameEnded || isMapOwner || !!board.revealMapSecrets;
+          const revealObstacles = gameEnded || isMapOwner || !!board.revealObstacles;
+          const visibleItems = showMapSecrets ? getMapItems(board.map) : [];
+          const visibleCollisions = getVisibleCollisionWalls(
+            board.collisions || [],
+            board.map,
+            board.itemsConsumed || {}
+          );
+          const status = boardStatus(board, isCurrentTurn, isMine);
 
-        return (
-          <section
-            key={board.runnerId}
+          return (
+            <section
+              key={board.runnerId}
+            id={`maze-board-panel-${board.runnerId}`}
             data-player-board={board.runnerId}
             data-player-kind={board.runnerKind}
             data-player-position={`${board.position.row},${board.position.col}`}
             data-current-turn={isCurrentTurn ? 'true' : undefined}
             data-my-player={isMine ? 'true' : undefined}
             data-map-owner-preview={isMapOwner ? 'true' : undefined}
+            data-map-secrets-visible={showMapSecrets ? 'true' : 'false'}
+            data-obstacles-revealed={revealObstacles ? 'true' : 'false'}
+            data-visual-action={board.visualAction}
+            data-visual-sequence={board.visualSequence}
+            data-visual-fx={board.fx?.type}
             data-vision-effect={board.smokeAffected ? 'smoke' : undefined}
             data-vision-obscured={board.visionObscured ? 'true' : undefined}
             aria-label={`${board.runnerName} 게임 보드`}
-            className={`relative min-h-0 min-w-0 overflow-hidden rounded-lg border bg-slate-950 ${
+            className={`relative min-h-0 min-w-0 touch-none overflow-hidden rounded-2xl border-2 bg-[#eff7f2] ${
               isCurrentTurn
-                ? 'border-amber-300 ring-2 ring-amber-300/40'
+                ? 'border-[#f4c64f] ring-2 ring-[#f4c64f]/35'
                 : isMine
-                  ? 'border-blue-400/80 ring-1 ring-blue-400/30'
-                  : 'border-slate-700/80'
+                  ? 'border-[#69cdb7] ring-1 ring-[#69cdb7]/30'
+                  : 'border-[#e5cfad]'
             }`}
           >
-            {viewMode === 'third' ? (
-              <GameBoard3D
-                gamePhase={GamePhase.PLAY}
-                startPosition={board.map.startPosition}
-                endPosition={board.map.endPosition}
-                playerPosition={board.position}
-                obstacles={board.map.obstacles}
-                collisionWalls={visibleCollisions}
-                readOnly
-                revealObstacles={revealObstacles}
-                revealItems={showMapSecrets}
-                distinguishOneTimeWalls={showMapSecrets}
-                pawnColor={board.pawnColor}
-                items={visibleItems}
-                itemsConsumed={board.itemsConsumed || {}}
-                itemActiveWalls={board.itemActiveWalls || {}}
-                itemPhaseOpen={board.itemPhaseOpen || {}}
-                revealedWalls={board.revealedWalls || []}
-                fx={board.fx || null}
-                pawnVia={board.via || null}
-                celebrating={!!board.celebrating}
-                fullscreen
-                compact
-              />
-            ) : (
-              <Responsive2DBoard>
-                <GameBoard
-                  gamePhase={GamePhase.PLAY}
-                  startPosition={board.map.startPosition}
-                  endPosition={board.map.endPosition}
-                  playerPosition={board.position}
-                  obstacles={board.map.obstacles}
-                  collisionWalls={visibleCollisions}
-                  readOnly
-                  playerPhotoURL={board.runnerPhotoURL || undefined}
-                  revealObstacles={revealObstacles}
-                  revealItems={showMapSecrets}
-                  distinguishOneTimeWalls={showMapSecrets}
-                  items={visibleItems}
-                  itemsConsumed={board.itemsConsumed || {}}
-                  itemActiveWalls={board.itemActiveWalls || {}}
-                  itemPhaseOpen={board.itemPhaseOpen || {}}
-                  revealedWalls={board.revealedWalls || []}
-                />
-              </Responsive2DBoard>
-            )}
+            <GameBoard3D
+              gamePhase={GamePhase.PLAY}
+              startPosition={board.map.startPosition}
+              endPosition={board.map.endPosition}
+              playerPosition={board.position}
+              obstacles={board.map.obstacles}
+              collisionWalls={visibleCollisions}
+              readOnly
+              revealObstacles={revealObstacles}
+              revealItems={showMapSecrets}
+              distinguishOneTimeWalls={showMapSecrets}
+              pawnColor={board.pawnColor}
+              items={visibleItems}
+              itemsConsumed={board.itemsConsumed || {}}
+              itemActiveWalls={board.itemActiveWalls || {}}
+              itemPhaseOpen={board.itemPhaseOpen || {}}
+              revealedWalls={board.revealedWalls || []}
+              fx={board.fx || null}
+              pawnVia={board.via || null}
+              celebrating={!!board.celebrating}
+              fullscreen
+              compact
+            />
 
             {board.visionObscured && (
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 top-7 z-[5] flex flex-col items-center justify-center bg-slate-950 px-4 text-center"
+                className="pointer-events-none absolute inset-x-0 bottom-0 top-7 z-[5] flex flex-col items-center justify-center bg-[#5d5146]/90 px-4 text-center"
                 data-testid="board-obscure-overlay"
               >
                 <CloudFog size={34} className="mb-2 text-slate-300" aria-hidden="true" />
@@ -236,59 +155,55 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
               </div>
             )}
 
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-w-0 items-center justify-between gap-1 bg-slate-950/85 px-2 py-1 backdrop-blur-sm">
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-w-0 items-center justify-between gap-1 border-b border-[#e5cfad] bg-[#fffaf0]/90 px-2 py-1 backdrop-blur-sm">
               <div className="flex min-w-0 items-center gap-1.5">
                 <span
                   aria-hidden="true"
                   className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[8px] font-black text-white ${
-                    isMine ? 'bg-blue-500' : 'bg-red-500'
+                    isMine ? 'bg-[#4e9ad8]' : 'bg-[#f08b78]'
                   }`}
                 >
                   {(board.runnerName.trim()[0] || '?').toUpperCase()}
                 </span>
-                <span className={`truncate text-[10px] font-bold sm:text-[11px] ${isMine ? 'text-blue-200' : 'text-slate-100'}`}>
+                <span className="truncate text-[10px] font-bold text-[#3d352d] sm:text-[11px]">
                   {board.runnerName}
                 </span>
                 {isMapOwner && (
-                  <span title="내 맵 제작자 시점" aria-label="내 맵 제작자 시점" className="text-cyan-300">
+                  <span title="내 맵 제작자 시점" aria-label="내 맵 제작자 시점" className="text-[#1f708b]">
                     <Eye size={12} aria-hidden="true" />
                   </span>
                 )}
                 {board.mapOwnerName && (
-                  <span className="hidden truncate text-[9px] text-slate-500 sm:inline">
+                  <span className="hidden truncate text-[9px] text-[#74685c] sm:inline">
                     {board.mapOwnerName} 맵
                   </span>
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 {board.smokeAffected && (
-                  <span title="연막 영향" aria-label="연막 영향" className="text-slate-300">
+                  <span title="연막 영향" aria-label="연막 영향" className="text-[#74685c]">
                     <CloudFog size={12} aria-hidden="true" />
                   </span>
                 )}
-                <span className="text-[9px] text-slate-400">턴: {board.moves}</span>
+                <span className="text-[9px] text-[#74685c]">턴: {board.moves}</span>
                 <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
                   isCurrentTurn
-                    ? 'bg-amber-400 text-slate-950'
+                    ? 'bg-[#f4c64f] text-[#3d352d]'
                     : board.forfeited
-                      ? 'bg-red-500/20 text-red-300'
+                      ? 'bg-[#f2e4cf] text-[#74685c]'
                       : board.finished
-                        ? 'bg-green-500/20 text-green-300'
-                        : 'bg-slate-800 text-slate-400'
+                        ? 'bg-[#e8f5df] text-[#315f2d]'
+                        : 'bg-[#f2e4cf] text-[#74685c]'
                 }`}>
                   {status}
                 </span>
               </div>
             </div>
 
-            {renderOverlay && (
-              <div className="pointer-events-none absolute inset-0 z-20">
-                {renderOverlay(board)}
-              </div>
-            )}
-          </section>
-        );
-      })}
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 };

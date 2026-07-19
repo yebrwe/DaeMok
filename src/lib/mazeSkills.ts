@@ -354,8 +354,8 @@ function canonicalWallDescriptor(segmentKey: string, boardSize: number): {
 
 function consumedWallSetHas(consumed: MazeConsumedWallIds | undefined, id: string): boolean {
   if (!consumed) return false;
-  if (consumed instanceof Set) return consumed.has(id);
-  return !!consumed[id];
+  if ('has' in consumed && typeof consumed.has === 'function') return consumed.has(id);
+  return !!(consumed as Readonly<Record<string, boolean>>)[id];
 }
 
 export function isMazeWallActive(

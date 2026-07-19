@@ -4,26 +4,24 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Flag, LogOut, Swords, Target, Trophy } from 'lucide-react';
+import { Flag, LogOut, Target, Trophy } from 'lucide-react';
 import RoomList from '@/components/RoomList';
 import CreateRoomForm from '@/components/CreateRoomForm';
+import MazeShell from '@/components/maze/MazeShell';
 import { useAuth } from '@/hooks/useAuth';
 import { restoreRoomSession, signOutUser, cleanupGhostRooms } from '@/lib/firebase';
-import {
-  MAZE_INITIAL_RATING,
-  subscribeMazeRankings,
-  subscribeOwnMazeRanking,
-  type MazeRankingEntry,
-} from '@/lib/mazeRankingFirebase';
+import type { MazeAuthorityRankingView } from '@/lib/mazeAuthorityClient';
+import { useMazeAuthorityMemberRooms, useMazeAuthorityRankings } from '@/hooks/useMazeAuthority';
 import styles from './page.module.css';
 
 const RANKING_LOOKUP_LIMIT = 500;
+const MAZE_INITIAL_RATING = 1_000;
 
 interface MazeRankingPanelProps {
   userId: string;
 }
 
-function RankingAvatar({ entry }: { entry: MazeRankingEntry }) {
+function RankingAvatar({ entry }: { entry: MazeAuthorityRankingView }) {
   if (entry.photoURL) {
     return (
       <Image
@@ -44,26 +42,10 @@ function RankingAvatar({ entry }: { entry: MazeRankingEntry }) {
 }
 
 function MazeRankingPanel({ userId }: MazeRankingPanelProps) {
-  const [rankings, setRankings] = useState<MazeRankingEntry[]>([]);
-  const [ownRanking, setOwnRanking] = useState<MazeRankingEntry | null>(null);
-  const [rankingReady, setRankingReady] = useState(false);
-
-  useEffect(() => {
-    setRankingReady(false);
-    const stopRankings = subscribeMazeRankings((entries) => {
-      setRankings(entries);
-      setRankingReady(true);
-    }, RANKING_LOOKUP_LIMIT);
-    const stopOwnRanking = subscribeOwnMazeRanking(userId, setOwnRanking);
-
-    return () => {
-      stopRankings();
-      stopOwnRanking();
-    };
-  }, [userId]);
+  const { entries: rankings, isLoading, error } = useMazeAuthorityRankings();
 
   const rankingIndex = rankings.findIndex((entry) => entry.uid === userId);
-  const displayedOwnRanking = ownRanking ?? (rankingIndex >= 0 ? rankings[rankingIndex] : null);
+  const displayedOwnRanking = rankingIndex >= 0 ? rankings[rankingIndex] : null;
   const topTen = rankings.slice(0, 10);
   const rankLabel = displayedOwnRanking
     ? rankingIndex >= 0
@@ -78,7 +60,7 @@ function MazeRankingPanel({ userId }: MazeRankingPanelProps) {
           <Trophy size={17} strokeWidth={2.2} aria-hidden="true" />
           <h2 id="maze-ranking-title">미로 랭킹</h2>
         </div>
-        <span className={styles.betaBadge}>베타 랭킹</span>
+        <span className={styles.betaBadge}>서버 검증</span>
       </div>
 
       <div className={styles.ownRankingBand}>
@@ -98,17 +80,19 @@ function MazeRankingPanel({ userId }: MazeRankingPanelProps) {
         </div>
       </div>
 
-      {!rankingReady ? (
+      {isLoading ? (
         <div className={styles.rankingStatus} role="status">
           <span className={styles.smallSpinner} aria-hidden="true" />
           랭킹 불러오는 중
         </div>
+      ) : error ? (
+        <div className={styles.rankingStatus} role="alert">{error}</div>
       ) : topTen.length === 0 ? (
-        <div className={styles.rankingStatus}>아직 기록된 대전이 없습니다.</div>
+        <div className={styles.rankingStatus}>Authority 경기 기록을 기다리고 있습니다.</div>
       ) : (
         <div className={styles.rankingTableScroll}>
           <table className={styles.rankingTable}>
-            <caption className="sr-only">미로 베타 랭킹 상위 10명</caption>
+            <caption className="sr-only">서버 검증 미로 랭킹 상위 10명</caption>
             <thead>
               <tr>
                 <th scope="col">#</th>
@@ -139,7 +123,7 @@ function MazeRankingPanel({ userId }: MazeRankingPanelProps) {
       )}
 
       <p className={styles.betaNote}>
-        클라이언트 정산을 사용하는 시험 운영 랭킹입니다.
+        서버가 확정한 경기 결과만 RP와 전적에 반영됩니다.
       </p>
     </aside>
   );
@@ -149,18 +133,19 @@ export default function RoomsPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
   const [restoringSession, setRestoringSession] = useState(true);
+  const authorityMemberships = useMazeAuthorityMemberRooms(user?.uid ?? '');
 
   useEffect(() => {
+    if (!restoringSession) return;
     // 브라우저 재시작 감지를 위한 세션 스토리지 확인
     const isNewBrowserSession = !sessionStorage.getItem('browser_session');
 
     if (isNewBrowserSession) {
-      // 새 브라우저 세션 표시
       sessionStorage.setItem('browser_session', Date.now().toString());
-      // 방 복원 건너뛰기 플래그 설정
-      sessionStorage.setItem('skip_room_restore', 'true');
-      console.log('새 브라우저 세션 감지, 방 복원을 건너뜁니다.');
+      console.log('새 브라우저 세션 감지, 진행 중인 Authority 경기를 확인합니다.');
     }
+
+    if (loading || (user && authorityMemberships.isLoading)) return;
 
     if (!loading && !user) {
       console.log('인증되지 않은 사용자, 로그인 페이지로 이동');
@@ -184,6 +169,21 @@ export default function RoomsPage() {
             return;
           }
 
+          if (authorityMemberships.error) {
+            console.error('Authority 세션 복원 오류:', authorityMemberships.error);
+          } else {
+            const authorityRoom = authorityMemberships.rooms.find(
+              (view) => view.gameState.phase === 'play',
+            ) ?? authorityMemberships.rooms.find(
+              (view) => view.gameState.phase === 'setup',
+            );
+            if (authorityRoom) {
+              console.log('Authority 게임 세션으로 복원:', authorityRoom.roomId);
+              router.replace(`/rooms/${authorityRoom.roomId}`);
+              return;
+            }
+          }
+
           const restoredRoomId = await restoreRoomSession();
           if (restoredRoomId) {
             console.log('이전 게임 세션으로 복원:', restoredRoomId);
@@ -203,7 +203,7 @@ export default function RoomsPage() {
     } else {
       setRestoringSession(false);
     }
-  }, [user, loading, router]);
+  }, [authorityMemberships, user, loading, restoringSession, router]);
 
   const handleLogout = async () => {
     const success = await signOutUser();
@@ -214,31 +214,31 @@ export default function RoomsPage() {
 
   if (loading || !user || restoringSession) {
     return (
-      <div className="flex justify-center items-center min-h-screen">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-4 text-slate-400">로딩 중...</p>
+      <MazeShell screen="lobby" phase="configure">
+        <div className="flex min-h-svh items-center justify-center">
+          <div className="text-center text-[#3d352d]">
+            <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-[#69cdb7] border-t-transparent" />
+            <p className="mt-4 font-bold">놀이판을 펼치는 중...</p>
+          </div>
         </div>
-      </div>
+      </MazeShell>
     );
   }
 
   return (
-    <div className={`${styles.page} container mx-auto p-3 sm:p-4 max-w-6xl`}>
+    <MazeShell screen="lobby" phase="waiting">
+      <div className={`${styles.page} container mx-auto max-w-6xl p-3 sm:p-4`}>
       {/* 상단 헤더 - 게임 로고 + 사용자 메뉴 */}
       <header className={`${styles.header} game-panel !rounded-xl px-4 py-3 mb-4`}>
         <div className={styles.brand}>
-          <Flag size={24} className="shrink-0 text-amber-300" aria-hidden="true" />
+          <Flag size={24} className="shrink-0 text-[#b36c4c]" aria-hidden="true" />
           <div className="leading-tight">
-            <h1 className="text-xl font-black tracking-tight text-amber-300">대목</h1>
-            <p className="text-[10px] text-slate-500">숨겨진 벽을 피해 더 적은 턴으로 골인하세요</p>
+            <h1 className="text-xl font-black tracking-tight text-[#3d352d]">대목</h1>
+            <p className="text-[11px] font-medium text-[#74685c]">숨겨진 벽을 피해 더 적은 턴으로 골인하세요</p>
           </div>
         </div>
 
         <div className={styles.headerActions}>
-          <Link href="/adventure" className="btn-game px-3 py-2 text-xs">
-            <Swords size={15} aria-hidden="true" /> <span className={styles.desktopActionLabel}>모험가 길드</span><span className={styles.mobileActionLabel}>모험</span>
-          </Link>
           <Link href="/practice" className="btn-sub px-3 py-2 text-xs">
             <Target size={15} aria-hidden="true" /> <span className={styles.desktopActionLabel}>연습 모드</span><span className={styles.mobileActionLabel}>연습</span>
           </Link>
@@ -250,7 +250,7 @@ export default function RoomsPage() {
                 {user.displayName?.[0] || 'P'}
               </div>
             )}
-            <span className="text-xs text-slate-300 max-w-[80px] truncate hidden sm:block">
+            <span className="hidden max-w-[80px] truncate text-xs font-bold text-[#3d352d] sm:block">
               {user.displayName || '플레이어'}
             </span>
           </div>
@@ -269,6 +269,7 @@ export default function RoomsPage() {
         </section>
         <MazeRankingPanel userId={user.uid} />
       </main>
-    </div>
+      </div>
+    </MazeShell>
   );
 }

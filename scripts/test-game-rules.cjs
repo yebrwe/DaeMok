@@ -90,6 +90,27 @@ const specialWall = (type, row, col, wallDirection = 'right', extra = {}) => ({
   ...extra,
 });
 
+const mapToClone = {
+  ...baseMap({ rulesVersion: utils.GAME_RULES_VERSION }),
+  skillLoadout: 'scoutPulse',
+  items: [
+    { type: 'mine', position: pos(1, 1), wallPosition: undefined },
+    { type: 'oneTimeWall', wallPosition: pos(2, 2), wallDirection: 'right', position: undefined },
+  ],
+};
+const clonedMap = utils.cloneGameMap(mapToClone);
+assert.deepEqual(clonedMap.items, [
+  { type: 'mine', position: pos(1, 1) },
+  { type: 'oneTimeWall', wallPosition: pos(2, 2), wallDirection: 'right' },
+]);
+assert.equal(Object.prototype.hasOwnProperty.call(clonedMap.items[0], 'wallPosition'), false);
+assert.equal(Object.prototype.hasOwnProperty.call(clonedMap.items[1], 'position'), false);
+assert.notStrictEqual(
+  clonedMap.items[0].position,
+  mapToClone.items[0].position,
+  'cloned item position should be detached'
+);
+
 const specialWallCosts = {
   steelWall: 1,
   fireWall: 1,
@@ -258,12 +279,21 @@ assert.equal(fireHit.state.itemState.b.consumed[0], true, 'fire is consumed');
 
 const fakeHitMap = baseMap({ items: [fake(0, 0)] });
 const fakeHit = resolveSpecial(fakeHitMap);
+assert.deepEqual(fakeHit.outcome.position, pos(0, 0), 'fake wall blocks the first collision');
+assert.equal(fakeHit.state.itemState.b.consumed[0], true, 'first collision consumes the fake wall');
+const fakePass = turns.resolveTurnAction(fakeHit.state, 'a', {
+  type: 'move',
+  direction: 'right',
+}, 101);
+assert.ok(fakePass, 'the next move against a consumed fake wall resolves');
+assert.deepEqual(fakePass.outcome.position, pos(0, 1), 'fake wall is passable after the first collision');
+assert.equal(fakePass.outcome.wallEffect ?? null, null, 'the consumed fake wall no longer blocks');
 const fakeCollisions = Object.values(fakeHit.state.collisionWalls || {});
 assert.equal(fakeCollisions.length, 1, 'fake wall collision remains in the persisted turn history');
 assert.deepEqual(
   utils.getVisibleCollisionWalls(fakeCollisions, fakeHitMap, fakeHit.state.itemState.b.consumed),
-  [],
-  'consumed fake wall collision is hidden from the rendered board'
+  fakeCollisions,
+  'consumed fake wall stays rendered as an opaque discovered wall while becoming passable'
 );
 assert.equal(
   utils.getVisibleCollisionWalls(
@@ -291,6 +321,15 @@ assert.equal(
   ).length,
   1,
   'steel wall collision remains visible even with stale consumed state'
+);
+assert.equal(
+  utils.getVisibleCollisionWalls(
+    fakeCollisions,
+    baseMap({ items: [specialWall('fireWall', 0, 0)] }),
+    { 0: true }
+  ).length,
+  0,
+  'a consumed non-fake dynamic wall still disappears from the rendered board'
 );
 
 const poisonPass = resolveSpecial(baseMap({ items: [specialWall('poisonWall', 0, 0)] }));
@@ -896,8 +935,10 @@ for (let index = 0; index < 3; index += 1) {
 }
 assert.deepEqual(
   [...practiceAiItemTypes].sort(),
-  Object.keys(utils.ITEM_COSTS).sort(),
-  'the three AI maps collectively use every trap and all ten special walls'
+  Object.keys(utils.ITEM_COSTS)
+    .filter((itemType) => !utils.isRetiredNewMapItemType(itemType))
+    .sort(),
+  'the three AI maps use every currently available trap and special wall'
 );
 
 function simulatePracticeState(initialState, label) {

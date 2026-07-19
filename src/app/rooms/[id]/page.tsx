@@ -3,15 +3,111 @@
 import React from 'react';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { getAuth, onAuthStateChanged, type User } from 'firebase/auth';
 import GameRoom from '@/components/GameRoom';
+import AuthorityGameRoom from '@/components/AuthorityGameRoom';
+import MazeShell from '@/components/maze/MazeShell';
 import { useAuth } from '@/hooks/useAuth';
 import { useRoomPresence } from '@/hooks/useRoomPresence';
+import { firebaseInitPromise } from '@/lib/firebase';
+import {
+  MAZE_AUTHORITY_ROOM_PREFIX,
+  isMazeAuthorityRoomId,
+} from '@/lib/mazeAuthorityRuntime';
 import { getDatabase, ref, get, update, serverTimestamp } from 'firebase/database';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
 
 export default function RoomPage({ params }: { params: Promise<{ id: string }> }) {
   const unwrappedParams = React.use(params);
   const roomId = unwrappedParams.id;
+
+  // The mz1_ namespace is reserved for Authority rooms. A malformed ID must
+  // never fall through to legacy presence or legacy RTDB room paths.
+  if (roomId.startsWith(MAZE_AUTHORITY_ROOM_PREFIX)) {
+    return isMazeAuthorityRoomId(roomId)
+      ? <AuthorityRoomPage roomId={roomId} />
+      : <InvalidAuthorityRoomPage />;
+  }
+
+  return <LegacyRoomPage roomId={roomId} />;
+}
+
+function AuthorityRoomPage({ roomId }: { roomId: string }) {
+  const router = useRouter();
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let unsubscribe: (() => void) | null = null;
+
+    void firebaseInitPromise.then((initialized) => {
+      if (!active) return;
+      if (!initialized?.auth) {
+        setAuthError('인증 서버를 초기화하지 못했습니다.');
+        setLoading(false);
+        return;
+      }
+      unsubscribe = onAuthStateChanged(
+        initialized.auth,
+        (currentUser) => {
+          if (!active) return;
+          setUser(currentUser);
+          setLoading(false);
+        },
+        () => {
+          if (!active) return;
+          setAuthError('로그인 상태를 확인하지 못했습니다.');
+          setLoading(false);
+        },
+      );
+    }).catch(() => {
+      if (!active) return;
+      setAuthError('인증 서버를 초기화하지 못했습니다.');
+      setLoading(false);
+    });
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loading && !authError && !user) router.replace('/login');
+  }, [authError, loading, router, user]);
+
+  if (loading || (!user && !authError)) {
+    return <div className="p-8 text-center">로딩 중...</div>;
+  }
+
+  if (authError) {
+    return (
+      <div className="p-8 text-center text-red-500" role="alert">
+        {authError}
+      </div>
+    );
+  }
+
+  if (!user) return <div className="p-8 text-center">로그인 화면으로 이동 중...</div>;
+
+  return <AuthorityGameRoom userId={user.uid} roomId={roomId} />;
+}
+
+function InvalidAuthorityRoomPage() {
+  const router = useRouter();
+
+  return (
+    <div className="flex min-h-svh flex-col items-center justify-center gap-4 p-8 text-center">
+      <p className="font-bold" role="alert">올바르지 않은 게임 방 주소입니다.</p>
+      <button type="button" className="btn-game min-h-11 px-5" onClick={() => router.replace('/rooms')}>
+        방 목록으로
+      </button>
+    </div>
+  );
+}
+
+function LegacyRoomPage({ roomId }: { roomId: string }) {
   const { user, loading } = useAuth();
   const router = useRouter();
   const [joining, setJoining] = useState(true);
@@ -159,5 +255,9 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     return <div className="p-8 text-center text-red-500">사용자 ID를 확인할 수 없습니다. 다시 로그인해주세요.</div>;
   }
   
-  return <GameRoom userId={userId} roomId={roomId} />;
+  return (
+    <MazeShell screen="room" phase="play">
+      <GameRoom userId={userId} roomId={roomId} />
+    </MazeShell>
+  );
 }

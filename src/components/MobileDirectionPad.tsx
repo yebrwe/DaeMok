@@ -7,8 +7,6 @@ import { Direction } from '@/types/game';
 interface MobileDirectionPadProps {
   disabled?: boolean;
   active?: boolean;
-  /** overlay: 보드 하단 중앙 / floating: 부모가 배치하는 반투명 코너 패드 */
-  placement?: 'overlay' | 'floating';
   onMove: (direction: Direction) => void;
   testId?: string;
 }
@@ -28,14 +26,11 @@ const BUTTONS: Array<{
 const MobileDirectionPad: React.FC<MobileDirectionPadProps> = ({
   disabled = false,
   active = false,
-  placement = 'overlay',
   onMove,
   testId = 'mobile-direction-pad',
 }) => (
   <div
-    className={`pointer-events-auto z-30 grid h-[140px] w-[140px] grid-cols-3 grid-rows-3 gap-1 sm:hidden ${
-      placement === 'floating' ? 'relative' : 'absolute bottom-2 left-1/2 -translate-x-1/2'
-    }`}
+    className="game-mobile-direction-pad pointer-events-auto relative z-30 grid h-[140px] w-[140px] grid-cols-3 grid-rows-3 gap-1"
     role="group"
     aria-label="이동 방향"
     data-no-swipe
@@ -45,9 +40,7 @@ const MobileDirectionPad: React.FC<MobileDirectionPadProps> = ({
       <button
         key={direction}
         type="button"
-        className={`btn-dpad ${position} !h-11 !w-11 !rounded-lg backdrop-blur-sm touch-manipulation ${
-          placement === 'floating' ? '!bg-slate-950/60' : '!bg-slate-950/90'
-        }`}
+        className={`btn-dpad ${position} !h-11 !w-11 touch-manipulation !rounded-xl !bg-[#fffef9]/95 !text-[#5d4635] backdrop-blur-sm`}
         onClick={() => onMove(direction)}
         disabled={disabled}
         title={label}
@@ -57,12 +50,10 @@ const MobileDirectionPad: React.FC<MobileDirectionPadProps> = ({
       </button>
     ))}
     <div
-      className={`col-start-2 row-start-2 flex h-11 w-11 items-center justify-center rounded-lg border border-slate-700/70 backdrop-blur-sm ${
-        placement === 'floating' ? 'bg-slate-950/50' : 'bg-slate-950/85'
-      }`}
+      className="col-start-2 row-start-2 flex h-11 w-11 items-center justify-center rounded-xl border-2 border-[#cfa87a] bg-[#fffaf0]/95 backdrop-blur-sm"
       aria-hidden="true"
     >
-      <span className={`h-2.5 w-2.5 rounded-full ${active && !disabled ? 'animate-pulse bg-amber-400' : 'bg-slate-600'}`} />
+      <span className={`h-2.5 w-2.5 rounded-full ${active && !disabled ? 'animate-pulse bg-[#f4c64f]' : 'bg-[#d8c9b5]'}`} />
     </div>
   </div>
 );

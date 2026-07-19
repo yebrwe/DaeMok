@@ -132,7 +132,7 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
       radar(),
       specialWall('steelWall', 5, 1, 'up'),
       specialWall('windWall', 4, 3, 'up', 'right'),
-      specialWall('collapseWall', 1, 2, 'right'),
+      specialWall('crystalWall', 1, 2, 'right'),
     ],
   },
   {
@@ -143,7 +143,7 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
     items: [
       oneTimeWall(5, 3, 'left'),
       specialWall('phaseWall', 0, 4, 'down'),
-      specialWall('mirrorWall', 3, 3, 'down'),
+      specialWall('steelWall', 3, 3, 'down'),
     ],
   },
   {

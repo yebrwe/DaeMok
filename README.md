@@ -1,6 +1,6 @@
 # 대목
 
-대목은 실시간 길찾기 대전과 영구 성장형 브라우저 RPG를 함께 제공하는 Next.js 게임입니다.
+대목은 실시간 길찾기 대전을 제공하는 Next.js 게임입니다.
 
 ## 게임 모드
 
@@ -18,16 +18,6 @@
 최종 벽 비용은 가짜벽 7, 웜홀 7, 거울벽 5, 탐지기 4이며 나머지 함정·특수벽은 1입니다. 모든 아이템은 종류별 1개로 제한되고, 바람벽과 거울벽은 첫 발동 후 소멸합니다. 웜홀 출구는 열린 방향 2개와 도착점까지의 독립 경로가 필요합니다.
 
 플레이어는 정찰 파동, 돌파, 닻, 질주의 4개 스킬 중 하나를 장착하고 경기당 한 번 사용합니다. 방 규칙은 V3 스냅샷으로 벽 예산, 아이템 비용·한도와 스킬 목록을 고정하며 공식 UI는 이 스냅샷과 일치하는 맵만 준비·시작합니다.
-
-### 모험가 길드
-
-- 3개 직업과 4개 지역을 마을 웨이포인트로 연결하고, 웨이브 없이 자연 보충되는 연속 필드와 지역 우두머리를 제공합니다.
-- 마을에서 상점 구매·판매, 대장간 강화, 치유, 120칸 개인 보관함을 이용한 뒤 필드로 출발하고 언제든 귀환할 수 있습니다.
-- 8방향 실시간 이동, 전방 단일 대상 기본 공격, 투사체·범위·돌진 기술과 6칸 인게임 기술 로드아웃을 지원합니다.
-- 캐릭터와 몬스터는 관절형 3D 모델로 렌더링되며, 무기는 실제 장착 여부와 장비 계열에 따라 별도 파츠로 표시됩니다.
-- 능력치 배분, 장비 장착/판매/+10 강화, 룬워드, 세트·고유 효과와 임무 보상을 지원합니다.
-- 재질, 접두/접미 옵션, 등급과 품질 조합으로 직업별 66,240종 장비 도감을 구성합니다.
-- Firebase에 캐릭터, 마을·상점·보관함, 필드 체크포인트와 공개 랭킹 요약을 원자 저장하고 상위 100명을 실시간 표시합니다.
 
 ## 기술 스택
 
@@ -49,20 +39,26 @@ npm run dev
 Firebase 에뮬레이터를 사용하려면 다음 두 프로세스를 실행합니다.
 
 ```bash
-npx firebase-tools emulators:start --only auth,database --project daemok-155c1
+npx firebase-tools emulators:start --only auth,database,functions --project daemok-155c1
 NEXT_PUBLIC_FIREBASE_EMULATOR=1 npm run dev
 ```
+
+Firebase가 구성된 대목 신규 방은 `NEXT_PUBLIC_MAZE_AUTHORITY_NEW_ROOMS`를 설정하지 않아도 서버 권위 방을 기본 사용합니다. 기존 `rooms` 방은 진행 중 상태를 그대로 유지해 종료될 때까지 별도 레거시 경로에서 처리하며, `mz1_` 권위 방이 레거시 데이터로 폴백하지는 않습니다. 비상 롤백이나 레거시 방 단독 테스트에서만 명시적으로 `NEXT_PUBLIC_MAZE_AUTHORITY_NEW_ROOMS=0`을 사용합니다.
+
+운영의 권위형 미로 callable은 Firebase App Check를 강제합니다. Firebase 웹 앱에 reCAPTCHA Enterprise 점수 기반 키를 등록한 뒤 `NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY`를 빌드 환경에 설정합니다. 로컬 에뮬레이터에서는 App Check 검증을 생략합니다.
 
 ## 주요 데이터 경로
 
 - `rooms/{roomId}/gameState`: 길찾기 대전 런타임 상태
 - `rooms/{roomId}/maps/{uid}`: 준비 완료 뒤 동결되는 V3 원본 맵
 - `mazeRankings/{uid}`: 경기별 마커와 추가 전용 정산 이력을 포함한 미로 베타 랭킹
-- `users/{uid}/adventure/v1`: 비공개 모험 캐릭터 원본
-- `adventureRankings/{uid}`: 공개 랭킹 요약
-- `adventurePresence/{uid}/{slot}`: 모험 모드의 탭별 실시간 접속 상태(사용자당 최대 8개)
+- `mazeAuthority/v1/rooms/{roomId}`: Admin SDK만 접근하는 서버 권위형 미로 원본
+- `mazeViews/v1/publicRooms/{roomId}`: 인증 사용자·관전자용 공개 투영
+- `mazeViews/v1/memberRooms/{uid}/{roomId}`: 본인 비밀 맵을 포함한 참가자 전용 투영
+- `mazePresence/v1/{rooms,leases,status}`: 경기 원본과 분리된 탭 연결·오프라인 턴 lease
+- `mazeAuthorityRankings/v1/{uid}`: 서버가 정산하는 권위형 미로 랭킹
 
-`database.rules.json`은 V3 규칙 스냅샷, 준비 완료 맵 동결, 교대 턴 쓰기, 합법적인 완주·승자·무승부 전이, 45초 오프라인 턴 회수, 미로 랭킹의 결과 일치와 재정산 방지를 검증합니다. 모험 데이터는 상태와 랭킹의 교차 일치, 마을 위치, 상점 재고 8개, 보관함 120개, 야외 체크포인트와 귀환 삭제 전이를 검증하며 다른 사용자의 비공개 캐릭터 읽기를 차단합니다. 미로 랭킹은 현재 클라이언트 정산을 사용하는 베타 기능입니다. 완전한 치팅 방지와 DB 수준의 비밀 맵이 필요한 경쟁 시즌은 매 행동 계산과 원본 맵 읽기를 Cloud Functions 또는 신뢰할 수 있는 서버 API로 이전해야 합니다.
+`database.rules.json`은 기존 V3 방의 규칙 스냅샷, 준비 완료 맵 동결, 교대 턴 쓰기와 합법적인 완주 전이를 검증합니다. 기존 방도 진행 중 자발 기권과 나가기를 거부하며, 45초 연결 유예가 지나면 플레이어 상태나 승패를 바꾸지 않고 현재 턴만 넘깁니다. 신규 권위형 미로의 원본·명령·랭킹 정산은 Functions가 소유하고, 규칙은 클라이언트의 원본 접근과 projection 쓰기를 차단합니다.
 
 방 접속은 사용자당 최대 8개의 탭별 Firebase 연결 슬롯으로 집계합니다. 같은 계정의 탭이 하나라도 남아 있으면 온라인 상태를 유지합니다. 마지막 방장 연결이 끊기면 2.5초 재연결 유예 뒤 남은 참가자 또는 로비 구독자가 방을 삭제하고 참가자를 로비로 이동시킵니다.
 
@@ -71,12 +67,12 @@ NEXT_PUBLIC_FIREBASE_EMULATOR=1 npm run dev
 ```bash
 npx tsc --noEmit
 npm run test:game-rules
-npm run test:adventure
+npm run test:maze
 npm run test:offline-turn
 npm run test:database-rules
-npm run test:e2e:adventure
 npm run test:e2e:practice
 npm run test:e2e:multiplayer
+npm run test:e2e:maze-authority
 npm run test:e2e:owner-disconnect
 npm run build
 ```

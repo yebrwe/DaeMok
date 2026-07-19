@@ -14,7 +14,7 @@
  *   참가자/관전자 모두 동시 보드 2개, 레거시 미니맵 부재 확인
  *   B의 대기 입력 무효 -> A 이동 -> C의 관전 화면에 A의 턴 수 실시간 반영
  *   B 행동도 C의 두 번째 보드에 실시간 반영
- *   B 행동으로 A에게 턴 교대 -> A 완주 / B 포기 -> C에게 결과 카드
+ *   B 행동으로 A에게 턴 교대 -> A/B 모두 실제 완주 -> C에게 결과 카드
  *   플레이어 재시작 -> C는 정원(2/2) 가득이라 관전 대기 유지
  *   C 나가기 -> 로비 복귀 (게임에 영향 없음 확인: A/B는 맵 제작 화면 유지)
  *   A(방장) 나가기 -> 방 삭제 -> B 리디렉션
@@ -162,7 +162,7 @@ async function setupMap(page) {
     });
     p.on('pageerror', (e) => console.log(`[${tag} pageerror]`, String(e).slice(0, 300)));
   }
-  pageB.on('dialog', (d) => d.accept()); // 포기/나가기 확인 자동 수락
+  pageB.on('dialog', (d) => d.accept()); // 종료 뒤 나가기 확인 자동 수락
   pageA.on('dialog', (d) => d.accept());
 
   try {
@@ -233,13 +233,24 @@ async function setupMap(page) {
     await expectText(pageA, '내 턴');
     ok('B 보드 동기화 및 B -> A 턴 교대');
 
-    step('6: A 완주 후 B로 skip + B 포기 -> C에게 제3자 결과 카드');
+    step('6: A 완주 후 B로 skip + B도 실제 완주 -> C에게 제3자 결과 카드');
     await pageA.keyboard.press('ArrowRight'); // 2턴 완주
     await expectText(pageA, '턴으로 완주했습니다');
     await expectText(pageB, '내 턴');
-    // B: 상대 완주 후 포기 가능
-    await expectText(pageB, '포기하기');
-    await pageB.getByRole('button', { name: '포기하기' }).click();
+    if (await pageB.getByRole('button', { name: /포기|기권/ }).count() > 0) {
+      throw new Error('진행 중인 플레이어에게 포기/기권 버튼이 노출됨');
+    }
+    const finishOnlyButton = pageB.getByRole('button', { name: '🏁 끝까지 진행' }).first();
+    await finishOnlyButton.waitFor({ timeout: 10000 });
+    if (!(await finishOnlyButton.isDisabled())) {
+      throw new Error('진행 중 참가자 나가기가 차단되지 않음');
+    }
+    await pageB.keyboard.press('ArrowUp');
+    await expectMyBoardTurns(pageB, 2);
+    await pageB.keyboard.press('ArrowRight');
+    await expectMyBoardTurns(pageB, 3);
+    await pageB.keyboard.press('ArrowRight');
+    await expectText(pageB, '턴으로 완주했습니다');
     await expectText(pageC, `${ACCOUNTS.a.name.substring(0, 8)} 승리!`);
     await expectText(pageC, '참가자가 재시작하면 다음 게임도 이어서 관전합니다');
     const restartCount = await pageC.getByRole('button', { name: '재시작' }).count();
@@ -274,7 +285,14 @@ async function setupMap(page) {
     await expectText(pageB, '내 턴');
     ok('관전자 퇴장이 게임에 영향 없음');
 
-    step('10: A(방장) 나가기 -> 방 삭제 -> B 리디렉션');
+    step('10: 두 번째 게임도 양쪽 완주 -> A(방장) 나가기 -> 방 삭제 -> B 리디렉션');
+    await pageB.keyboard.press('ArrowRight');
+    await expectMyBoardTurns(pageB, 1);
+    await expectText(pageA, '내 턴');
+    await pageA.keyboard.press('ArrowRight');
+    await expectText(pageB, '내 턴');
+    await pageB.keyboard.press('ArrowRight');
+    await expectText(pageA, '무승부입니다');
     await pageA.getByRole('button', { name: '나가기' }).click();
     await pageA.waitForURL(/\/rooms$/, { timeout: 20000 });
     await pageB.waitForURL(/\/rooms$/, { timeout: 25000 });

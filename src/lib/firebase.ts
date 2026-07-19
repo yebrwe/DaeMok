@@ -1,70 +1,125 @@
 'use client';
 
 import { initializeApp } from 'firebase/app';
+import {
+  initializeAppCheck,
+  ReCaptchaEnterpriseProvider,
+  type AppCheck,
+} from 'firebase/app-check';
 import { getDatabase, ref, onValue, set, push, update, remove, get, onDisconnect, serverTimestamp, runTransaction, connectDatabaseEmulator } from 'firebase/database';
 import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
   signOut,
-  setPersistence,
-  browserLocalPersistence,
   connectAuthEmulator
 } from 'firebase/auth';
 import { getAnalytics, isSupported } from 'firebase/analytics';
+import {
+  connectFunctionsEmulator,
+  getFunctions,
+  type Functions,
+} from 'firebase/functions';
+import { FIREBASE_CLIENT_CONFIG } from '@/lib/firebaseClientConfig';
 import { Room, GameState, GamePhase, GameMap, UserProfile } from '@/types/game';
-import { GAME_RULES_VERSION, getFirstTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
+import { cloneGameMap, GAME_RULES_VERSION, getFirstTurnPlayerId, getTurnOrder } from '@/lib/gameUtils';
 import {
   createCanonicalGameRuleSnapshot,
   isValidGameRuleSnapshot,
   isValidMapForRuleSnapshot,
 } from '@/lib/gameRules';
 import { createMazeSkillState } from '@/lib/mazeSkills';
-import { shouldPreserveGamePlayerOnLeave } from '@/lib/roomLifecycle';
+import { canLeaveRoomWithoutForfeit, shouldPreserveGamePlayerOnLeave } from '@/lib/roomLifecycle';
 
 // Firebase 인스턴스를 저장할 변수들  
 let auth;
 let database;
+let firebaseFunctions: Functions | undefined;
+let firebaseAppCheck: AppCheck | undefined;
 
-// Firebase 설정
-const firebaseConfig = {
-  apiKey: "AIzaSyBxHJ14JjS3DOHHR9xwLGjIKdBJp8cD448",
-  authDomain: "daemok-155c1.firebaseapp.com",
-  databaseURL: "https://daemok-155c1-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "daemok-155c1",
-  storageBucket: "daemok-155c1.firebasestorage.app",
-  messagingSenderId: "991265301980",
-  appId: "1:991265301980:web:13a56cb9609cdb92d5db19",
-  measurementId: "G-3HXC4G5MTG"
-};
+export type FirebaseAppCheckStatus = 'emulator' | 'ready' | 'missing-config' | 'server';
+let firebaseAppCheckStatus: FirebaseAppCheckStatus = 'server';
+
+function emulatorPort(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 65_535
+    ? parsed
+    : fallback;
+}
 
 // Firebase 초기화
 export const firebaseInitPromise = (async () => {
   try {
-    const app = initializeApp(firebaseConfig);
+    const app = initializeApp(FIREBASE_CLIENT_CONFIG);
+    const emulatorEnabled = process.env.NEXT_PUBLIC_FIREBASE_EMULATOR === '1';
+    const appCheckSiteKey = process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY?.trim() ?? '';
+    const authEmulatorPort = emulatorPort(
+      process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_PORT,
+      9099,
+    );
+    const databaseEmulatorPort = emulatorPort(
+      process.env.NEXT_PUBLIC_FIREBASE_DATABASE_EMULATOR_PORT,
+      9000,
+    );
+    const functionsEmulatorPort = emulatorPort(
+      process.env.NEXT_PUBLIC_FIREBASE_FUNCTIONS_EMULATOR_PORT,
+      5001,
+    );
+
+    // App Check must be active before Auth, RTDB, or Functions starts issuing
+    // requests so callable invocations can attach an attestation token.
+    if (typeof window !== 'undefined') {
+      if (emulatorEnabled) {
+        firebaseAppCheckStatus = 'emulator';
+      } else if (appCheckSiteKey) {
+        firebaseAppCheck = initializeAppCheck(app, {
+          provider: new ReCaptchaEnterpriseProvider(appCheckSiteKey),
+          isTokenAutoRefreshEnabled: true,
+        });
+        firebaseAppCheckStatus = 'ready';
+      } else {
+        firebaseAppCheckStatus = 'missing-config';
+        console.warn('Firebase App Check site key is not configured. Authority calls are disabled.');
+      }
+    }
+
     void isSupported().then((supported) => supported ? getAnalytics(app) : null);
+    // Browser Auth uses LOCAL persistence by default. Reapplying persistence in
+    // every tab can briefly revoke RTDB listeners while the store is migrated.
     auth = getAuth(app);
-    
-    // 브라우저 종료 후에도 인증 상태 유지 (로컬 스토리지 사용)
-    setPersistence(auth, browserLocalPersistence)
-      .then(() => {
-        console.log('Firebase 인증 지속성 설정 완료: LOCAL');
-      })
-      .catch((error) => {
-        console.error('인증 지속성 설정 오류:', error);
-      });
-    
+
+    // Auth 에뮬레이터는 토큰을 요청하는 어떤 작업보다 먼저 연결해야 한다.
+    if (emulatorEnabled && typeof window !== 'undefined') {
+      connectAuthEmulator(auth, `http://localhost:${authEmulatorPort}`, { disableWarnings: true });
+    }
+
     database = getDatabase(app);
+    firebaseFunctions = getFunctions(app, 'asia-southeast1');
 
     // 로컬 에뮬레이터 연결 (E2E 테스트용 - NEXT_PUBLIC_FIREBASE_EMULATOR=1 빌드에서만)
-    if (process.env.NEXT_PUBLIC_FIREBASE_EMULATOR === '1' && typeof window !== 'undefined') {
-      connectAuthEmulator(auth, 'http://localhost:9099', { disableWarnings: true });
-      connectDatabaseEmulator(database, 'localhost', 9000);
-      console.log('Firebase 에뮬레이터에 연결됨 (auth:9099, database:9000)');
+    if (emulatorEnabled && typeof window !== 'undefined') {
+      connectDatabaseEmulator(database, 'localhost', databaseEmulatorPort);
+      const emulatorWindow = window as typeof window & {
+        __DAEMOK_FUNCTIONS_EMULATOR_CONNECTED__?: boolean;
+      };
+      if (!emulatorWindow.__DAEMOK_FUNCTIONS_EMULATOR_CONNECTED__) {
+        connectFunctionsEmulator(firebaseFunctions, 'localhost', functionsEmulatorPort);
+        emulatorWindow.__DAEMOK_FUNCTIONS_EMULATOR_CONNECTED__ = true;
+      }
+      console.log(
+        `Firebase 에뮬레이터에 연결됨 (auth:${authEmulatorPort}, database:${databaseEmulatorPort}, functions:${functionsEmulatorPort})`,
+      );
     }
 
     console.log('Firebase 초기화 완료');
-    return { app, auth, database };
+    return {
+      app,
+      auth,
+      database,
+      functions: firebaseFunctions,
+      appCheck: firebaseAppCheck,
+      appCheckStatus: firebaseAppCheckStatus,
+    };
   } catch (error) {
     console.error('Firebase 초기화 오류:', error);
     return null;
@@ -75,6 +130,10 @@ export const firebaseInitPromise = (async () => {
 export const getFirebaseAuth = () => {
   return auth;
 };
+
+export const getFirebaseFunctions = () => firebaseFunctions;
+
+export const getFirebaseAppCheckStatus = () => firebaseAppCheckStatus;
 
 // 구글 로그인 처리
 export const signInWithGoogle = async () => {
@@ -737,13 +796,14 @@ export const placeObstacles = async (roomId: string, userId: string, map: GameMa
     return;
   }
 
+  const persistableMap = cloneGameMap(map);
   const roomSnapshot = await get(ref(database, `rooms/${roomId}`));
   const room = roomSnapshot.val() as Partial<Room> | null;
   if (
     !room ||
     room.rulesVersion !== GAME_RULES_VERSION ||
     !isValidGameRuleSnapshot(room.ruleSnapshot) ||
-    !isValidMapForRuleSnapshot(map, room.ruleSnapshot)
+    !isValidMapForRuleSnapshot(persistableMap, room.ruleSnapshot)
   ) {
     throw new Error('유효하지 않은 맵은 저장할 수 없습니다.');
   }
@@ -751,7 +811,7 @@ export const placeObstacles = async (roomId: string, userId: string, map: GameMa
   try {
     console.log('맵 설정 중...', { roomId, userId });
     await update(ref(database, `rooms/${roomId}`), {
-      [`maps/${userId}`]: map,
+      [`maps/${userId}`]: persistableMap,
       [`gameState/players/${userId}/isReady`]: true,
     });
 
@@ -795,11 +855,19 @@ export const leaveRoom = async (roomId: string, userId: string): Promise<boolean
     }
     
     const roomData = roomSnapshot.val();
+    const gamePlayer = roomData.gameState?.players?.[userId];
+
+    // A participant cannot turn a disconnect into a mid-game surrender. Check
+    // before touching joinedPlayers/userStatus so a direct legacy API call is
+    // atomic from the caller's point of view and leaves the match untouched.
+    if (!canLeaveRoomWithoutForfeit(roomData.gameState?.phase, !!gamePlayer)) {
+      console.warn('진행 중인 참가자는 게임이 끝날 때까지 방을 나갈 수 없습니다.');
+      return false;
+    }
 
     // 방 참여 정보 제거
     await remove(ref(database, `rooms/${roomId}/joinedPlayers/${userId}`));
-    
-    const gamePlayer = roomData.gameState?.players?.[userId];
+
     if (roomData.gameState?.phase === GamePhase.SETUP) {
       await update(ref(database, `rooms/${roomId}/gameState/players/${userId}`), { isReady: false });
       await remove(ref(database, `rooms/${roomId}/maps/${userId}`));
@@ -809,10 +877,7 @@ export const leaveRoom = async (roomId: string, userId: string): Promise<boolean
     }
     if (gamePlayer) {
       const gamePlayerRef = ref(database, `rooms/${roomId}/gameState/players/${userId}`);
-      if (roomData.gameState?.phase === GamePhase.PLAY) {
-        // 진행 중에는 정산 기록을 보존하고 턴 순환에서만 제외한다.
-        await update(gamePlayerRef, { hasLeft: true, isOnline: false });
-      } else if (!shouldPreserveGamePlayerOnLeave(roomData.gameState?.phase)) {
+      if (!shouldPreserveGamePlayerOnLeave(roomData.gameState?.phase)) {
         await remove(gamePlayerRef);
       }
       // END 참가자 기록은 멱등 전적 트랜잭션과 재시작 로스터가
@@ -1249,8 +1314,10 @@ export const updateRoomUserStatus = async (roomId: string, userId: string, isOnl
   if (!roomId || !userId) return false;
 
   try {
-    const db = getDatabase();
-    const auth = getAuth();
+    const initialized = await firebaseInitPromise;
+    if (!initialized) return false;
+    const db = initialized.database;
+    const currentAuth = initialized.auth;
 
     // 방이 없으면 아무것도 쓰지 않음 (삭제된 방에 잔여 데이터 생성 방지)
     const roomOwnerSnapshot = await get(ref(db, `rooms/${roomId}/createdBy`));
@@ -1259,8 +1326,8 @@ export const updateRoomUserStatus = async (roomId: string, userId: string, isOnl
     
     const userData = {
       uid: userId,
-      displayName: auth.currentUser?.displayName || '익명 사용자',
-      photoURL: auth.currentUser?.photoURL || null,
+      displayName: currentAuth.currentUser?.displayName || '익명 사용자',
+      photoURL: currentAuth.currentUser?.photoURL || null,
       lastSeen: serverTimestamp(),
       isOnline: isOnline
     };

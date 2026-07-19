@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Direction, GameMap, GamePhase, ItemType, MapItem, MazeSkillId, Obstacle, Position, WallItemType } from '@/types/game';
 import {
   Anchor,
@@ -23,6 +23,8 @@ import {
   Shield,
   ShieldAlert,
   Snowflake,
+  Redo2,
+  Undo2,
   Waves,
   Wind,
   X,
@@ -38,6 +40,7 @@ import {
   ITEM_COSTS,
   ITEM_LIMITS,
   ITEM_LABELS,
+  cloneMapItem,
   getWormholeExitSafetyError,
   isWallItemType,
   isSameWallSegment,
@@ -47,8 +50,42 @@ import { MAZE_SKILL_DEFINITIONS, MAZE_SKILL_IDS } from '@/lib/mazeSkills';
 
 interface GameSetupProps {
   onMapComplete: (map: GameMap) => void;
+  onDraftChange?: (map: GameMap) => void;
   initialMap?: GameMap | null;
   requireFullBudget?: boolean;
+}
+
+interface MapEditorSnapshot {
+  startPosition?: Position;
+  endPosition?: Position;
+  obstacles: Obstacle[];
+  items: MapItem[];
+  skillLoadout: MazeSkillId;
+  setupPhase: 'start' | 'end' | 'obstacles';
+}
+
+const MAX_EDITOR_HISTORY = 100;
+
+function clonePosition(position: Position | undefined): Position | undefined {
+  return position ? { ...position } : undefined;
+}
+
+function cloneMapItems(items: readonly MapItem[]): MapItem[] {
+  return items.map(cloneMapItem);
+}
+
+function cloneEditorSnapshot(snapshot: MapEditorSnapshot): MapEditorSnapshot {
+  return {
+    startPosition: clonePosition(snapshot.startPosition),
+    endPosition: clonePosition(snapshot.endPosition),
+    obstacles: snapshot.obstacles.map((obstacle) => ({
+      position: { ...obstacle.position },
+      direction: obstacle.direction,
+    })),
+    items: cloneMapItems(snapshot.items),
+    skillLoadout: snapshot.skillLoadout,
+    setupPhase: snapshot.setupPhase,
+  };
 }
 
 type PlaceMode = 'wall' | ItemType;
@@ -78,9 +115,7 @@ const SPECIAL_WALL_ITEMS: ItemType[] = [
   'poisonWall',
   'iceWall',
   'windWall',
-  'collapseWall',
   'phaseWall',
-  'mirrorWall',
   'thornWall',
   'crystalWall',
 ];
@@ -128,6 +163,7 @@ const findWormholeSafetyError = (map: GameMap): string | null => {
 
 const GameSetup: React.FC<GameSetupProps> = ({
   onMapComplete,
+  onDraftChange,
   initialMap = null,
   requireFullBudget = false,
 }) => {
@@ -150,7 +186,9 @@ const GameSetup: React.FC<GameSetupProps> = ({
   // 아이템 배치 (공용 벽 예산과 종류별 최대 수량 적용)
   const [placeMode, setPlaceMode] = useState<PlaceMode>('wall');
   const [items, setItems] = useState<MapItem[]>(() =>
-    (initialMap?.items || []).map((item) => ({
+    (initialMap?.items || [])
+      .filter((item) => item.type !== 'collapseWall' && item.type !== 'mirrorWall')
+      .map((item) => ({
       ...item,
       position: item.position ? { ...item.position } : undefined,
       wallPosition: item.wallPosition ? { ...item.wallPosition } : undefined,
@@ -165,6 +203,97 @@ const GameSetup: React.FC<GameSetupProps> = ({
     initialMap?.skillLoadout || DEFAULT_MAZE_SKILL
   );
   const [previewWallType, setPreviewWallType] = useState<WallItemType | null>(null);
+  const historyRef = useRef<{
+    past: MapEditorSnapshot[];
+    current: MapEditorSnapshot;
+    future: MapEditorSnapshot[];
+  }>({
+    past: [],
+    current: cloneEditorSnapshot({
+      startPosition,
+      endPosition,
+      obstacles,
+      items,
+      skillLoadout,
+      setupPhase,
+    }),
+    future: [],
+  });
+  const restoringHistoryRef = useRef(false);
+  const [, forceHistoryRender] = useState(0);
+
+  useEffect(() => {
+    const next = cloneEditorSnapshot({
+      startPosition,
+      endPosition,
+      obstacles,
+      items,
+      skillLoadout,
+      setupPhase,
+    });
+    const history = historyRef.current;
+
+    if (restoringHistoryRef.current) {
+      restoringHistoryRef.current = false;
+      history.current = next;
+      return;
+    }
+    if (JSON.stringify(history.current) === JSON.stringify(next)) return;
+
+    history.past = [...history.past, cloneEditorSnapshot(history.current)].slice(-MAX_EDITOR_HISTORY);
+    history.current = next;
+    history.future = [];
+    forceHistoryRender((version) => version + 1);
+  }, [endPosition, items, obstacles, setupPhase, skillLoadout, startPosition]);
+
+  const restoreEditorSnapshot = useCallback((snapshot: MapEditorSnapshot) => {
+    restoringHistoryRef.current = true;
+    setStartPosition(clonePosition(snapshot.startPosition));
+    setEndPosition(clonePosition(snapshot.endPosition));
+    setObstacles(snapshot.obstacles.map((obstacle) => ({
+      position: { ...obstacle.position },
+      direction: obstacle.direction,
+    })));
+    setItems(cloneMapItems(snapshot.items));
+    setSkillLoadout(snapshot.skillLoadout);
+    setSetupPhase(snapshot.setupPhase);
+    setPlaceMode('wall');
+    setWormholeEntrance(null);
+    setPreviewWallType(null);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    const history = historyRef.current;
+    const previous = history.past.at(-1);
+    if (!previous) return;
+    history.past = history.past.slice(0, -1);
+    history.future = [cloneEditorSnapshot(history.current), ...history.future].slice(0, MAX_EDITOR_HISTORY);
+    history.current = cloneEditorSnapshot(previous);
+    restoreEditorSnapshot(previous);
+    forceHistoryRender((version) => version + 1);
+  }, [restoreEditorSnapshot]);
+
+  const handleRedo = useCallback(() => {
+    const history = historyRef.current;
+    const next = history.future[0];
+    if (!next) return;
+    history.future = history.future.slice(1);
+    history.past = [...history.past, cloneEditorSnapshot(history.current)].slice(-MAX_EDITOR_HISTORY);
+    history.current = cloneEditorSnapshot(next);
+    restoreEditorSnapshot(next);
+    forceHistoryRender((version) => version + 1);
+  }, [restoreEditorSnapshot]);
+
+  useEffect(() => {
+    const handleHistoryShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'z') return;
+      event.preventDefault();
+      if (event.shiftKey) handleRedo();
+      else handleUndo();
+    };
+    window.addEventListener('keydown', handleHistoryShortcut);
+    return () => window.removeEventListener('keydown', handleHistoryShortcut);
+  }, [handleRedo, handleUndo]);
 
   const itemsCost = items.reduce((sum, it) => sum + ITEM_COSTS[it.type], 0);
 
@@ -613,8 +742,20 @@ const GameSetup: React.FC<GameSetupProps> = ({
       };
 
       setIsMapValid(isValidMap(map));
+
+      if (isValidMap(map)) {
+        onDraftChange?.({
+          ...map,
+          rulesVersion: GAME_RULES_VERSION,
+          obstacles: map.obstacles.map((obstacle) => ({
+            position: { ...obstacle.position },
+            direction: obstacle.direction,
+          })),
+          items: cloneMapItems(map.items || []),
+        });
+      }
     }
-  }, [startPosition, endPosition, obstacles, items, skillLoadout]);
+  }, [startPosition, endPosition, obstacles, items, skillLoadout, onDraftChange]);
 
   // 사용한 벽 예산 (아이템 총비용 포함)
   const usedBudget = countUniqueObstacles(obstacles) + itemsCost;
@@ -634,24 +775,57 @@ const GameSetup: React.FC<GameSetupProps> = ({
   const activeItem = placeMode === 'wall' ? null : placeMode;
   const ActiveItemIcon = activeItem ? ITEM_ICONS[activeItem] : BrickWall;
   const SelectedSkillIcon = SKILL_ICONS[skillLoadout];
+  const canUndo = historyRef.current.past.length > 0;
+  const canRedo = historyRef.current.future.length > 0;
 
   return (
-    <div className="absolute inset-0 overflow-hidden">
+    <div
+      className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950"
+      data-testid="game-setup-layout"
+    >
       {/* 보드 스테이지 - 맵 제작은 정밀한 배치를 위해 2D 고정 */}
-      <div className="absolute inset-0 flex items-center justify-center overflow-auto pb-64 pt-24 bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950 sm:pb-52">
-        <GameBoard
-          gamePhase={GamePhase.SETUP}
-          startPosition={startPosition}
-          endPosition={endPosition}
-          obstacles={obstacles}
-          items={items}
-          pendingCell={wormholeEntrance}
-          validTargetCells={wormholeExitCandidates}
-          placeMode={placeMode}
-          onCellClick={handleCellClick}
-          onDirectionClick={handleDirectionClick}
-          selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}
-        />
+      <div className="relative order-2 min-h-0 flex-1" data-testid="setup-board-region">
+        <div className="absolute right-3 top-2 z-20 flex gap-2" aria-label="맵 편집 기록">
+          <button
+            type="button"
+            className="flex h-11 w-11 items-center justify-center rounded-xl border-2 border-slate-500 bg-slate-950 text-white shadow-[0_3px_0_rgb(15_23_42)] disabled:cursor-not-allowed disabled:opacity-35"
+            onClick={handleUndo}
+            disabled={!canUndo}
+            aria-label="실행 취소"
+            title="실행 취소 (Ctrl/⌘+Z)"
+          >
+            <Undo2 size={19} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="flex h-11 w-11 items-center justify-center rounded-xl border-2 border-slate-500 bg-slate-950 text-white shadow-[0_3px_0_rgb(15_23_42)] disabled:cursor-not-allowed disabled:opacity-35"
+            onClick={handleRedo}
+            disabled={!canRedo}
+            aria-label="다시 실행"
+            title="다시 실행 (Ctrl/⌘+Shift+Z)"
+          >
+            <Redo2 size={19} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="absolute inset-0 overflow-auto px-2 pb-2 pt-14 sm:pt-2" data-testid="setup-board-scroll">
+          <div className="flex min-h-full min-w-fit items-center justify-center">
+            <GameBoard
+              gamePhase={GamePhase.SETUP}
+              startPosition={startPosition}
+              endPosition={endPosition}
+              obstacles={obstacles}
+              items={items}
+              pendingCell={wormholeEntrance}
+              validTargetCells={wormholeExitCandidates}
+              placeMode={placeMode}
+              compact
+              onCellClick={handleCellClick}
+              onDirectionClick={handleDirectionClick}
+              selectionMode={setupPhase === 'start' ? 'start' : setupPhase === 'end' ? 'end' : 'none'}
+            />
+          </div>
+        </div>
       </div>
 
       {setupPhase === 'obstacles' && previewWallType && (
@@ -659,8 +833,8 @@ const GameSetup: React.FC<GameSetupProps> = ({
       )}
 
       {/* 상단 HUD: 맵 제작 단계 스테퍼 */}
-      <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 w-[96%] max-w-3xl">
-        <div className="game-panel !rounded-xl px-3 py-2">
+      <div className="relative order-1 z-20 mx-auto w-[96%] max-w-3xl shrink-0 pt-2" data-testid="setup-stepper">
+        <div className="game-panel !rounded-xl !border-[#8b684c] px-3 py-2">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-1.5">
               {steps.map((s, i) => (
@@ -668,34 +842,34 @@ const GameSetup: React.FC<GameSetupProps> = ({
                   <div
                     className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold border ${
                       i === currentStepIndex
-                        ? 'bg-amber-400/15 text-amber-300 border-amber-400/50'
+                        ? 'border-[#8a5a16] bg-[#f4c64f] text-[#3d352d]'
                         : i < currentStepIndex
-                          ? 'bg-green-400/10 text-green-300 border-green-400/40'
-                          : 'bg-slate-800/60 text-slate-500 border-slate-600/40'
+                          ? 'border-[#42936f] bg-[#dff5e9] text-[#176044]'
+                          : 'border-[#b7a28a] bg-[#ece5db] text-[#66594d]'
                     }`}
                   >
                     <span>{i < currentStepIndex ? '✓' : i + 1}</span>
                     <span>{s.label}</span>
                   </div>
-                  {i < steps.length - 1 && <span className="text-slate-600 text-[10px]">›</span>}
+                  {i < steps.length - 1 && <span className="text-[10px] text-[#7c6959]">›</span>}
                 </div>
               ))}
             </div>
             <div className="flex items-center gap-2">
               {setupPhase === 'obstacles' && (
                 <span
-                  className={`inline-flex items-center gap-1 text-xs font-bold ${remainingObstacles === 0 ? 'text-emerald-300' : remainingObstacles <= 5 ? 'text-red-400' : 'text-amber-300'}`}
+                  className={`inline-flex items-center gap-1 text-xs font-bold ${remainingObstacles === 0 ? 'text-emerald-700' : remainingObstacles <= 5 ? 'text-red-700' : 'text-amber-700'}`}
                   data-testid="setup-budget"
                   data-budget-complete={usedBudget === MAX_OBSTACLES ? 'true' : 'false'}
                 >
                   <BrickWall size={14} aria-hidden="true" /> {usedBudget}/{MAX_OBSTACLES}
-                  {items.length > 0 && <span className="text-purple-300 ml-1">(아이템 -{itemsCost})</span>}
+                  {items.length > 0 && <span className="ml-1 text-purple-700">(아이템 -{itemsCost})</span>}
                   {requireFullBudget && remainingObstacles > 0 && <span>· {remainingObstacles} 남음</span>}
                 </span>
               )}
             </div>
           </div>
-          <div className="text-xs font-medium text-slate-300 mt-1.5">
+          <div className="mt-1.5 text-xs font-semibold text-[#55483d]">
             {setupPhase === 'start' && '시작점을 선택하세요 - 상대방은 여기서 출발합니다'}
             {setupPhase === 'end' && '도착점을 선택하세요 - 상대방이 도달해야 하는 곳입니다'}
             {setupPhase === 'obstacles' && '벽(장애물)을 배치하세요 - 상대방에게는 보이지 않습니다'}
@@ -705,8 +879,9 @@ const GameSetup: React.FC<GameSetupProps> = ({
 
       {/* 하단 HUD: 아이템 팔레트 + 진행 버튼 */}
       <div
-        className="absolute left-1/2 z-20 flex w-[96%] max-w-3xl -translate-x-1/2 flex-col items-center gap-2"
-        style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
+        className="relative order-3 z-20 mx-auto flex max-h-[46%] w-[96%] max-w-3xl shrink-0 flex-col items-center gap-2 overflow-y-auto overscroll-contain pt-2"
+        data-testid="setup-controls"
+        style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
       >
         {setupPhase === 'obstacles' && !isMapValid && (obstacles.length > 0 || items.length > 0) && (
           <p className="text-red-300 text-xs px-3 py-1 rounded-full bg-red-500/20 border border-red-500/50 backdrop-blur-sm">
@@ -721,7 +896,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
 
         {/* 공용 벽 예산 안에서 함정과 특수벽을 고른다. */}
         {setupPhase === 'obstacles' && (
-          <div className="game-panel w-full !rounded-lg px-2.5 py-2">
+          <div className="game-panel w-full !rounded-lg !border-[#8b684c] px-2.5 py-2" data-testid="setup-palette">
             <div className="flex items-center justify-between gap-2">
               <div className="flex rounded-md border border-slate-600 bg-slate-900/70 p-0.5" role="tablist" aria-label="아이템 종류">
                 <button
@@ -749,7 +924,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
                   스킬
                 </button>
               </div>
-              <span className="shrink-0 text-[10px] font-bold text-slate-400">
+              <span className="shrink-0 text-[10px] font-bold text-[#5d5146]">
                 {paletteTab === 'skills' ? '로드아웃 1개' : '각 종류 1개'}
               </span>
             </div>
@@ -803,17 +978,17 @@ const GameSetup: React.FC<GameSetupProps> = ({
               })}
             </div>
 
-            <div className="flex min-h-8 flex-col items-stretch gap-1.5 border-t border-slate-700/80 pt-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+            <div className="flex min-h-8 flex-col items-stretch gap-1.5 border-t border-[#b89a77] pt-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
               {paletteTab === 'skills' ? (
-                <div id="active-palette-description" className="flex min-w-0 items-start gap-1.5 text-[10px] text-slate-300 sm:items-center" data-testid="active-palette-description">
-                  <SelectedSkillIcon className="shrink-0 text-emerald-300" size={14} aria-hidden="true" />
+                <div id="active-palette-description" className="flex min-w-0 items-start gap-1.5 text-[10px] font-semibold text-[#3d352d] sm:items-center" data-testid="active-palette-description">
+                  <SelectedSkillIcon className="shrink-0 text-emerald-700" size={14} aria-hidden="true" />
                   <span className="whitespace-normal break-words leading-[1.35]">
                     {MAZE_SKILL_DEFINITIONS[skillLoadout].label}: {MAZE_SKILL_DEFINITIONS[skillLoadout].description}
                   </span>
                 </div>
               ) : (
-                <div id="active-palette-description" className="flex min-w-0 items-start gap-1.5 text-[10px] text-slate-300 sm:items-center" data-testid="active-palette-description">
-                  <ActiveItemIcon className="shrink-0 text-amber-300" size={14} aria-hidden="true" />
+                <div id="active-palette-description" className="flex min-w-0 items-start gap-1.5 text-[10px] font-semibold text-[#3d352d] sm:items-center" data-testid="active-palette-description">
+                  <ActiveItemIcon className="shrink-0 text-amber-700" size={14} aria-hidden="true" />
                   <span className="whitespace-normal break-words leading-[1.35]">
                     {activeItem ? `${ITEM_LABELS[activeItem]}: ${ITEM_DESCRIPTIONS[activeItem]}` : '일반벽 배치'}
                   </span>

@@ -3,29 +3,57 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useRooms } from '@/hooks/useFirebase';
+import { useMazeAuthorityRooms } from '@/hooks/useMazeAuthority';
 import { joinRoom } from '@/lib/firebase';
+import {
+  buildMazeAuthorityJoinRoomCommand,
+  invokeMazeAuthorityCommand,
+  type MazeAuthorityPublicView,
+} from '@/lib/mazeAuthorityClient';
 
 interface RoomListProps {
   userId: string;
 }
 
 const RoomList: React.FC<RoomListProps> = ({ userId }) => {
-  const { rooms, isLoading } = useRooms();
+  const { rooms: legacyRooms, isLoading: legacyLoading } = useRooms();
+  const {
+    rooms: authorityRooms,
+    isLoading: authorityLoading,
+    error: authorityError,
+  } = useMazeAuthorityRooms();
   const [joining, setJoining] = useState<string | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
   const router = useRouter();
 
-  const handleJoinRoom = async (roomId: string) => {
+  const handleJoinRoom = async (room: {
+    id: string;
+    source: 'authority-v1' | 'legacy-v3';
+    authorityView?: MazeAuthorityPublicView;
+  }) => {
     try {
-      setJoining(roomId);
+      setJoining(room.id);
       setJoinError(null);
 
-      console.log('방 참가 시도:', roomId);
-      const success = await joinRoom(roomId, userId);
+      console.log('방 참가 시도:', room.id, room.source);
+      let success = true;
+      if (room.source === 'authority-v1' && room.authorityView) {
+        const view = room.authorityView;
+        const isMember = !!view.lobby.members[userId];
+        if (view.lobby.status === 'waiting' && !isMember) {
+          await invokeMazeAuthorityCommand(buildMazeAuthorityJoinRoomCommand({
+            roomId: room.id,
+            expectedGeneration: view.generation,
+            expectedRevision: view.revision,
+          }));
+        }
+      } else {
+        success = await joinRoom(room.id, userId);
+      }
 
       if (success) {
-        console.log('방 참가 성공:', roomId);
-        router.push(`/rooms/${roomId}`);
+        console.log('방 참가 성공:', room.id);
+        router.push(`/rooms/${room.id}`);
       } else {
         console.error('방 참가 실패');
         setJoinError('방에 참가할 수 없습니다.');
@@ -38,12 +66,37 @@ const RoomList: React.FC<RoomListProps> = ({ userId }) => {
     }
   };
 
+  const rooms = [
+    ...authorityRooms.map((view) => ({
+      id: view.roomId,
+      source: 'authority-v1' as const,
+      authorityView: view,
+      name: view.lobby.name,
+      playerCount: Object.keys(view.lobby.members).length,
+      maxPlayers: view.lobby.maxPlayers,
+      isPlaying: view.lobby.status !== 'waiting',
+      isMember: !!view.lobby.members[userId],
+      createdAt: view.sourceUpdatedAt,
+    })),
+    ...legacyRooms.map((room) => ({
+      id: room.id,
+      source: 'legacy-v3' as const,
+      name: room.name,
+      playerCount: room.players?.length || 0,
+      maxPlayers: room.maxPlayers || 2,
+      isPlaying: !!room.gameState?.phase && room.gameState.phase !== 'setup',
+      isMember: room.players?.includes(userId) ?? false,
+      createdAt: room.createdAt || Date.now(),
+    })),
+  ].sort((left, right) => right.createdAt - left.createdAt || left.id.localeCompare(right.id));
+  const isLoading = legacyLoading || authorityLoading;
+
   if (isLoading) {
     return (
       <div className="game-panel p-8 flex items-center justify-center">
         <div className="text-center">
-          <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-3 text-sm text-slate-400">방 목록을 불러오는 중...</p>
+          <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-[#69cdb7] border-t-transparent" />
+          <p className="mt-3 text-sm font-bold text-[#74685c]">방 목록을 불러오는 중...</p>
         </div>
       </div>
     );
@@ -53,59 +106,64 @@ const RoomList: React.FC<RoomListProps> = ({ userId }) => {
     return (
       <div className="game-panel p-8 text-center">
         <div className="text-4xl mb-2">🎲</div>
-        <p className="text-sm text-slate-300 font-medium">아직 열린 게임이 없습니다</p>
-        <p className="text-xs text-slate-500 mt-1">첫 번째 방을 만들고 상대를 기다려보세요!</p>
+        <p className="text-sm font-black text-[#3d352d]">아직 열린 게임이 없습니다</p>
+        <p className="mt-1 text-xs font-medium text-[#74685c]">첫 번째 방을 만들고 상대를 기다려보세요!</p>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col">
-      <h2 className="text-sm font-bold mb-2 text-slate-300 flex items-center gap-1.5">
-        ⚔️ 대전 목록
-        <span className="text-[10px] font-normal text-slate-500">({rooms.length}개)</span>
+      <h2 className="mb-2 flex items-center gap-1.5 text-sm font-black text-[#3d352d]">
+        <span aria-hidden="true">🎲</span> 대전 목록
+        <span className="text-[11px] font-semibold text-[#74685c]">({rooms.length}개)</span>
       </h2>
 
       {joinError && (
-        <div className="bg-red-500/10 border border-red-500/40 text-red-300 px-3 py-2 rounded-xl mb-3 text-xs">
+        <div className="mb-3 rounded-xl border-2 border-[#b94646] bg-[#fff1ec] px-3 py-2 text-xs font-bold text-[#8a2e2e]" role="alert">
           {joinError}
         </div>
       )}
+      {authorityError && (
+        <div className="mb-3 rounded-xl border-2 border-[#b94646] bg-[#fff1ec] px-3 py-2 text-xs font-bold text-[#8a2e2e]" role="alert">
+          {authorityError}
+        </div>
+      )}
 
-      <div className="space-y-2.5 overflow-y-auto max-h-[calc(100vh-360px)] pr-1">
+      <div className="space-y-2.5 sm:max-h-[calc(100vh-360px)] sm:overflow-y-auto sm:pr-1">
         {rooms.map((room, index) => {
-          const playerCount = room.players?.length || 0;
-          const maxPlayers = room.maxPlayers || 2;
+          const playerCount = room.playerCount;
+          const maxPlayers = room.maxPlayers;
           const isFull = playerCount >= maxPlayers;
-          // status 필드는 갱신되지 않는 레거시 - 게임 진행 여부는 gameState.phase로 판정
-          const isPlaying = !!room.gameState?.phase && room.gameState.phase !== 'setup';
+          const isPlaying = room.isPlaying;
 
           return (
             <div
-              key={room.id || `room-${index}`}
+              key={`${room.source}:${room.id || `room-${index}`}`}
               data-room-card
-              className="game-panel !rounded-xl p-3 hover:!border-amber-400/40 transition-colors"
+              data-room-backend={room.source}
+              className="game-panel min-h-16 !rounded-2xl p-3 transition-colors hover:!border-[#c58d58]"
             >
               <div className="flex justify-between items-center gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold truncate text-slate-100">{room.name}</h3>
+                    <h3 className="truncate text-sm font-black text-[#3d352d]">{room.name}</h3>
                     {isPlaying ? (
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-400/10 text-red-300 border border-red-400/40 shrink-0">
+                      <span className="shrink-0 rounded-full border border-[#d46f5e] bg-[#fff0eb] px-2 py-0.5 text-[11px] font-black text-[#8a3a2c]">
                         게임중
                       </span>
                     ) : (
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-green-400/10 text-green-300 border border-green-400/40 shrink-0">
+                      <span className="shrink-0 rounded-full border border-[#72b86b] bg-[#eff9e9] px-2 py-0.5 text-[11px] font-black text-[#315f2d]">
                         대기중
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">
-                    <span className={playerCount > 0 ? 'text-amber-300' : ''}>
+                  <div className="mt-1 flex items-center gap-2 text-[11px] font-semibold text-[#74685c]">
+                    <span className={playerCount > 0 ? 'text-[#795d12]' : ''}>
                       👥 {playerCount} / {maxPlayers}
                     </span>
                     <span>
-                      {new Date(room.createdAt || Date.now()).toLocaleString(undefined, {
+                      {new Date(room.createdAt).toLocaleString(undefined, {
                         month: 'short',
                         day: 'numeric',
                         hour: '2-digit',
@@ -116,15 +174,17 @@ const RoomList: React.FC<RoomListProps> = ({ userId }) => {
                 </div>
 
                 <button
-                  onClick={() => handleJoinRoom(room.id)}
-                  disabled={joining === room.id || (isFull && !isPlaying)}
-                  className={`shrink-0 px-4 py-2 text-xs ${
-                    joining === room.id || (isFull && !isPlaying) ? 'btn-sub' : 'btn-game'
+                  onClick={() => handleJoinRoom(room)}
+                  disabled={joining === room.id || (isFull && !isPlaying && !room.isMember)}
+                  className={`min-h-11 shrink-0 px-4 py-2 text-xs ${
+                    joining === room.id || (isFull && !isPlaying && !room.isMember) ? 'btn-sub' : 'btn-game'
                   }`}
                 >
                   {joining === room.id
                     ? '입장 중...'
-                    : isPlaying
+                      : room.isMember
+                        ? '계속하기'
+                        : isPlaying
                       ? '👁 관전하기'
                       : isFull
                         ? '가득 참'

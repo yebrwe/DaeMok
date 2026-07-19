@@ -7,7 +7,7 @@ import type { BoardFx } from './three/GameBoard3D';
 import LiveBoardGrid, { LiveBoardEntry } from './LiveBoardGrid';
 import MobileDirectionPad from './MobileDirectionPad';
 import { useSwipeMove } from '@/hooks/useSwipeMove';
-import { Anchor, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Box, FastForward, Gamepad2, Grid2X2, ScanSearch, ShieldAlert } from 'lucide-react';
+import { Anchor, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, FastForward, Gamepad2, ScanSearch, ShieldAlert } from 'lucide-react';
 import { getNewPosition, isPositionInBoard, isSamePosition, getMapItems } from '@/lib/gameUtils';
 import {
   getPlayerMazeSkillState,
@@ -20,6 +20,13 @@ import {
   SkillTurnOutcome,
 } from '@/lib/gameTurn';
 import { MAZE_SKILL_DEFINITIONS } from '@/lib/mazeSkills';
+import {
+  createLocalBoardVisualRoute,
+  deriveLiveBoardVisualTransition,
+  getActiveLocalBoardVia,
+  LocalBoardVisualRoute,
+  LiveBoardVisualTransition,
+} from '@/lib/liveBoardVisuals';
 import { getDatabase, ref, update, runTransaction, serverTimestamp } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
 
@@ -33,9 +40,6 @@ interface GamePlayProps {
   gameEnded?: boolean; // 게임 종료 여부
   myFinished?: boolean; // 내가 이미 완주함 -> 관전 모드
   myFinishMoves?: number | null; // 내 완주 턴 수
-  opponentFinished?: boolean; // 누군가 먼저 완주함 -> 포기 가능
-  opponentFinishMoves?: number | null; // 완주자 중 최소 턴 수 (이걸 이겨야 승리)
-  onForfeit?: () => void; // 포기 처리
   othersInfo?: Array<{
     id: string;
     name: string;
@@ -46,8 +50,6 @@ interface GamePlayProps {
     moves?: number | null; // 현재까지 소모한 턴 (실시간 순위용)
   }>; // 나를 제외한 참가자들 (HUD 표시)
 }
-
-type ViewMode = 'third' | '2d';
 
 const SKILL_ICONS: Record<MazeSkillId, typeof ScanSearch> = {
   scoutPulse: ScanSearch,
@@ -72,9 +74,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
   gameEnded = false,
   myFinished = false,
   myFinishMoves = null,
-  opponentFinished = false,
-  opponentFinishMoves = null,
-  onForfeit,
   othersInfo = [],
 }) => {
   const startPosition = map?.startPosition ?? { row: 0, col: 0 };
@@ -86,30 +85,23 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const [message, setMessage] = useState<string>('');
   const [playerPhotoURL, setPlayerPhotoURL] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState<string>('나');
-  // 시점: 3인칭(기본) / 2D
-  const [viewMode, setViewMode] = useState<ViewMode>('third');
   // 액션 이펙트 (지뢰 폭발/웜홀/탐지 파동/충돌 스파크/골인 축포)
   const [fx, setFx] = useState<BoardFx | null>(null);
-  // 말 이동 경유지: 지뢰 넉백은 [지뢰 칸, 직전 칸]을 거쳐 뒤로 폴짝폴짝, 웜홀은 입구를 거쳐 흡입
-  const [moveVia, setMoveVia] = useState<Position[] | null>(null);
+  // 경유지는 목적지와 개인 턴 수가 일치하는 한 액션에서만 사용한다.
+  const [localVisualRoute, setLocalVisualRoute] = useState<LocalBoardVisualRoute | null>(null);
+  const [remoteVisuals, setRemoteVisuals] = useState<Record<string, LiveBoardVisualTransition>>({});
   const [armedSkill, setArmedSkill] = useState<'breach' | 'dash' | null>(null);
   const [skillNotice, setSkillNotice] = useState<string>('');
-  // 모바일 플로팅 방향패드 표시 여부 - 보드 공간을 예약하지 않고 코너에 겹쳐 띄운다
+  // 모바일 하단 방향패드 표시 여부
   const [padVisible, setPadVisible] = useState(true);
   const boardStageRef = useRef<HTMLDivElement>(null);
+  const queuedMoveRef = useRef<Direction | null>(null);
+  const handleMoveRef = useRef<(direction: Direction) => void>(() => {});
 
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem('daemok:mobilePad');
       if (saved === '0') setPadVisible(false);
-      // 첫 판에만 스와이프 안내 (모바일 한정)
-      if (
-        window.matchMedia('(max-width: 640px)').matches &&
-        window.localStorage.getItem('daemok:swipeHintShown') !== '1'
-      ) {
-        window.localStorage.setItem('daemok:swipeHintShown', '1');
-        setMessage('💡 보드를 밀어서(스와이프) 이동할 수 있습니다');
-      }
     } catch {
       /* localStorage 접근 불가 - 기본값 유지 */
     }
@@ -127,13 +119,66 @@ const GamePlay: React.FC<GamePlayProps> = ({
     });
   }, []);
   const fxKeyRef = useRef(0);
+  const previousVisualStateRef = useRef<GameState | null>(null);
+  const remoteVisualSequenceRef = useRef(0);
   const fireFx = useCallback((partial: Omit<BoardFx, 'key'>) => {
     fxKeyRef.current += 1;
     setFx({ key: fxKeyRef.current, ...partial });
   }, []);
 
+  // Firebase의 연속 스냅샷만 비교해 상대 행동을 복원한다. 별도 gameplay write는 만들지 않는다.
+  useEffect(() => {
+    const previous = previousVisualStateRef.current;
+    previousVisualStateRef.current = gameState || null;
+    if (!gameState) {
+      remoteVisualSequenceRef.current = 0;
+      setRemoteVisuals({});
+      return;
+    }
+    if (!previous) return;
+
+    const restarted =
+      previous.matchNumber !== gameState.matchNumber ||
+      (gameState.turnNumber || 0) < (previous.turnNumber || 0);
+    if (restarted) {
+      remoteVisualSequenceRef.current = 0;
+      setRemoteVisuals({});
+      return;
+    }
+
+    const turnDelta = (gameState.turnNumber || 0) - (previous.turnNumber || 0);
+    if (turnDelta > 1) {
+      // 백그라운드 복귀 등으로 여러 행동이 합쳐지면 연출을 추측하지 않는다.
+      setRemoteVisuals({});
+      return;
+    }
+    if (turnDelta !== 1) return;
+
+    const runnerId = previous.currentTurn;
+    if (!runnerId || runnerId === userId) return;
+    const nextSequence = remoteVisualSequenceRef.current + 1;
+    const transition = deriveLiveBoardVisualTransition(
+      previous,
+      gameState,
+      runnerId,
+      nextSequence
+    );
+    if (!transition) return;
+
+    remoteVisualSequenceRef.current = nextSequence;
+    setRemoteVisuals((current) => ({ ...current, [runnerId]: transition }));
+  }, [gameState, userId]);
+
   // 이동 처리 중 중복 입력 방지 (연타로 한 턴에 두 번 움직이는 버그 방지)
   const movePendingRef = useRef<boolean>(false);
+  const releaseActionLock = useCallback(() => {
+    movePendingRef.current = false;
+    const queuedDirection = queuedMoveRef.current;
+    queuedMoveRef.current = null;
+    if (queuedDirection) {
+      window.setTimeout(() => handleMoveRef.current(queuedDirection), 0);
+    }
+  }, []);
 
   // 탐지기는 내가 만든 맵에 배치한 자기용 아이템 상태를 사용한다.
   const myItems = useMemo(() => getMapItems(myMap), [myMap]);
@@ -161,10 +206,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const currentTurnName = currentTurnId === userId
     ? playerName
     : gameState?.players?.[currentTurnId || '']?.displayName || '상대방';
-
-  // 포기 가능: 상대가 먼저 골인했고 나는 아직 완주하지 못함
-  const canForfeit = !iAmDone && opponentFinished && !gameEnded && !!onForfeit;
-  const effectiveViewMode: ViewMode = viewMode;
+  const moveVia = getActiveLocalBoardVia(localVisualRoute, playerPosition, moveCount);
 
   // 상위 방 구독의 위치와 턴 수를 따라가 다중 탭에서도 같은 상태를 유지한다.
   useEffect(() => {
@@ -215,6 +257,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
       setRevealedWalls((prev) => mergeWallSegments(prev, committed.found));
       setMyItemsConsumed((prev) => ({ ...prev, [usedIndex]: true }));
       setMoveCount(committed.moves);
+      setLocalVisualRoute(null);
       setMessage(`탐지기로 벽 ${committed.found.length}개를 찾았습니다. 1턴을 사용했습니다.`);
       fireFx({ type: 'radar', at: committed.position });
       update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
@@ -222,9 +265,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
       console.error('탐지기 턴 처리 오류:', error);
       setMessage('탐지기 사용을 처리하지 못했습니다.');
     } finally {
-      movePendingRef.current = false;
+      releaseActionLock();
     }
-  }, [nextRadarIndex, isFinished, isMyTurn, currentTurnName, roomId, userId, fireFx, immutableMaps]);
+  }, [nextRadarIndex, isFinished, isMyTurn, currentTurnName, roomId, userId, fireFx, immutableMaps, releaseActionLock]);
 
   // 사용자 프로필은 이미 구독 중인 방 상태와 인증 세션에서 가져온다.
   useEffect(() => {
@@ -234,10 +277,15 @@ const GamePlay: React.FC<GamePlayProps> = ({
     setPlayerName(player?.displayName || authUser?.displayName || '나');
   }, [gameState?.players, userId]);
 
-  // 실시간 순위 (마리오카트식): 완주자는 확정 턴, 진행 중은 현재 턴 기준. 포기자는 제외
+  // 실시간 순위 (마리오카트식): 완주자는 확정 턴, 진행 중은 현재 턴 기준.
+  // 과거 데이터의 미완주 기록은 호환용으로만 제외한다.
   // 턴 수가 적을수록 상위. 동률은 같은 순위
   const myRankMetric = myFinished ? (myFinishMoves ?? moveCount) : moveCount;
   const rankedOthers = othersInfo.filter((o) => !o.forfeited);
+  const leadingFinishMoves = rankedOthers.reduce<number | null>((best, opponent) => {
+    if (!opponent.finished || typeof opponent.finishMoves !== 'number') return best;
+    return best === null ? opponent.finishMoves : Math.min(best, opponent.finishMoves);
+  }, null);
   const myRank =
     1 +
     rankedOthers.filter((o) => {
@@ -246,6 +294,13 @@ const GamePlay: React.FC<GamePlayProps> = ({
     }).length;
   const rankTotal = rankedOthers.length + 1;
   const showRank = !gameEnded && othersInfo.length > 0;
+  const mobileStatusText = skillNotice
+    || message
+    || (iAmDone && !gameEnded
+      ? `${myFinishMoves ?? moveCount}턴 완주 · 관전 중`
+      : !iAmDone && !gameEnded && leadingFinishMoves !== null
+        ? `현재 최고 기록 ${leadingFinishMoves}턴`
+        : '');
 
   const handleOnlineMove = useCallback(async (direction: Direction) => {
     if (isFinished || movePendingRef.current) return;
@@ -295,17 +350,27 @@ const GamePlay: React.FC<GamePlayProps> = ({
       setMessage(committed.message);
 
       if (committed.effect === 'bump') {
-        setMoveVia(
+        setLocalVisualRoute(createLocalBoardVisualRoute(
           committed.wallEffect === 'thornWall' && !isSamePosition(committed.position, committed.origin)
             ? [committed.origin]
-            : null
-        );
+            : null,
+          committed.position,
+          committed.moves
+        ));
         fireFx({ type: 'bump', at: committed.origin, dir: direction });
       } else if (committed.effect === 'mine') {
-        setMoveVia([committed.attempted, committed.origin]);
+        setLocalVisualRoute(createLocalBoardVisualRoute(
+          [committed.attempted, committed.origin],
+          committed.position,
+          committed.moves
+        ));
         fireFx({ type: 'mine', at: committed.itemPosition, delay: 0.35 });
       } else if (committed.effect === 'wormhole') {
-        setMoveVia([committed.attempted]);
+        setLocalVisualRoute(createLocalBoardVisualRoute(
+          [committed.attempted],
+          committed.position,
+          committed.moves
+        ));
         fireFx({ type: 'wormhole', at: committed.itemPosition, to: committed.wormholeExit, delay: 0.35 });
       } else if (
         (committed.wallEffect === 'iceWall' ||
@@ -313,9 +378,13 @@ const GamePlay: React.FC<GamePlayProps> = ({
           committed.wallEffect === 'mirrorWall') &&
         !isSamePosition(committed.position, committed.attempted)
       ) {
-        setMoveVia([committed.attempted]);
+        setLocalVisualRoute(createLocalBoardVisualRoute(
+          [committed.attempted],
+          committed.position,
+          committed.moves
+        ));
       } else {
-        setMoveVia(null);
+        setLocalVisualRoute(null);
       }
 
       update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
@@ -329,9 +398,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
       console.error('온라인 턴 처리 오류:', error);
       setMessage('턴을 처리하지 못했습니다. 다시 시도해주세요.');
     } finally {
-      movePendingRef.current = false;
+      releaseActionLock();
     }
-  }, [isFinished, isMyTurn, currentTurnName, playerPosition, roomId, userId, onGameComplete, fireFx, immutableMaps]);
+  }, [isFinished, isMyTurn, currentTurnName, playerPosition, roomId, userId, onGameComplete, fireFx, immutableMaps, releaseActionLock]);
 
   const handleOnlineSkill = useCallback(async (
     skillId: Exclude<MazeSkillId, 'anchor'>,
@@ -361,7 +430,11 @@ const GamePlay: React.FC<GamePlayProps> = ({
       const committed = outcome as SkillTurnOutcome;
       setMoveCount(committed.moves);
       setPlayerPosition(committed.position);
-      setMoveVia(committed.via || null);
+      setLocalVisualRoute(createLocalBoardVisualRoute(
+        committed.via,
+        committed.position,
+        committed.moves
+      ));
       setLastMoveValid(
         committed.skillId === 'scoutPulse' || committed.landingEffect === 'wormhole'
           ? null
@@ -399,13 +472,17 @@ const GamePlay: React.FC<GamePlayProps> = ({
       setMessage('스킬을 처리하지 못했습니다.');
       return false;
     } finally {
-      movePendingRef.current = false;
+      releaseActionLock();
     }
-  }, [fireFx, immutableMaps, isFinished, isMyTurn, onGameComplete, roomId, userId]);
+  }, [fireFx, immutableMaps, isFinished, isMyTurn, onGameComplete, releaseActionLock, roomId, userId]);
 
   const handleMove = useCallback(
     async (direction: Direction) => {
-      if (isFinished || movePendingRef.current) return;
+      if (isFinished) return;
+      if (movePendingRef.current) {
+        queuedMoveRef.current = direction;
+        return;
+      }
       if (armedSkill) {
         const succeeded = await handleOnlineSkill(armedSkill, direction);
         setArmedSkill(null);
@@ -427,7 +504,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
   // 보드 스테이지 스와이프로 이동 (내 턴 가드는 handleMove 내부에서 처리)
   useSwipeMove(boardStageRef, handleMove, { enabled: !isFinished });
 
-  const handleMoveRef = useRef(handleMove);
   handleMoveRef.current = handleMove;
 
   useEffect(() => {
@@ -507,8 +583,10 @@ const GamePlay: React.FC<GamePlayProps> = ({
         revealedWalls: isMine
           ? revealedWalls
           : (gameState.revealedWallsByPlayer?.[runnerId] || []),
-        fx: isMine ? fx : null,
-        via: isMine ? moveVia : null,
+        fx: isMine ? fx : (remoteVisuals[runnerId]?.fx || null),
+        via: isMine ? moveVia : (remoteVisuals[runnerId]?.via || null),
+        visualAction: isMine ? undefined : remoteVisuals[runnerId]?.action,
+        visualSequence: isMine ? undefined : remoteVisuals[runnerId]?.sequence,
         celebrating: !!runner.finished && !runner.forfeited,
         revealObstacles: !!runner.finished,
         pawnColor: isMine ? '#3b82f6' : '#ef4444',
@@ -519,7 +597,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
           isVisionObscuredForPlayer(gameState, runnerId),
       }];
     });
-  }, [gameState, userId, playerName, playerPosition, moveCount, revealedWalls, fx, moveVia, currentTurnId]);
+  }, [gameState, userId, playerName, playerPosition, moveCount, revealedWalls, fx, moveVia, remoteVisuals, currentTurnId]);
 
   useEffect(() => {
     if (!isMyTurn) {
@@ -564,18 +642,17 @@ const GamePlay: React.FC<GamePlayProps> = ({
         style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(58px + env(safe-area-inset-bottom))' }}
         data-testid="online-controls"
       >
-        <div className="hidden items-center gap-1 sm:flex">
+        <div className="game-desktop-direction-buttons items-center gap-1">
           {moveButton('left', '왼쪽으로 이동', ArrowLeft)}
           {moveButton('up', '위로 이동', ArrowUp)}
           {moveButton('down', '아래로 이동', ArrowDown)}
           {moveButton('right', '오른쪽으로 이동', ArrowRight)}
         </div>
-        <span className="mr-1 text-[10px] font-medium text-slate-500 sm:hidden">보드를 밀어서 이동</span>
         <button
-          className={`flex h-11 min-w-11 items-center justify-center rounded-lg border sm:hidden ${
+          className={`game-mobile-pad-toggle flex h-11 min-w-11 items-center justify-center rounded-lg border ${
             padVisible
-              ? 'border-amber-400/70 bg-amber-400/15 text-amber-200'
-              : 'border-slate-600/70 bg-slate-950/90 text-slate-400'
+              ? 'border-[#cfa87a] bg-[#f4c64f] text-[#3d352d]'
+              : 'border-[#cfa87a] bg-[#fffef9] text-[#74685c]'
           }`}
           onClick={togglePad}
           title={padVisible ? '방향패드 숨기기 (스와이프로 이동)' : '방향패드 표시'}
@@ -607,37 +684,39 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
   return (
     <div className="absolute inset-0 overflow-hidden">
-      {/* 보드 스테이지: 스와이프(밀기)로 이동 - 조작 UI가 보드 공간을 잡아먹지 않는다 */}
+      {/* 보드 스테이지: 모바일 방향패드가 보드 아래에 놓일 공간을 예약한다. */}
       <div
         ref={boardStageRef}
-        className={`absolute inset-0 px-2 pt-[112px] ${
-          isFinished ? 'pb-2' : 'pb-[calc(66px+env(safe-area-inset-bottom))]'
+        className={`game-online-board-stage absolute inset-0 px-2 ${
+          isFinished
+            ? 'game-online-board-stage-finished'
+            : padVisible
+              ? 'game-online-board-stage-pad'
+              : 'game-online-board-stage-compact'
         }`}
-        style={{ touchAction: 'none' }}
+        data-mobile-pad-visible={!isFinished && padVisible ? 'true' : 'false'}
         data-testid="online-board-stage"
       >
         <LiveBoardGrid
           boards={liveBoards}
           currentTurnId={currentTurnId}
           myPlayerId={userId}
-          viewMode={effectiveViewMode}
           gameEnded={gameEnded}
           className="h-full w-full"
           emptyState={<span className="text-sm text-slate-400">보드 동기화 중</span>}
         />
       </div>
 
-      {/* 플로팅 방향패드 (모바일) - 공간을 예약하지 않고 우하단에 겹쳐 표시, 토글 가능 */}
+      {/* 모바일 방향패드 전용 영역: 보드와 하단 도구 사이에 배치한다. */}
       {!isFinished && padVisible && (
         <div
-          className="absolute right-2 z-30 sm:hidden"
-          style={{ bottom: 'calc(66px + env(safe-area-inset-bottom))' }}
-          data-testid="online-mobile-direction-float"
+          className="game-mobile-direction-dock absolute inset-x-0 z-30 flex h-[148px] items-center justify-center border-t border-[#e5cfad] bg-[#fffaf0]/95"
+          style={{ bottom: 'calc(58px + env(safe-area-inset-bottom))' }}
+          data-testid="online-mobile-direction-dock"
         >
           <MobileDirectionPad
             disabled={!isMyTurn}
             active={isMyTurn}
-            placement="floating"
             onMove={handleMove}
             testId="online-mobile-direction-pad"
           />
@@ -673,6 +752,19 @@ const GamePlay: React.FC<GamePlayProps> = ({
           </div>
 
           <div className="flex shrink-0 items-center gap-1">
+            {showRank && (
+              <span
+                className={`shrink-0 rounded-md border px-1.5 py-1 text-[10px] font-black leading-none ${
+                  myRank === 1
+                    ? 'border-amber-400/60 bg-amber-400/15 text-amber-200'
+                    : 'border-slate-600/60 bg-slate-800/80 text-slate-200'
+                }`}
+                data-testid="online-rank"
+                aria-label={`현재 순위 ${myRank}위, 총 ${rankTotal}명`}
+              >
+                {myRank}/{rankTotal}위
+              </span>
+            )}
             <div className="flex max-w-[92px] flex-col items-center gap-0.5">
               <span className="text-[9px] font-bold text-slate-500">TURN {gameState?.turnNumber || 1}</span>
               {gameEnded ? (
@@ -687,24 +779,6 @@ const GamePlay: React.FC<GamePlayProps> = ({
                 </span>
               )}
             </div>
-            <div className="flex overflow-hidden rounded-md border border-slate-600/70" aria-label="보드 시점">
-              {(['third', '2d'] as ViewMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  className={`flex size-11 items-center justify-center transition-colors ${
-                    effectiveViewMode === mode
-                      ? 'bg-amber-400 text-slate-900'
-                      : 'bg-slate-800/80 text-slate-400 hover:text-white'
-                  }`}
-                  onClick={() => setViewMode(mode)}
-                  title={mode === 'third' ? '3D 보드' : '2D 보드'}
-                  aria-label={mode === 'third' ? '3D 보드' : '2D 보드'}
-                  aria-pressed={effectiveViewMode === mode}
-                >
-                  {mode === 'third' ? <Box size={17} aria-hidden="true" /> : <Grid2X2 size={17} aria-hidden="true" />}
-                </button>
-              ))}
-            </div>
           </div>
 
           <div className="col-span-2 flex min-w-0 items-center gap-1">
@@ -716,7 +790,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
                     className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 ${
                       currentTurnId === o.id && !gameEnded ? 'bg-amber-400/15 ring-1 ring-amber-300/70' : 'opacity-70'
                     }`}
-                    title={`${o.name} - ${o.forfeited ? '포기' : o.finished ? `${o.finishMoves}턴 완주` : '진행 중'}`}
+                    title={`${o.name} - ${o.forfeited ? '이전 기록 미완주' : o.finished ? `${o.finishMoves}턴 완주` : '진행 중'}`}
                   >
                     {o.photoURL ? (
                       <Image src={o.photoURL} alt={o.name} width={24} height={24} className="w-6 h-6 rounded-full object-cover ring-2 ring-red-400" />
@@ -728,7 +802,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
                     <div className="hidden leading-tight min-[430px]:block">
                       <div className="text-[10px] font-bold text-red-300">{o.name.substring(0, 5)}</div>
                       <div className="text-[9px] text-slate-400">
-                        {o.forfeited ? '포기' : o.finished ? `${o.finishMoves}턴 ✓` : `${o.moves || 0}턴`}
+                        {o.forfeited ? '이전 기록' : o.finished ? `${o.finishMoves}턴 ✓` : `${o.moves || 0}턴`}
                       </div>
                     </div>
                   </div>
@@ -759,10 +833,23 @@ const GamePlay: React.FC<GamePlayProps> = ({
             })()}
           </div>
         </div>
+        {mobileStatusText && (
+          <div className="game-mobile-status mt-1 h-4 min-w-0 items-center justify-center px-2">
+            <span
+              className="max-w-full truncate rounded border border-slate-600/60 bg-slate-950/90 px-2 text-[10px] font-bold leading-4 text-slate-100"
+              data-testid="online-mobile-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {mobileStatusText}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* 메시지/배너 오버레이 */}
-      <div className="pointer-events-none absolute left-1/2 top-[114px] z-20 flex w-[96%] max-w-2xl -translate-x-1/2 flex-col items-center gap-1.5">
+      <div className="game-desktop-messages pointer-events-none absolute left-1/2 top-[114px] z-20 w-[96%] max-w-2xl -translate-x-1/2 flex-col items-center gap-1.5">
         {skillNotice && (
           <div className="rounded border border-emerald-400/50 bg-slate-950/90 px-3 py-1 text-xs font-bold text-emerald-200">
             {skillNotice}
@@ -770,7 +857,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
         )}
         {message && (
           <div
-            className={`text-xs px-3 py-1 rounded-full border backdrop-blur-sm ${
+            className={`rounded-full border px-3 py-1 text-xs backdrop-blur-sm ${
               lastMoveValid === false
                 ? 'bg-red-500/20 border-red-500/50 text-red-200 font-bold'
                 : lastMoveValid === true
@@ -790,57 +877,13 @@ const GamePlay: React.FC<GamePlayProps> = ({
           </div>
         )}
 
-        {/* 상대가 먼저 완주 -> 기록 도전 또는 포기 선택 */}
-        {canForfeit && (
-          <div className="text-xs px-3 py-1.5 rounded-xl bg-orange-500/20 border border-orange-400/50 text-orange-100 font-medium flex items-center gap-2 backdrop-blur-sm pointer-events-auto">
-            <span>
-              상대방이 {opponentFinishMoves ?? '?'}턴으로 완주했습니다.{' '}
-              {opponentFinishMoves == null
-                ? '더 적은 턴으로 완주하면 승리합니다!'
-                : moveCount + 1 < opponentFinishMoves
-                  ? `${opponentFinishMoves - 1}턴 이내로 완주하면 승리합니다! (현재 ${moveCount}턴 사용)`
-                  : moveCount + 1 === opponentFinishMoves
-                    ? '다음 이동에 바로 골인하면 무승부입니다.'
-                    : '이미 상대보다 많은 턴을 사용해 승리할 수 없습니다. 완주하거나 포기하세요.'}
-            </span>
-            <button
-              className="btn-danger text-xs px-2.5 py-1 shrink-0"
-              onClick={() => {
-                if (window.confirm('정말 포기하시겠습니까? 게임이 바로 종료됩니다.')) {
-                  onForfeit?.();
-                }
-              }}
-            >
-              포기하기
-            </button>
+        {!iAmDone && !gameEnded && leadingFinishMoves !== null && (
+          <div className="rounded-xl border border-[#cfa87a] bg-[#fff8de] px-3 py-1.5 text-xs font-bold text-[#5d5146] backdrop-blur-sm">
+            🐇 현재 최고 기록은 {leadingFinishMoves}턴이에요. 기권 없이 끝까지 완주해 내 기록을 만들어보세요!
           </div>
         )}
-      </div>
 
-      {/* 우측 상단 오버레이: 실시간 순위 */}
-      {showRank && (
-      <div className="absolute top-[110px] right-2 z-20">
-        {(
-          <div className={`game-panel !rounded-xl px-3 py-1.5 text-right ${
-            myRank === 1 ? '!border-amber-400/60' : ''
-          }`}>
-            <div className="flex items-baseline justify-end gap-1 leading-none">
-              <span className="text-[11px]">🏁</span>
-              <span className={`text-2xl font-black ${
-                myRank === 1 ? 'text-amber-300' : myRank === rankTotal ? 'text-red-300' : 'text-slate-200'
-              }`}>
-                {myRank}
-              </span>
-              <span className="text-[11px] font-bold text-slate-300">위</span>
-              <span className="text-[10px] text-slate-500">/ {rankTotal}명</span>
-            </div>
-            <div className="text-[10px] text-slate-400 mt-0.5">
-              {myFinished ? `${myFinishMoves ?? moveCount}턴 완주` : `${moveCount}턴 사용`}
-            </div>
-          </div>
-        )}
       </div>
-      )}
     </div>
   );
 };

@@ -11,8 +11,8 @@ interface SwipeMoveOptions {
 
 /**
  * 보드 스테이지를 밀어서(플릭) 방향 입력을 만드는 훅.
- * - 방향패드가 화면을 가리지 않도록 하는 기본 모바일 조작 수단
- * - 버튼/링크/[data-no-swipe] 위에서 시작한 제스처는 무시 (탭과 충돌 방지)
+ * - 내 보드에서 시작한 모바일 제스처만 이동으로 처리
+ * - 버튼/링크/[data-no-swipe] 위에서 시작한 제스처는 무시
  * - 대각선에 가까운 애매한 제스처는 무시 (오입력 방지)
  */
 export function useSwipeMove(
@@ -33,9 +33,12 @@ export function useSwipeMove(
 
     const handleDown = (event: PointerEvent) => {
       if (!enabledRef.current) return;
+      if (!window.matchMedia('(max-width: 932px), (pointer: coarse)').matches) return;
       if (event.button !== 0) return;
       const origin = event.target as HTMLElement | null;
       if (origin?.closest('button, a, input, textarea, select, [data-no-swipe]')) return;
+      const board = origin?.closest('[data-player-board][data-my-player="true"]');
+      if (!board || !element.contains(board)) return;
       start = { x: event.clientX, y: event.clientY, time: performance.now(), pointerId: event.pointerId };
       // 빠른 플릭이 HUD 등 겹친 요소 위에서 끝나도 up 이벤트를 놓치지 않도록 캡처
       try {

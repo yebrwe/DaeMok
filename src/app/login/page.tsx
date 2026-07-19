@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { signInWithGoogle } from '@/lib/firebase';
-import { getDatabase, ref, update, serverTimestamp } from 'firebase/database';
+import { getDatabase, ref, update } from 'firebase/database';
 
 export default function LoginPage() {
   const [isSigningIn, setIsSigningIn] = useState(false);
@@ -38,9 +38,7 @@ export default function LoginPage() {
         const database = getDatabase();
         await update(ref(database, `users/${userInfo.uid}`), {
           displayName: userInfo.displayName || '익명 사용자',
-          email: userInfo.email || null,
           photoURL: userInfo.photoURL || null,
-          lastLogin: serverTimestamp(),
         });
       } catch (dbError) {
         // 프로필 저장 실패는 로그인 자체를 막지 않음

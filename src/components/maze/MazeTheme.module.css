@@ -1,0 +1,179 @@
+.shell {
+  --maze-bg: #f6eddf;
+  --maze-bg-mint: #dff1e8;
+  --maze-paper: #fffaf0;
+  --maze-paper-raised: #fffef9;
+  --maze-paper-muted: #f2e4cf;
+  --maze-ink: #3d352d;
+  --maze-ink-muted: #74685c;
+  --maze-outline: #5d4635;
+  --maze-line: #cfa87a;
+  --maze-line-soft: #e5cfad;
+  --maze-honey: #f4c64f;
+  --maze-mint: #69cdb7;
+  --maze-mint-ink: #173b37;
+  --maze-coral: #f08b78;
+  --maze-success: #72b86b;
+  --maze-danger: #b94646;
+  --maze-focus: #1f708b;
+  --maze-radius-sm: 10px;
+  --maze-radius-md: 14px;
+  --maze-radius-lg: 20px;
+  --maze-touch: 44px;
+
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  min-height: 100svh;
+  overflow-x: clip;
+  color: var(--maze-ink);
+  color-scheme: light;
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 52%) 0 1px, transparent 1px 18px),
+    radial-gradient(circle at 18% 8%, #fffdf5 0 9rem, transparent 23rem),
+    linear-gradient(145deg, var(--maze-bg) 0%, #f8f0df 48%, var(--maze-bg-mint) 100%);
+}
+
+.shell::before {
+  position: fixed;
+  z-index: -3;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  opacity: 0.3;
+  background-image:
+    radial-gradient(circle, rgb(93 70 53 / 24%) 0 1px, transparent 1.5px),
+    radial-gradient(circle, rgb(105 205 183 / 22%) 0 1px, transparent 1.5px);
+  background-position: 0 0, 12px 12px;
+  background-size: 24px 24px;
+}
+
+.paperGlow,
+.mintGlow {
+  position: fixed;
+  z-index: -2;
+  width: min(36rem, 78vw);
+  aspect-ratio: 1;
+  border-radius: 999px;
+  pointer-events: none;
+  filter: blur(72px);
+  opacity: 0.28;
+}
+
+.paperGlow {
+  top: -18rem;
+  left: -12rem;
+  background: var(--maze-honey);
+}
+
+.mintGlow {
+  right: -16rem;
+  bottom: -20rem;
+  background: var(--maze-mint);
+}
+
+.content {
+  position: relative;
+  z-index: 1;
+  min-height: inherit;
+}
+
+.shell :global(.game-panel) {
+  color: var(--maze-ink);
+  border: 2px solid var(--maze-line-soft);
+  background: linear-gradient(155deg, rgb(255 254 249 / 98%), rgb(255 250 240 / 96%));
+  box-shadow:
+    0 4px 0 rgb(93 70 53 / 12%),
+    0 12px 30px rgb(93 70 53 / 10%);
+}
+
+.shell :global(.btn-game),
+.shell :global(.btn-sub) {
+  min-height: var(--maze-touch);
+  border: 2px solid var(--maze-outline);
+  border-radius: var(--maze-radius-md);
+  font-weight: 900;
+  box-shadow: 0 3px 0 rgb(93 70 53 / 24%);
+  transition: translate 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+}
+
+.shell :global(.btn-game) {
+  color: #3d352d;
+  background: var(--maze-honey);
+}
+
+.shell :global(.btn-sub) {
+  color: var(--maze-mint-ink);
+  background: #effaf5;
+}
+
+.shell :global(.btn-dpad) {
+  min-width: var(--maze-touch);
+  min-height: var(--maze-touch);
+  color: var(--maze-ink);
+  border: 2px solid var(--maze-outline);
+  background: var(--maze-paper-raised);
+  box-shadow: 0 3px 0 rgb(93 70 53 / 22%);
+}
+
+.shell :global(.badge-turn) {
+  color: var(--maze-mint-ink);
+  border: 2px solid var(--maze-mint);
+  background: #e4f6ef;
+  box-shadow: none;
+}
+
+.shell :global(.btn-game:hover),
+.shell :global(.btn-sub:hover) {
+  filter: saturate(1.06) brightness(1.02);
+}
+
+.shell :global(.btn-game:active),
+.shell :global(.btn-sub:active) {
+  translate: 0 2px;
+  box-shadow: 0 1px 0 rgb(93 70 53 / 24%);
+}
+
+.shell :global(button:focus-visible),
+.shell :global(a:focus-visible),
+.shell :global(input:focus-visible),
+.shell :global([tabindex]:focus-visible) {
+  outline: 3px solid var(--maze-focus);
+  outline-offset: 3px;
+}
+
+.shell :global(button:disabled),
+.shell :global(input:disabled) {
+  cursor: not-allowed;
+  filter: grayscale(0.35);
+  opacity: 0.62;
+}
+
+@media (max-width: 639px) {
+  .shell {
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    background:
+      radial-gradient(circle at 18% 4%, #fffdf5 0 7rem, transparent 17rem),
+      linear-gradient(155deg, var(--maze-bg) 0%, var(--maze-bg-mint) 100%);
+  }
+
+  .shell :global(.game-panel) {
+    box-shadow: 0 3px 0 rgb(93 70 53 / 12%);
+  }
+
+  .shell :global(button),
+  .shell :global(a[role='button']) {
+    touch-action: manipulation;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell *,
+  .shell *::before,
+  .shell *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

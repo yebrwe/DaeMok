@@ -155,7 +155,7 @@ export interface GameState {
   turnOrder?: string[];
   turnNumber?: number;
   winner?: string | null;
-  draw?: boolean; // 최소 턴 동률 -> 무승부(공동 우승)
+  draw?: boolean | null; // 최소 턴 동률 -> 무승부(공동 우승), RTDB null은 필드 제거
   collisionWalls?: Record<string, CollisionWall> | CollisionWall[];
   itemState?: Record<string, ItemStateEntry>;
   revealedWallsByPlayer?: Record<string, Obstacle[]>;
