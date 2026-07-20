@@ -14,6 +14,8 @@ import { BoardFx } from '@/components/three/GameBoard3D';
 import { Direction, GameMap, GamePhase, GameState } from '@/types/game';
 import {
   MoveTurnOutcome,
+  getActiveFireVisionEffect,
+  getActivePoisonEffect,
   isVisionObscuredForPlayer,
   normalizeConsumed,
   resolveTurnAction,
@@ -60,7 +62,12 @@ function outcomeVisual(outcome: MoveTurnOutcome, key: number): RacerVisualState 
   }
   if (outcome.effect === 'bump') {
     return {
-      fx: { key, type: 'bump', at: outcome.origin, dir: outcome.direction },
+      fx: {
+        key,
+        type: outcome.wallEffect === 'fireWall' ? 'fire' : 'bump',
+        at: outcome.origin,
+        dir: outcome.direction,
+      },
       via:
         outcome.wallEffect === 'thornWall' && !isSamePosition(outcome.position, outcome.origin)
           ? [outcome.origin]
@@ -86,6 +93,12 @@ function outcomeVisual(outcome: MoveTurnOutcome, key: number): RacerVisualState 
     !isSamePosition(outcome.position, outcome.attempted)
   ) {
     return { fx: null, via: [outcome.attempted] };
+  }
+  if (outcome.poisonMisdirected) {
+    return {
+      fx: { key, type: 'poison', at: outcome.origin, dir: outcome.direction },
+      via: null,
+    };
   }
   return { fx: null, via: null };
 }
@@ -233,6 +246,8 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
       const playedMap = ownerId ? gameState.maps?.[ownerId] : null;
       if (!player || !ownerId || !playedMap) return [];
       const mapItemState = gameState.itemState?.[ownerId];
+      const fireEffect = getActiveFireVisionEffect(gameState, runnerId);
+      const poisonEffect = getActivePoisonEffect(gameState, runnerId);
 
       return [{
         runnerId,
@@ -253,6 +268,9 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
         itemActiveWalls: normalizeConsumed(mapItemState?.activeWalls),
         itemPhaseOpen: normalizeConsumed(mapItemState?.phaseOpen),
         revealedWalls: gameState.revealedWallsByPlayer?.[runnerId] || [],
+        heatWalls: fireEffect?.phantomWalls || [],
+        fireAffected: !!fireEffect,
+        poisonAffected: !!poisonEffect,
         fx: visuals[runnerId]?.fx || null,
         via: visuals[runnerId]?.via || null,
         celebrating: !!player.finished,
@@ -265,6 +283,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
           runnerId === PRACTICE_USER_ID &&
           gameState.currentTurn === runnerId &&
           isVisionObscuredForPlayer(gameState, runnerId),
+        wormholeRun: gameState.wormholeRunsByPlayer?.[runnerId] || null,
       }];
     });
   }, [gameState, mode, visuals]);

@@ -82,7 +82,12 @@ const fake = (row, col, direction = 'right') => ({
 const mine = (row, col) => ({ type: 'mine', position: pos(row, col) });
 const smoke = (row, col) => ({ type: 'smoke', position: pos(row, col) });
 const radar = () => ({ type: 'radar' });
-const wormhole = (entrance, exit) => ({ type: 'wormhole', entrance, exit });
+const wormhole = (entrance, exit, challenge) => ({
+  type: 'wormhole',
+  entrance,
+  exit,
+  ...(challenge ? { challenge } : {}),
+});
 const specialWall = (type, row, col, wallDirection = 'right', extra = {}) => ({
   type,
   wallPosition: pos(row, col),
@@ -221,6 +226,70 @@ assert.equal(
   'wormhole cap exceeded'
 );
 
+const sealedWormholeChallenge = {
+  version: 1,
+  startPosition: pos(0, 0),
+  endPosition: pos(1, 0),
+  seals: [pos(0, 5), pos(5, 5), pos(5, 0)],
+  obstacles: [
+    { position: pos(0, 0), direction: 'right' },
+    { position: pos(2, 1), direction: 'right' },
+    { position: pos(3, 2), direction: 'right' },
+    { position: pos(4, 3), direction: 'right' },
+  ],
+};
+const sealedWormhole = wormhole(pos(0, 1), pos(4, 4), sealedWormholeChallenge);
+assert.equal(
+  utils.getWormholeChallengeCompletionSteps(sealedWormholeChallenge),
+  21,
+  'configured challenge measures the shortest route through all three seals'
+);
+assert.equal(
+  utils.isValidWormholeChallenge(sealedWormholeChallenge),
+  true,
+  'a solvable three-seal challenge inside the difficulty window is valid'
+);
+assert.equal(
+  utils.isValidWormholeChallenge({
+    ...sealedWormholeChallenge,
+    obstacles: sealedWormholeChallenge.obstacles.slice(0, 3),
+  }),
+  false,
+  'new wormhole challenges keep at least four persisted internal walls'
+);
+assert.equal(
+  utils.isValidMap(baseMap({ items: [safeWormhole] })),
+  true,
+  'legacy challenge-less wormholes remain readable'
+);
+assert.equal(
+  utils.isValidNewMap(baseMap({ skillLoadout: 'scoutPulse', items: [safeWormhole] })),
+  false,
+  'new maps cannot submit a challenge-less wormhole'
+);
+assert.equal(
+  utils.isValidNewMap(baseMap({ skillLoadout: 'scoutPulse', items: [sealedWormhole] })),
+  true,
+  'new maps accept a configured three-seal wormhole challenge'
+);
+const clonedWormholeMap = utils.cloneGameMap(baseMap({ items: [sealedWormhole] }));
+assert.deepEqual(clonedWormholeMap.items[0].challenge, sealedWormholeChallenge);
+assert.notStrictEqual(
+  clonedWormholeMap.items[0].challenge,
+  sealedWormholeChallenge,
+  'wormhole challenge clone is detached from the submitted object'
+);
+assert.notStrictEqual(
+  clonedWormholeMap.items[0].challenge.seals[0],
+  sealedWormholeChallenge.seals[0],
+  'wormhole seals are deep-cloned'
+);
+assert.notStrictEqual(
+  clonedWormholeMap.items[0].challenge.obstacles[0],
+  sealedWormholeChallenge.obstacles[0],
+  'wormhole challenge walls are deep-cloned'
+);
+
 const isolatedExitWalls = [
   { position: pos(3, 4), direction: 'down' },
   { position: pos(3, 5), direction: 'down' },
@@ -301,8 +370,19 @@ assert.equal(steelHit.outcome.consumedItemIndex, null, 'steel ignores consumed/b
 
 const fireHit = resolveSpecial(baseMap({ items: [specialWall('fireWall', 0, 0)] }));
 assert.deepEqual(fireHit.outcome.position, pos(0, 0), 'fire blocks once');
-assert.equal(fireHit.outcome.moves, 2, 'fire adds one move penalty');
+assert.equal(fireHit.outcome.moves, 1, 'fire no longer adds a numeric move penalty');
 assert.equal(fireHit.state.itemState.b.consumed[0], true, 'fire is consumed');
+assert.equal(fireHit.state.visionEffectsByPlayer.a.type, 'fire', 'fire ignites the runner');
+assert.equal(
+  fireHit.state.visionEffectsByPlayer.a.phantomWalls.length,
+  6,
+  'fire mixes six real-looking heat walls into the runner view'
+);
+assert.equal(
+  fireHit.state.visionEffectsByPlayer.a.expiresAtTargetMove,
+  3,
+  'fire hallucinations last for the next two runner actions'
+);
 
 const fakeHitMap = baseMap({ items: [fake(0, 0)] });
 const fakeHit = resolveSpecial(fakeHitMap);
@@ -361,8 +441,123 @@ assert.equal(
 
 const poisonPass = resolveSpecial(baseMap({ items: [specialWall('poisonWall', 0, 0)] }));
 assert.deepEqual(poisonPass.outcome.position, pos(0, 1), 'poison allows passage');
-assert.equal(poisonPass.outcome.moves, 3, 'poison adds two move penalty');
+assert.equal(poisonPass.outcome.moves, 1, 'poison no longer adds a numeric move penalty');
 assert.equal(poisonPass.state.itemState.b.consumed[0], true, 'poison is consumed');
+assert.equal(
+  poisonPass.state.poisonEffectsByPlayer.a.expiresAtTargetMove,
+  5,
+  'poison lasts for the next four runner actions'
+);
+
+let poisonedTurn = null;
+let poisonMisdirectionSeed = null;
+for (let seed = 0; seed < 256 && !poisonedTurn; seed += 1) {
+  const candidateState = structuredClone(poisonPass.state);
+  candidateState.currentTurn = 'a';
+  candidateState.players.a.position = pos(2, 2);
+  candidateState.players.a.moves = 1;
+  candidateState.poisonEffectsByPlayer.a = {
+    sourcePlayerId: 'b',
+    appliedAtTurn: 1,
+    expiresAtTargetMove: 10,
+    seed,
+  };
+  const candidate = turns.resolveTurnAction(candidateState, 'a', {
+    type: 'move',
+    direction: 'right',
+  }, 102);
+  if (candidate?.outcome.poisonMisdirected) {
+    poisonedTurn = candidate;
+    poisonMisdirectionSeed = seed;
+  }
+}
+assert.ok(poisonedTurn, 'a deterministic poison seed exercises the one-in-four branch');
+assert.notEqual(poisonMisdirectionSeed, null, 'the deterministic poison branch exposes its seed');
+assert.equal(poisonedTurn.outcome.requestedDirection, 'right', 'poison records the intended input');
+assert.notEqual(poisonedTurn.outcome.direction, 'right', 'poison selects a different direction');
+assert.equal(
+  Math.abs(poisonedTurn.outcome.position.row - 2) + Math.abs(poisonedTurn.outcome.position.col - 2),
+  1,
+  'poison redirects to another valid adjacent cell'
+);
+
+const poisonCleanRedirectMap = baseMap({
+  obstacles: [{ position: pos(2, 2), direction: 'up' }],
+  items: [specialWall('fireWall', 2, 2, 'down')],
+});
+const poisonCleanRedirectState = runtimeState(poisonCleanRedirectMap, {
+  position: pos(2, 2),
+  history: [pos(2, 2)],
+  moves: 1,
+});
+poisonCleanRedirectState.poisonEffectsByPlayer = {
+  a: {
+    sourcePlayerId: 'b',
+    appliedAtTurn: 1,
+    expiresAtTargetMove: 10,
+    seed: poisonMisdirectionSeed,
+  },
+};
+const poisonCleanRedirect = turns.resolveTurnAction(poisonCleanRedirectState, 'a', {
+  type: 'move',
+  direction: 'right',
+}, 103);
+assert.ok(poisonCleanRedirect, 'poison resolves when only one clean alternate direction remains');
+assert.equal(poisonCleanRedirect.outcome.poisonMisdirected, true);
+assert.equal(poisonCleanRedirect.outcome.direction, 'left');
+assert.deepEqual(
+  poisonCleanRedirect.outcome.position,
+  pos(2, 1),
+  'poison skips a static wall and an active special wall to guarantee a real alternate step'
+);
+assert.equal(
+  poisonCleanRedirect.state.itemState?.b?.consumed,
+  undefined,
+  'the redirected step does not consume the special wall it avoided'
+);
+assert.equal(
+  poisonCleanRedirect.state.visionEffectsByPlayer,
+  undefined,
+  'the redirected step does not trigger the avoided fire wall'
+);
+
+const poisonNoCleanRedirectMap = baseMap({
+  obstacles: [{ position: pos(2, 2), direction: 'up' }],
+  items: [
+    specialWall('fireWall', 2, 2, 'down'),
+    mine(2, 1),
+  ],
+});
+const poisonNoCleanRedirectState = runtimeState(poisonNoCleanRedirectMap, {
+  position: pos(2, 2),
+  history: [pos(2, 2)],
+  moves: 1,
+});
+poisonNoCleanRedirectState.poisonEffectsByPlayer = {
+  a: {
+    sourcePlayerId: 'b',
+    appliedAtTurn: 1,
+    expiresAtTargetMove: 10,
+    seed: poisonMisdirectionSeed,
+  },
+};
+const poisonNoCleanRedirect = turns.resolveTurnAction(poisonNoCleanRedirectState, 'a', {
+  type: 'move',
+  direction: 'right',
+}, 104);
+assert.ok(poisonNoCleanRedirect, 'poison keeps the input when every alternate route has an effect');
+assert.equal(poisonNoCleanRedirect.outcome.poisonMisdirected, undefined);
+assert.equal(poisonNoCleanRedirect.outcome.direction, 'right');
+assert.deepEqual(
+  poisonNoCleanRedirect.outcome.position,
+  pos(2, 3),
+  'the requested direction is preserved when no clean alternate step exists'
+);
+assert.equal(
+  poisonNoCleanRedirect.state.itemState,
+  undefined,
+  'fallback movement consumes neither the alternate wall nor the alternate mine'
+);
 
 const icePass = resolveSpecial(baseMap({ items: [specialWall('iceWall', 0, 0)] }));
 assert.deepEqual(icePass.outcome.position, pos(0, 2), 'ice safely slides one extra cell');
@@ -666,6 +861,222 @@ assert.deepEqual(
   crystalHit.state.revealedWallsByPlayer.a,
   [nearbyTrueWall],
   'crystal reveals only nearby true walls'
+);
+
+const legacyWormholePass = resolveSpecial(baseMap({
+  items: [wormhole(pos(0, 1), pos(3, 3))],
+}));
+assert.equal(legacyWormholePass.outcome.effect, 'wormhole', 'legacy wormhole still triggers');
+assert.deepEqual(
+  legacyWormholePass.state.players.a.position,
+  pos(3, 3),
+  'legacy challenge-less wormhole keeps its immediate teleport behavior'
+);
+assert.equal(
+  legacyWormholePass.state.wormholeRunsByPlayer,
+  undefined,
+  'legacy wormhole does not create an internal challenge run'
+);
+
+let wormholeRelayState = {
+  phase: types.GamePhase.PLAY,
+  currentTurn: 'a',
+  turnNumber: 1,
+  turnOrder: ['a', 'b'],
+  players: {
+    a: {
+      id: 'a',
+      position: pos(0, 0),
+      positionHistory: [pos(0, 0)],
+      moves: 0,
+      isReady: true,
+    },
+    b: {
+      id: 'b',
+      position: pos(0, 0),
+      positionHistory: [pos(0, 0)],
+      moves: 0,
+      isReady: true,
+    },
+  },
+  assignments: { a: 'b', b: 'a' },
+  maps: {
+    a: baseMap(),
+    b: baseMap({ items: [sealedWormhole] }),
+  },
+};
+let wormholeNow = 1_000;
+
+function resolveRelayMove(actorId, direction) {
+  assert.equal(wormholeRelayState.currentTurn, actorId, `${actorId} owns the current relay turn`);
+  const beforeTurn = wormholeRelayState.turnNumber;
+  const beforeMoves = wormholeRelayState.players[actorId].moves || 0;
+  const resolved = turns.resolveTurnAction(
+    wormholeRelayState,
+    actorId,
+    { type: 'move', direction },
+    wormholeNow++
+  );
+  assert.ok(resolved, `${actorId} relay move resolves`);
+  assert.equal(
+    resolved.state.turnNumber,
+    beforeTurn + 1,
+    'every outer or wormhole action advances the shared turn number exactly once'
+  );
+  assert.equal(
+    resolved.state.players[actorId].moves,
+    beforeMoves + 1,
+    'every outer or wormhole action costs the acting player exactly one move'
+  );
+  assert.equal(
+    resolved.state.currentTurn,
+    actorId === 'a' ? 'b' : 'a',
+    'outer and wormhole actions both alternate the relay turn'
+  );
+  wormholeRelayState = resolved.state;
+  return resolved;
+}
+
+function resolveChallengeMove(direction) {
+  if (wormholeRelayState.currentTurn === 'b') {
+    const relayDirection = wormholeRelayState.players.b.position.row === 0 ? 'down' : 'up';
+    resolveRelayMove('b', relayDirection);
+  }
+  const externalPosition = { ...wormholeRelayState.players.a.position };
+  const resolved = resolveRelayMove('a', direction);
+  if (resolved.outcome.wormholeTransition !== 'returned') {
+    assert.deepEqual(
+      wormholeRelayState.players.a.position,
+      externalPosition,
+      'external player position stays pinned to the entrance during the challenge'
+    );
+  }
+  return resolved;
+}
+
+const enteredWormhole = resolveRelayMove('a', 'right');
+assert.equal(enteredWormhole.outcome.effect, 'wormhole');
+assert.equal(enteredWormhole.outcome.realm, 'main');
+assert.equal(enteredWormhole.outcome.wormholeTransition, 'entered');
+assert.deepEqual(
+  enteredWormhole.state.players.a.position,
+  sealedWormhole.entrance,
+  'challenge entry pins the external player to the configured entrance'
+);
+assert.deepEqual(
+  enteredWormhole.state.wormholeRunsByPlayer.a.position,
+  sealedWormholeChallenge.startPosition,
+  'challenge entry starts the internal run at its configured start cell'
+);
+assert.deepEqual(
+  enteredWormhole.outcome.wormholeExit,
+  sealedWormholeChallenge.startPosition,
+  'entry outcome points the board transition at the internal start cell'
+);
+assert.equal(enteredWormhole.state.itemState.b.consumed[0], true, 'entry consumes the outer wormhole once');
+
+const poisonedWormholeState = structuredClone(enteredWormhole.state);
+poisonedWormholeState.currentTurn = 'a';
+poisonedWormholeState.poisonEffectsByPlayer = {
+  a: {
+    sourcePlayerId: 'b',
+    appliedAtTurn: 1,
+    expiresAtTargetMove: 10,
+    seed: poisonMisdirectionSeed,
+  },
+};
+const poisonedWormholeMove = turns.resolveTurnAction(poisonedWormholeState, 'a', {
+  type: 'move',
+  direction: 'right',
+}, wormholeNow++);
+assert.ok(poisonedWormholeMove, 'poison direction selection resolves inside a wormhole challenge');
+assert.equal(poisonedWormholeMove.outcome.poisonMisdirected, true);
+assert.equal(poisonedWormholeMove.outcome.requestedDirection, 'right');
+assert.equal(poisonedWormholeMove.outcome.direction, 'down');
+assert.equal(poisonedWormholeMove.outcome.effect, 'move');
+assert.deepEqual(
+  poisonedWormholeMove.state.wormholeRunsByPlayer.a.position,
+  pos(1, 0),
+  'poison skips the internal wall and completes the only passable alternate step'
+);
+assert.equal(
+  poisonedWormholeMove.state.wormholeRunsByPlayer.a.discoveredWalls,
+  undefined,
+  'poison redirection does not record a collision against the avoided internal wall'
+);
+
+const internalWallHit = resolveChallengeMove('right');
+assert.equal(internalWallHit.outcome.effect, 'bump', 'an internal challenge wall blocks movement');
+assert.equal(internalWallHit.outcome.realm, 'wormhole');
+assert.deepEqual(internalWallHit.outcome.position, pos(0, 0));
+assert.deepEqual(
+  internalWallHit.state.wormholeRunsByPlayer.a.discoveredWalls,
+  [{ position: pos(0, 0), direction: 'right' }],
+  'an internal collision is remembered inside the private wormhole run'
+);
+assert.equal(
+  Object.keys(internalWallHit.state.collisionWalls || {}).length,
+  0,
+  'an internal collision does not leak into the outer map collision history'
+);
+
+const lockedExit = resolveChallengeMove('down');
+assert.deepEqual(lockedExit.outcome.position, sealedWormholeChallenge.endPosition);
+assert.match(lockedExit.outcome.message, /잠겨/, 'the internal exit reports that it is locked');
+assert.ok(
+  lockedExit.state.wormholeRunsByPlayer.a,
+  'reaching the internal exit before all seals does not return to the main map'
+);
+assert.deepEqual(lockedExit.state.players.a.position, sealedWormhole.entrance);
+
+for (let step = 0; step < 5; step += 1) resolveChallengeMove('right');
+const firstSeal = resolveChallengeMove('up');
+assert.equal(firstSeal.outcome.wormholeTransition, 'seal');
+assert.equal(firstSeal.state.wormholeRunsByPlayer.a.activatedSeals[0], true);
+
+let secondSeal;
+for (let step = 0; step < 5; step += 1) secondSeal = resolveChallengeMove('down');
+assert.equal(secondSeal.outcome.wormholeTransition, 'seal');
+assert.equal(secondSeal.state.wormholeRunsByPlayer.a.activatedSeals[1], true);
+
+let thirdSeal;
+for (let step = 0; step < 5; step += 1) thirdSeal = resolveChallengeMove('left');
+assert.equal(thirdSeal.outcome.wormholeTransition, 'seal');
+assert.deepEqual(
+  thirdSeal.state.wormholeRunsByPlayer.a.activatedSeals,
+  { 0: true, 1: true, 2: true },
+  'all three configured seals activate independently'
+);
+assert.deepEqual(
+  thirdSeal.state.players.a.position,
+  sealedWormhole.entrance,
+  'activating the final seal alone does not teleport the player out'
+);
+
+for (let step = 0; step < 3; step += 1) resolveChallengeMove('up');
+const returnedFromWormhole = resolveChallengeMove('up');
+assert.equal(returnedFromWormhole.outcome.realm, 'main');
+assert.equal(returnedFromWormhole.outcome.wormholeTransition, 'returned');
+assert.equal(returnedFromWormhole.outcome.effect, 'wormhole');
+assert.deepEqual(
+  returnedFromWormhole.state.players.a.position,
+  sealedWormhole.exit,
+  'the unlocked internal exit returns to the creator-configured outer exit'
+);
+assert.equal(
+  returnedFromWormhole.state.wormholeRunsByPlayer,
+  undefined,
+  'the private challenge run is removed after a successful return'
+);
+assert.deepEqual(
+  returnedFromWormhole.state.players.a.positionHistory,
+  [pos(0, 0), sealedWormhole.entrance, sealedWormhole.exit],
+  'internal steps stay out of outer history while entry and return are recorded'
+);
+assert.equal(
+  returnedFromWormhole.state.players.a.moves,
+  23,
+  'entry, collision, locked-exit visit, seal route, and return all count toward moves'
 );
 
 const unsafeRuntimeMap = baseMap({

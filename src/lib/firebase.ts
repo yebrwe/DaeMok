@@ -750,6 +750,8 @@ export const startGame = async (roomId: string): Promise<boolean> => {
       // 설정 단계의 레거시 소비/스킬 상태는 새 경기에 승계하지 않는다.
       // 실제 아이템 상태는 효과가 발생할 때 턴 엔진이 지연 생성한다.
       delete persistentState.itemState;
+      delete persistentState.poisonEffectsByPlayer;
+      delete persistentState.wormholeRunsByPlayer;
       return {
         ...persistentState,
         rulesVersion: ruleSnapshot.version,

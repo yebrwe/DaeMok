@@ -39,6 +39,8 @@ function clone(value) {
   return structuredClone(value);
 }
 
+const gameUtils = loadTypeScript('src/lib/gameUtils.ts');
+
 const ITEM_COSTS = {
   oneTimeWall: 7,
   mine: 1,
@@ -170,6 +172,7 @@ function baseView(audience, overrides = {}) {
       ...(member ? {
         itemState: {
           [OWNER]: {
+            consumed: [true],
             mazeSkill: {
               version: 1,
               loadout: { 0: 'scoutPulse' },
@@ -250,6 +253,7 @@ async function main() {
         appCheckStatus: 'emulator',
       }),
     },
+    '@/lib/gameUtils': gameUtils,
     'firebase/functions': {
       httpsCallable(functions, name) {
         assert.strictEqual(functions, firebaseFunctions);
@@ -793,6 +797,114 @@ async function main() {
     loadout: ['scoutPulse'],
     consumed: {},
   });
+  assert.deepEqual(
+    memberView.gameState.itemState[OWNER].consumed,
+    { 0: true },
+    'RTDB numeric-key arrays canonicalize back to boolean index records',
+  );
+
+  const memberWithPoison = clone(memberRaw);
+  memberWithPoison.gameState.poisonEffectsByPlayer = {
+    [OWNER]: {
+      sourcePlayerId: GUEST,
+      appliedAtTurn: 4,
+      expiresAtTargetMove: 7,
+    },
+  };
+  const memberPoisonView = client.canonicalizeMazeAuthorityMemberView(
+    memberWithPoison,
+    OWNER,
+    ROOM_ID,
+  );
+  assert.ok(memberPoisonView, 'a redacted poison status remains readable by its affected member');
+  assert.deepEqual(memberPoisonView.gameState.poisonEffectsByPlayer[OWNER], {
+    sourcePlayerId: GUEST,
+    appliedAtTurn: 4,
+    expiresAtTargetMove: 7,
+  });
+  const memberWithInjectedPoisonSeed = clone(memberWithPoison);
+  memberWithInjectedPoisonSeed.gameState.poisonEffectsByPlayer[OWNER].seed = 0x1234_5678;
+  assert.equal(
+    client.canonicalizeMazeAuthorityMemberView(
+      memberWithInjectedPoisonSeed,
+      OWNER,
+      ROOM_ID,
+    ),
+    null,
+    'the exact poison view parser rejects an injected server-only seed',
+  );
+
+  const hiddenWormholeWalls = [
+    { position: { row: 0, col: 1 }, direction: 'down' },
+    { position: { row: 0, col: 2 }, direction: 'down' },
+    { position: { row: 1, col: 3 }, direction: 'right' },
+    { position: { row: 2, col: 3 }, direction: 'right' },
+    { position: { row: 3, col: 1 }, direction: 'right' },
+    { position: { row: 4, col: 1 }, direction: 'right' },
+    { position: { row: 4, col: 3 }, direction: 'down' },
+    { position: { row: 4, col: 4 }, direction: 'down' },
+  ];
+  const memberWithSparseSeals = clone(memberRaw);
+  memberWithSparseSeals.gameState.wormholeRunsByPlayer = {
+    [OWNER]: {
+      mapOwnerId: GUEST,
+      itemIndex: 0,
+      position: { row: 0, col: 0 },
+      enteredAtTurn: 4,
+      activatedSeals: [true, null, true],
+      discoveredWalls: [hiddenWormholeWalls[0]],
+      challenge: {
+        version: 1,
+        startPosition: { row: 0, col: 0 },
+        endPosition: { row: 2, col: 2 },
+        seals: [{ row: 0, col: 5 }, { row: 5, col: 5 }, { row: 5, col: 0 }],
+      },
+    },
+  };
+  const sparseSealView = client.canonicalizeMazeAuthorityMemberView(
+    memberWithSparseSeals,
+    OWNER,
+    ROOM_ID,
+  );
+  assert.ok(sparseSealView, 'RTDB sparse activated-seal arrays remain readable');
+  assert.deepEqual(
+    sparseSealView.gameState.wormholeRunsByPlayer[OWNER].activatedSeals,
+    { 0: true, 2: true },
+  );
+  assert.deepEqual(
+    sparseSealView.gameState.wormholeRunsByPlayer[OWNER].discoveredWalls,
+    [hiddenWormholeWalls[0]],
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      sparseSealView.gameState.wormholeRunsByPlayer[OWNER].challenge,
+      'obstacles',
+    ),
+    false,
+    'a parsed member PLAY run never materializes hidden challenge walls',
+  );
+
+  const memberWithLeakedWormholeWalls = clone(memberWithSparseSeals);
+  memberWithLeakedWormholeWalls.gameState.wormholeRunsByPlayer[OWNER]
+    .challenge.obstacles = hiddenWormholeWalls;
+  assert.equal(
+    client.canonicalizeMazeAuthorityMemberView(
+      memberWithLeakedWormholeWalls,
+      OWNER,
+      ROOM_ID,
+    ),
+    null,
+    'a member PLAY projection rejects injected hidden wormhole walls',
+  );
+  const publicWithLeakedWormholeWalls = clone(publicRaw);
+  publicWithLeakedWormholeWalls.gameState.wormholeRunsByPlayer = clone(
+    memberWithLeakedWormholeWalls.gameState.wormholeRunsByPlayer,
+  );
+  assert.equal(
+    client.canonicalizeMazeAuthorityPublicView(publicWithLeakedWormholeWalls, ROOM_ID),
+    null,
+    'a public PLAY projection rejects injected hidden wormhole walls',
+  );
 
   assert.equal(
     client.canonicalizeMazeAuthorityPublicView({
@@ -881,6 +993,24 @@ async function main() {
       `the legacy V3 rule snapshot keeps ${retiredWall} on the wire`,
     );
   }
+  const endedWithFullWormholeRun = clone(endedLegacy);
+  endedWithFullWormholeRun.gameState.wormholeRunsByPlayer = {
+    [OWNER]: {
+      ...clone(memberWithSparseSeals.gameState.wormholeRunsByPlayer[OWNER]),
+      challenge: {
+        ...clone(memberWithSparseSeals.gameState.wormholeRunsByPlayer[OWNER].challenge),
+        obstacles: hiddenWormholeWalls,
+      },
+    },
+  };
+  const endedWithFullWormholeView = client.canonicalizeMazeAuthorityPublicView(
+    endedWithFullWormholeRun,
+  );
+  assert.ok(endedWithFullWormholeView, 'an END projection may reveal the full wormhole maze');
+  assert.deepEqual(
+    endedWithFullWormholeView.gameState.wormholeRunsByPlayer[OWNER].challenge.obstacles,
+    hiddenWormholeWalls,
+  );
   const departedRoster = clone(endedLegacy);
   departedRoster.lobby.members = {
     [OWNER]: { uid: OWNER, slot: 0 },
@@ -1027,6 +1157,7 @@ async function main() {
         appCheckStatus: 'missing-config',
       }),
     },
+    '@/lib/gameUtils': gameUtils,
     'firebase/functions': {
       httpsCallable: () => {
         missingAppCheckInvocation = true;

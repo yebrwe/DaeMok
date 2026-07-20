@@ -2,11 +2,11 @@
 
 import React, { useState, useRef, useCallback, useMemo } from 'react';
 import Image from 'next/image';
-import { CellType, CollisionWall, Direction, GamePhase, ItemType, MapItem, Obstacle, Position, WallItemType } from '@/types/game';
+import { CellType, CollisionWall, Direction, GamePhase, ItemType, MapItem, Obstacle, Position, SpecialWallType, WallItemType } from '@/types/game';
 import { BOARD_SIZE, ITEM_LABELS, isSamePosition, isSameWallSegment, isWallItemType } from '@/lib/gameUtils';
+import { findNearestWallPointerTarget } from '@/lib/wallPointer';
 
-const ITEM_WALL_STYLES: Record<WallItemType, string> = {
-  oneTimeWall: 'bg-cyan-500 ring-cyan-100',
+const ITEM_WALL_STYLES: Record<SpecialWallType, string> = {
   steelWall: 'bg-zinc-600 ring-zinc-100',
   fireWall: 'bg-orange-600 ring-yellow-200',
   poisonWall: 'bg-lime-600 ring-lime-100',
@@ -20,9 +20,27 @@ const ITEM_WALL_STYLES: Record<WallItemType, string> = {
 };
 
 const NORMAL_WALL_STYLE = 'bg-[#6b1111] ring-2 ring-[#fecaca] shadow-sm shadow-red-950/70';
+const PASSABLE_FLOOR_STYLES = ['bg-[#fffaf0]', 'bg-[#eff7df]'] as const;
+const BOARD_FLOOR_STYLE = 'bg-[#c7d7b3]';
 
-const WALL_EFFECT_GLYPHS: Record<WallItemType, string> = {
-  oneTimeWall: '···',
+function NormalWallVisual({
+  orientation,
+  preview = false,
+  collision = false,
+}: {
+  orientation: 'horizontal' | 'vertical';
+  preview?: boolean;
+  collision?: boolean;
+}) {
+  const dimensions = orientation === 'horizontal' ? 'h-1/2 w-3/4' : 'h-3/4 w-1/2';
+  const appearance = collision
+    ? 'wall-collision-impact bg-red-500 ring-2 ring-red-100'
+    : NORMAL_WALL_STYLE;
+
+  return <div className={`${dimensions} rounded-sm ${appearance} ${preview ? 'opacity-60' : ''}`} />;
+}
+
+const WALL_EFFECT_GLYPHS: Record<SpecialWallType, string> = {
   steelWall: '•••',
   fireWall: '▲▲▲',
   poisonWall: '●●●',
@@ -61,24 +79,7 @@ function ItemWallVisual({
     : horizontal ? 'h-3/4 w-[82%]' : 'h-[82%] w-3/4';
 
   if (type === 'oneTimeWall') {
-    return (
-      <div
-        className={`wall-effect-visual ${
-          horizontal
-            ? `flex ${preview ? 'h-full w-[88%]' : 'h-3/4 w-[82%]'} justify-between`
-            : `flex ${preview ? 'h-[88%] w-full' : 'h-[82%] w-3/4'} flex-col justify-between`
-        } ${preview ? 'wall-effect-guide' : ''}`}
-        data-wall-effect={type}
-        data-wall-orientation={orientation}
-      >
-        {[0, 1, 2].map((segment) => (
-          <span
-            key={segment}
-            className={`${horizontal ? 'h-full w-[28%]' : 'h-[28%] w-full'} ${ITEM_WALL_STYLES[type]} ring-1`}
-          />
-        ))}
-      </div>
-    );
+    return <NormalWallVisual orientation={orientation} preview={preview} />;
   }
 
   const inactiveCollapse = type === 'collapseWall' && !active && !consumed;
@@ -115,7 +116,6 @@ interface GameBoardProps {
   playerPhotoURL?: string;
   revealObstacles?: boolean; // 게임 종료 후 벽 공개
   revealItems?: boolean; // 맵 제작자 시점 또는 게임 종료 후 숨은 아이템 공개
-  distinguishOneTimeWalls?: boolean; // 제작자 시점에서 가짜벽을 일반 벽과 구분
   items?: MapItem[] | null; // 맵 아이템들
   itemsConsumed?: Record<number, boolean> | null; // 인덱스별 사용 여부
   itemActiveWalls?: Record<number, boolean> | null; // 붕괴벽이 닫힌 상태
@@ -141,7 +141,6 @@ const GameBoard: React.FC<GameBoardProps> = ({
   playerPhotoURL,
   revealObstacles = false,
   revealItems = false,
-  distinguishOneTimeWalls = false,
   items = null,
   itemsConsumed = null,
   itemActiveWalls = null,
@@ -157,7 +156,6 @@ const GameBoard: React.FC<GameBoardProps> = ({
     revealedWalls.some((w) => isSameWallSegment(position, direction, w.position, w.direction));
 
   const showItemsFully = gamePhase === GamePhase.SETUP || revealItems;
-  const showFakeWallIdentity = gamePhase === GamePhase.SETUP || distinguishOneTimeWalls;
 
   const itemList = items || [];
 
@@ -183,32 +181,14 @@ const GameBoard: React.FC<GameBoardProps> = ({
     if (!isWallItemType(item.type)) return null;
     const consumed = !!itemsConsumed?.[itemWallIndex];
 
-    if (item.type === 'oneTimeWall' && !showFakeWallIdentity) {
+    if (item.type === 'oneTimeWall') {
+      // 가짜벽의 정보는 규칙에만 존재한다. 보드에서는 제작자/상대/종료
+      // 시점을 막론하고 일반벽과 완전히 같은 시각 경로를 사용한다.
+      // 소비 뒤에는 기존 collision 레이어가 일반벽과 같은 발견 흔적을 남긴다.
       if (consumed) return null;
       return (
-        <div
-          data-map-item={item.type}
-          data-wall-state="armed"
-          className="absolute inset-0 flex items-center justify-center"
-        >
-          <div className={`${orientation === 'horizontal' ? 'h-1/2 w-3/4' : 'h-3/4 w-1/2'} ${NORMAL_WALL_STYLE}`} />
-        </div>
-      );
-    }
-
-    if (item.type === 'oneTimeWall') {
-      return (
-        <div
-          data-map-item={item.type}
-          data-wall-state={consumed ? 'consumed' : 'armed'}
-          title={`${ITEM_LABELS[item.type]} · ${consumed ? '소모됨' : '미사용'}`}
-          className={`absolute inset-0 flex items-center justify-center ${consumed ? 'opacity-35' : ''}`}
-        >
-          <ItemWallVisual
-            type={item.type}
-            orientation={orientation}
-            consumed={consumed}
-          />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <NormalWallVisual orientation={orientation} />
         </div>
       );
     }
@@ -302,6 +282,24 @@ const GameBoard: React.FC<GameBoardProps> = ({
   };
   const [hoveredCell, setHoveredCell] = useState<Position | null>(null);
   const [hoveredWall, setHoveredWall] = useState<{position: Position, direction: Direction} | null>(null);
+  const isWallPlacementMode = placeMode === 'wall' || isWallItemType(placeMode);
+  const canRouteWallPointer = gamePhase === GamePhase.SETUP && !readOnly &&
+    !!onDirectionClick && selectionMode === 'none' && isWallPlacementMode;
+
+  const setHoveredWallTarget = useCallback((target: WallTarget | null) => {
+    setHoveredWall((current) => {
+      if (!current && !target) return current;
+      if (
+        current && target &&
+        current.position.row === target.position.row &&
+        current.position.col === target.position.col &&
+        current.direction === target.direction
+      ) {
+        return current;
+      }
+      return target;
+    });
+  }, []);
   
   // hover 타이머 참조 관리
   const hoverTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -500,10 +498,11 @@ const GameBoard: React.FC<GameBoardProps> = ({
     const cellSizeClasses = compact
       ? 'h-10 w-10 sm:h-[41px] sm:w-[41px]'
       : 'w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14';
+    const floorStyle = PASSABLE_FLOOR_STYLES[(position.row + position.col) % 2];
     const cellClasses = `
       relative ${cellSizeClasses}
-      ${cellType === 'empty' || cellType === 'player' ? 'bg-[#fffdf7] shadow-[inset_0_0_0_1px_#d7dee8]' : ''}
-      ${isValidTarget ? 'ring-2 ring-inset ring-emerald-400 bg-emerald-50' : ''}
+      ${isValidTarget ? 'bg-emerald-50 ring-2 ring-inset ring-emerald-400' : floorStyle}
+      shadow-[inset_0_0_0_1px_rgb(100_116_139/0.22)]
       ${isInteractive ? 'cell-hit-target cursor-pointer' : ''}
       touch-action-none transition-colors duration-300 ease-in-out
     `;
@@ -649,7 +648,6 @@ const GameBoard: React.FC<GameBoardProps> = ({
       );
     }
     
-    const isWallPlacementMode = placeMode === 'wall' || isWallItemType(placeMode);
     const isInteractive = gamePhase === GamePhase.SETUP && !readOnly && !!onDirectionClick &&
       selectionMode === 'none' && isWallPlacementMode;
     const yieldsToCellPlacement = gamePhase === GamePhase.SETUP && !readOnly &&
@@ -676,29 +674,11 @@ const GameBoard: React.FC<GameBoardProps> = ({
           if (isInteractive) setHoveredWall({ position, direction });
         }}
         onBlur={() => setHoveredWall(null)}
-        onPointerDown={(event) => {
-          event.stopPropagation();
-          // Touch devices do not have a durable hover state. Pin the tapped segment so an
-          // occupied wall can still show the same explicit conflict cue as pointer hover.
-          if (isInteractive && selectedWallType && event.pointerType !== 'mouse') {
-            setHoveredWall({ position, direction });
-          }
-        }}
         onClick={(e) => {
           e.stopPropagation();
           if (isInteractive && onDirectionClick) {
             onDirectionClick(position, direction);
           }
-        }}
-        onMouseEnter={(e) => {
-          e.stopPropagation();
-          if (!isMouseDownRef.current && isInteractive) {
-            setHoveredWall({ position, direction });
-          }
-        }}
-        onMouseLeave={(e) => {
-          e.stopPropagation();
-          setHoveredWall(null);
         }}
         onKeyDown={(event) => {
           if (isInteractive && (event.key === 'Enter' || event.key === ' ')) {
@@ -712,12 +692,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
           <>
           {isHovered && placeMode === 'wall' && !isOccupied && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className={`h-1/2 w-3/4 rounded-sm ${NORMAL_WALL_STYLE} opacity-60`} />
+              <NormalWallVisual orientation="horizontal" preview />
             </div>
           )}
           {isBlocked && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className={`h-1/2 w-3/4 rounded-sm ${NORMAL_WALL_STYLE}`} />
+              <NormalWallVisual orientation="horizontal" />
             </div>
           )}
           </>
@@ -725,13 +705,13 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 플레이 단계: 충돌한 벽만 빨간색으로 표시 */}
         {gamePhase === GamePhase.PLAY && isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="wall-collision-impact h-1/2 w-3/4 rounded-sm bg-red-500 ring-2 ring-red-100" />
+            <NormalWallVisual orientation="horizontal" collision />
           </div>
         )}
         {/* 게임 종료: 아직 충돌하지 않은 벽 공개 */}
         {gamePhase === GamePhase.PLAY && revealObstacles && isBlocked && !isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className={`h-1/2 w-3/4 rounded-sm ${NORMAL_WALL_STYLE}`} />
+            <NormalWallVisual orientation="horizontal" />
           </div>
         )}
         {renderItemWall(position, direction, 'horizontal')}
@@ -741,7 +721,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
           isRadarRevealed(position, direction) && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className={`h-1/2 w-3/4 rounded-sm ${NORMAL_WALL_STYLE}`} />
+            <NormalWallVisual orientation="horizontal" />
           </div>
         )}
       </div>
@@ -791,7 +771,6 @@ const GameBoard: React.FC<GameBoardProps> = ({
       );
     }
     
-    const isWallPlacementMode = placeMode === 'wall' || isWallItemType(placeMode);
     const isInteractive = gamePhase === GamePhase.SETUP && !readOnly && !!onDirectionClick &&
       selectionMode === 'none' && isWallPlacementMode;
     const yieldsToCellPlacement = gamePhase === GamePhase.SETUP && !readOnly &&
@@ -818,28 +797,11 @@ const GameBoard: React.FC<GameBoardProps> = ({
           if (isInteractive) setHoveredWall({ position, direction });
         }}
         onBlur={() => setHoveredWall(null)}
-        onPointerDown={(event) => {
-          event.stopPropagation();
-          // Keep overlap feedback visible after a coarse-pointer tap as well as hover.
-          if (isInteractive && selectedWallType && event.pointerType !== 'mouse') {
-            setHoveredWall({ position, direction });
-          }
-        }}
         onClick={(e) => {
           e.stopPropagation();
           if (isInteractive && onDirectionClick) {
             onDirectionClick(position, direction);
           }
-        }}
-        onMouseEnter={(e) => {
-          e.stopPropagation();
-          if (!isMouseDownRef.current && isInteractive) {
-            setHoveredWall({ position, direction });
-          }
-        }}
-        onMouseLeave={(e) => {
-          e.stopPropagation();
-          setHoveredWall(null);
         }}
         onKeyDown={(event) => {
           if (isInteractive && (event.key === 'Enter' || event.key === ' ')) {
@@ -853,12 +815,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
           <>
           {isHovered && placeMode === 'wall' && !isOccupied && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className={`h-3/4 w-1/2 rounded-sm ${NORMAL_WALL_STYLE} opacity-60`} />
+              <NormalWallVisual orientation="vertical" preview />
             </div>
           )}
           {isBlocked && (
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className={`h-3/4 w-1/2 rounded-sm ${NORMAL_WALL_STYLE}`} />
+              <NormalWallVisual orientation="vertical" />
             </div>
           )}
           </>
@@ -866,13 +828,13 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {/* 플레이 단계: 충돌한 벽만 빨간색으로 표시 */}
         {gamePhase === GamePhase.PLAY && isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="wall-collision-impact h-3/4 w-1/2 rounded-sm bg-red-500 ring-2 ring-red-100" />
+            <NormalWallVisual orientation="vertical" collision />
           </div>
         )}
         {/* 게임 종료: 아직 충돌하지 않은 벽 공개 */}
         {gamePhase === GamePhase.PLAY && revealObstacles && isBlocked && !isCollision && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className={`h-3/4 w-1/2 rounded-sm ${NORMAL_WALL_STYLE}`} />
+            <NormalWallVisual orientation="vertical" />
           </div>
         )}
         {renderItemWall(position, direction, 'vertical')}
@@ -882,7 +844,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         {gamePhase === GamePhase.PLAY && !revealObstacles && !isCollision &&
           isRadarRevealed(position, direction) && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className={`h-3/4 w-1/2 rounded-sm ${NORMAL_WALL_STYLE}`} />
+            <NormalWallVisual orientation="vertical" />
           </div>
         )}
       </div>
@@ -935,10 +897,51 @@ const GameBoard: React.FC<GameBoardProps> = ({
     >
       <div
         data-maze-board-grid
-        className={`mx-auto grid gap-0 overflow-auto rounded-xl border-4 border-slate-950 bg-slate-600 p-1 shadow-[0_5px_0_#0f172a,0_14px_28px_rgb(0_0_0/0.38)] touch-action-none ${compact ? '' : 'sm:p-2'}`}
+        data-maze-floor-tone="cream-sage"
+        data-wall-pointer-routing="nearest"
+        className={`mx-auto grid gap-0 overflow-auto rounded-xl border-4 border-slate-950 ${BOARD_FLOOR_STYLE} p-1 shadow-[0_5px_0_#0f172a,0_14px_28px_rgb(0_0_0/0.38)] touch-action-none ${compact ? '' : 'sm:p-2'}`}
         style={{
           gridTemplateColumns: `repeat(${BOARD_SIZE * 2 - 1}, auto)`,
           gridTemplateRows: `repeat(${BOARD_SIZE * 2 - 1}, auto)`
+        }}
+        onPointerMove={(event) => {
+          if (!canRouteWallPointer || event.pointerType !== 'mouse' || isMouseDownRef.current) return;
+          setHoveredWallTarget(findNearestWallPointerTarget(
+            event.currentTarget,
+            event.clientX,
+            event.clientY,
+            'data-wall-segment'
+          ));
+        }}
+        onPointerDownCapture={(event) => {
+          if (!canRouteWallPointer || event.pointerType === 'mouse') return;
+          setHoveredWallTarget(findNearestWallPointerTarget(
+            event.currentTarget,
+            event.clientX,
+            event.clientY,
+            'data-wall-segment'
+          ));
+        }}
+        onPointerLeave={() => {
+          if (canRouteWallPointer) setHoveredWallTarget(null);
+        }}
+        onClickCapture={(event) => {
+          // Keyboard and assistive-technology activation already identifies an exact
+          // focused segment, so preserve the segment's own click/keydown behavior.
+          if (!canRouteWallPointer || event.detail === 0) return;
+
+          event.preventDefault();
+          event.stopPropagation();
+          const target = findNearestWallPointerTarget(
+            event.currentTarget,
+            event.clientX,
+            event.clientY,
+            'data-wall-segment'
+          );
+          if (!target) return;
+
+          setHoveredWallTarget(target);
+          onDirectionClick(target.position, target.direction);
         }}
       >
         {Array.from({ length: BOARD_SIZE * 2 - 1 }).map((_, row) =>

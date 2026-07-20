@@ -4,6 +4,7 @@ import React from 'react';
 import { CloudFog, Eye } from 'lucide-react';
 import { CollisionWall, GameMap, GamePhase, Obstacle, Position } from '@/types/game';
 import { getMapItems, getVisibleCollisionWalls } from '@/lib/gameUtils';
+import type { MazeAuthorityWormholeRunView } from '@/lib/mazeAuthorityClient';
 import GameBoard3D, { BoardFx } from './three/GameBoard3D';
 import type { LiveBoardVisualAction } from '@/lib/liveBoardVisuals';
 
@@ -35,6 +36,11 @@ export interface LiveBoardEntry {
   pawnColor?: string;
   smokeAffected?: boolean;
   visionObscured?: boolean;
+  // Practice may pass the full structurally-compatible run; Authority PLAY omits challenge walls.
+  wormholeRun?: MazeAuthorityWormholeRunView | null;
+  fireAffected?: boolean;
+  heatWalls?: Obstacle[];
+  poisonAffected?: boolean;
 }
 
 interface LiveBoardGridProps {
@@ -83,12 +89,38 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
           const isMapOwner = !!myPlayerId && myPlayerId === board.mapOwnerId && myPlayerId !== board.runnerId;
           const showMapSecrets = gameEnded || isMapOwner || !!board.revealMapSecrets;
           const revealObstacles = gameEnded || isMapOwner || !!board.revealObstacles;
-          const visibleItems = showMapSecrets ? getMapItems(board.map) : [];
-          const visibleCollisions = getVisibleCollisionWalls(
-            board.collisions || [],
-            board.map,
-            board.itemsConsumed || {}
-          );
+          const effectiveRevealObstacles = revealObstacles && !board.fireAffected;
+          const wormholeRun = board.wormholeRun || null;
+          const renderedMap: GameMap = wormholeRun
+            ? {
+                rulesVersion: board.map.rulesVersion,
+                startPosition: wormholeRun.challenge.startPosition,
+                endPosition: wormholeRun.challenge.endPosition,
+                obstacles: wormholeRun.challenge.obstacles ?? [],
+                items: [],
+                skillLoadout: board.map.skillLoadout,
+              }
+            : board.map;
+          const visibleItems = wormholeRun ? [] : showMapSecrets ? getMapItems(board.map) : [];
+          const visibleCollisions = wormholeRun
+            ? (wormholeRun.discoveredWalls || []).map((wall, index): CollisionWall => ({
+                playerId: board.runnerId,
+                mapOwnerId: board.mapOwnerId,
+                position: wall.position,
+                direction: wall.direction,
+                timestamp: wormholeRun.enteredAtTurn + index,
+              }))
+            : getVisibleCollisionWalls(
+                board.collisions || [],
+                board.map,
+                board.itemsConsumed || {}
+              );
+          const activatedSealCount = wormholeRun
+            ? wormholeRun.challenge.seals.reduce(
+                (count, _, index) => count + (wormholeRun.activatedSeals?.[index] ? 1 : 0),
+                0
+              )
+            : 0;
           const status = boardStatus(board, isCurrentTurn, isMine);
 
           return (
@@ -97,17 +129,22 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
             id={`maze-board-panel-${board.runnerId}`}
             data-player-board={board.runnerId}
             data-player-kind={board.runnerKind}
-            data-player-position={`${board.position.row},${board.position.col}`}
+            data-player-position={`${(wormholeRun?.position || board.position).row},${(wormholeRun?.position || board.position).col}`}
             data-current-turn={isCurrentTurn ? 'true' : undefined}
             data-my-player={isMine ? 'true' : undefined}
             data-map-owner-preview={isMapOwner ? 'true' : undefined}
             data-map-secrets-visible={showMapSecrets ? 'true' : 'false'}
-            data-obstacles-revealed={revealObstacles ? 'true' : 'false'}
+            data-obstacles-revealed={effectiveRevealObstacles ? 'true' : 'false'}
             data-visual-action={board.visualAction}
             data-visual-sequence={board.visualSequence}
             data-visual-fx={board.fx?.type}
-            data-vision-effect={board.smokeAffected ? 'smoke' : undefined}
+            data-vision-effect={board.smokeAffected ? 'smoke' : board.fireAffected ? 'fire' : undefined}
             data-vision-obscured={board.visionObscured ? 'true' : undefined}
+            data-fire-affected={board.fireAffected ? 'true' : 'false'}
+            data-poison-affected={board.poisonAffected ? 'true' : 'false'}
+            data-heat-wall-count={board.heatWalls?.length || 0}
+            data-board-realm={wormholeRun ? 'wormhole' : 'main'}
+            data-wormhole-seals={wormholeRun ? `${activatedSealCount}/${wormholeRun.challenge.seals.length}` : undefined}
             aria-label={`${board.runnerName} 게임 보드`}
             className={`relative min-h-0 min-w-0 touch-none overflow-hidden rounded-2xl border-2 bg-[#eff7f2] ${
               isCurrentTurn
@@ -118,28 +155,68 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
             }`}
           >
             <GameBoard3D
+              key={wormholeRun ? `wormhole-${wormholeRun.mapOwnerId}-${wormholeRun.itemIndex}` : 'main'}
               gamePhase={GamePhase.PLAY}
-              startPosition={board.map.startPosition}
-              endPosition={board.map.endPosition}
-              playerPosition={board.position}
-              obstacles={board.map.obstacles}
+              startPosition={renderedMap.startPosition}
+              endPosition={renderedMap.endPosition}
+              playerPosition={wormholeRun?.position || board.position}
+              obstacles={renderedMap.obstacles}
               collisionWalls={visibleCollisions}
               readOnly
-              revealObstacles={revealObstacles}
+              revealObstacles={effectiveRevealObstacles}
               revealItems={showMapSecrets}
-              distinguishOneTimeWalls={showMapSecrets}
               pawnColor={board.pawnColor}
               items={visibleItems}
               itemsConsumed={board.itemsConsumed || {}}
               itemActiveWalls={board.itemActiveWalls || {}}
               itemPhaseOpen={board.itemPhaseOpen || {}}
               revealedWalls={board.revealedWalls || []}
+              heatWalls={board.heatWalls || []}
               fx={board.fx || null}
               pawnVia={board.via || null}
               celebrating={!!board.celebrating}
+              fireAffected={!!board.fireAffected}
+              poisonAffected={!!board.poisonAffected}
+              challengeSeals={wormholeRun?.challenge.seals}
+              challengeActivatedSeals={wormholeRun?.activatedSeals}
+              wormholeChallenge={!!wormholeRun}
               fullscreen
               compact
             />
+
+            {wormholeRun && (
+              <div className="pointer-events-none absolute left-1/2 top-7 z-10 -translate-x-1/2 rounded-full border border-fuchsia-300/70 bg-slate-950/90 px-2 py-0.5 text-[9px] font-black text-fuchsia-100 shadow-lg">
+                웜홀 내부 · 봉인 {activatedSealCount}/{wormholeRun.challenge.seals.length}
+              </div>
+            )}
+
+            {(board.fireAffected || board.poisonAffected) && (
+              <div
+                className="pointer-events-none absolute right-1.5 top-7 z-10 flex max-w-[58%] flex-col items-end gap-1"
+                role="status"
+                aria-label={[
+                  board.fireAffected ? '화염 상태: 진짜 벽과 열기 환영 벽이 뒤섞여 보입니다.' : '',
+                  board.poisonAffected ? '중독 상태: 방향 입력이 25퍼센트 확률로 뒤틀립니다.' : '',
+                ].filter(Boolean).join(' ')}
+              >
+                {board.fireAffected && (
+                  <span
+                    data-status-badge="fire"
+                    className="rounded-full border border-orange-300/80 bg-[#661c0f]/90 px-2 py-0.5 text-[8px] font-black leading-tight text-orange-100 shadow-lg sm:text-[9px]"
+                  >
+                    🔥 화염 · 진짜/환영벽 혼선
+                  </span>
+                )}
+                {board.poisonAffected && (
+                  <span
+                    data-status-badge="poison"
+                    className="rounded-full border border-lime-300/80 bg-[#274e13]/90 px-2 py-0.5 text-[8px] font-black leading-tight text-lime-50 shadow-lg sm:text-[9px]"
+                  >
+                    ☠ 중독 · 방향 혼선 25%
+                  </span>
+                )}
+              </div>
+            )}
 
             {board.visionObscured && (
               <div

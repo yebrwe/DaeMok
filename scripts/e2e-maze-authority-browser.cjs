@@ -103,6 +103,7 @@ async function expectMoveCount(page, count) {
 }
 
 async function moveRight(page) {
+  await page.bringToFront();
   const button = page.getByRole('button', { name: '이동 오른쪽', exact: true });
   await button.waitFor({ state: 'visible', timeout: 20_000 });
   await page.waitForFunction(() => {
@@ -110,7 +111,25 @@ async function moveRight(page) {
       .find((entry) => entry.getAttribute('aria-label') === '이동 오른쪽');
     return candidate instanceof HTMLButtonElement && !candidate.disabled;
   }, undefined, { timeout: 20_000 });
-  await button.click();
+  const hitTarget = await button.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const top = document.elementFromPoint(x, y);
+    return {
+      rect: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+      insideViewport: x >= 0 && x <= window.innerWidth && y >= 0 && y <= window.innerHeight,
+      receivesPointer: top === element || (top !== null && element.contains(top)),
+      topTag: top?.tagName ?? null,
+      topLabel: top?.getAttribute('aria-label') ?? null,
+    };
+  });
+  assert.equal(
+    hitTarget.insideViewport && hitTarget.receivesPointer,
+    true,
+    `right control is not pointer-accessible: ${JSON.stringify(hitTarget)}`,
+  );
+  await button.evaluate((element) => element.click());
 }
 
 async function expectBoardCount(page, count) {
@@ -130,6 +149,9 @@ async function expectBoardCount(page, count) {
 
 async function expectRendered3DBoards(page, count, label) {
   const canvases = page.locator('[data-player-board] canvas');
+  const mobile = (page.viewportSize()?.width ?? 1280) < 640;
+  const minimumCanvasWidth = mobile ? 120 : 280;
+  const minimumCanvasHeight = mobile ? 180 : 240;
   await canvases.nth(count - 1).waitFor({ state: 'visible', timeout: 20_000 });
   assert.equal(await canvases.count(), count, `${label}: 3D canvas count`);
 
@@ -140,7 +162,8 @@ async function expectRendered3DBoards(page, count, label) {
         const candidate = document.querySelectorAll('[data-player-board] canvas')[canvasIndex];
         if (!(candidate instanceof HTMLCanvasElement)) return false;
         const rect = candidate.getBoundingClientRect();
-        return rect.width >= 280 && rect.height >= 240 &&
+        const mobile = window.innerWidth < 640;
+        return rect.width >= (mobile ? 120 : 280) && rect.height >= (mobile ? 180 : 240) &&
           candidate.width > 0 && candidate.height > 0 &&
           candidate.dataset.mazeCamera === 'fixed-orthographic' &&
           candidate.dataset.mazeToonVersion === expectedVersion &&
@@ -172,7 +195,7 @@ async function expectRendered3DBoards(page, count, label) {
     const bounds = await canvas.boundingBox();
     assert.ok(bounds, `${label} board ${index + 1}: canvas bounds`);
     assert.ok(
-      bounds.width >= 280 && bounds.height >= 240,
+      bounds.width >= minimumCanvasWidth && bounds.height >= minimumCanvasHeight,
       `${label} board ${index + 1}: canvas must not collapse (${bounds.width}x${bounds.height})`,
     );
 
@@ -310,9 +333,9 @@ async function poll(label, read, timeoutMs = 20_000) {
     const start = pageA.getByRole('button', { name: '게임 시작!', exact: true });
     await start.waitFor({ state: 'visible', timeout: 20_000 });
     await start.click();
-    await expectBoardCount(pageA, 1);
+    await expectBoardCount(pageA, 2);
     await expectBoardCount(pageB, 2);
-    await expectRendered3DBoards(pageA, 1, 'mobile participant');
+    await expectRendered3DBoards(pageA, 2, 'mobile participant · all boards');
     await expectRendered3DBoards(pageB, 2, 'desktop participant');
     const leaveA = pageA.getByRole('button', { name: /나가기/ }).first();
     assert.equal(await leaveA.isDisabled(), true, 'PLAY leave must stay disabled');

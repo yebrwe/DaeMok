@@ -136,6 +136,7 @@ function assertNoPrivateAuthorityFields(view: unknown): void {
     'serverOnlyTurnSeed',
     'authoritySecret',
     'privateItemToken',
+    'seed',
   ]) {
     assert.equal(keys.has(forbidden), false, `projection leaked forbidden key ${forbidden}`);
   }
@@ -185,6 +186,19 @@ const GUEST_DETAILED_MAP = mapWithDetails(
   { row: 1, col: 1 },
   { row: 2, col: 2 },
 );
+
+const PRIVATE_WORMHOLE_CHALLENGE = {
+  version: 1 as const,
+  startPosition: { row: 0, col: 0 },
+  endPosition: { row: 1, col: 0 },
+  seals: [{ row: 0, col: 5 }, { row: 5, col: 5 }, { row: 5, col: 0 }],
+  obstacles: [
+    { position: { row: 0, col: 0 }, direction: 'right' as const },
+    { position: { row: 2, col: 1 }, direction: 'right' as const },
+    { position: { row: 3, col: 2 }, direction: 'right' as const },
+    { position: { row: 4, col: 3 }, direction: 'right' as const },
+  ],
+};
 
 test('setup public and member projections expose no receipts, foreign maps, or presence history', () => {
   const canonical = readyRoom(OWNER_DETAILED_MAP, GUEST_DETAILED_MAP);
@@ -250,6 +264,127 @@ test('play projection publishes boundary-only public boards and only the member 
   assertNoPrivateAuthorityFields(ownerView);
   assertMarkersAbsent(publicView, state);
   assertMarkersAbsent(ownerView, state);
+});
+
+test('poison projections expose status to the affected member but never serialize the private seed', () => {
+  const ownerMap: GameMap = {
+    rulesVersion: 3,
+    startPosition: { row: 0, col: 0 },
+    endPosition: { row: 5, col: 5 },
+    obstacles: [],
+    items: [],
+    skillLoadout: 'scoutPulse',
+  };
+  const guestMap: GameMap = {
+    rulesVersion: 3,
+    startPosition: { row: 2, col: 2 },
+    endPosition: { row: 5, col: 5 },
+    obstacles: [],
+    items: [{
+      type: 'poisonWall',
+      wallPosition: { row: 2, col: 2 },
+      wallDirection: 'right',
+    }],
+    skillLoadout: 'scoutPulse',
+  };
+  const state = applyMove(
+    startMatch(readyRoom(ownerMap, guestMap)),
+    OWNER,
+    'right',
+    'view-private-poison-seed',
+    1_500,
+  );
+  const canonicalEffect = state.gameState.poisonEffectsByPlayer?.[OWNER];
+  assert.ok(canonicalEffect);
+  assert.equal(typeof canonicalEffect.seed, 'number');
+
+  const publicPlay = projectMazeAuthorityPublicView(state);
+  const memberPlay = projectMazeAuthorityMemberView(state, OWNER);
+  assert.deepEqual(publicPlay.gameState.poisonEffectsByPlayer, {});
+  assert.deepEqual(memberPlay.gameState.poisonEffectsByPlayer[OWNER], {
+    sourcePlayerId: GUEST,
+    appliedAtTurn: canonicalEffect.appliedAtTurn,
+    expiresAtTargetMove: canonicalEffect.expiresAtTargetMove,
+  });
+  assert.equal(JSON.stringify(publicPlay).includes('"seed"'), false);
+  assert.equal(JSON.stringify(memberPlay).includes('"seed"'), false);
+
+  const ended = cloneJson(state);
+  ended.gameState.phase = GamePhase.END;
+  ended.gameState.currentTurn = null;
+  ended.lobby.status = 'ended';
+  const publicEnd = projectMazeAuthorityPublicView(ended);
+  const memberEnd = projectMazeAuthorityMemberView(ended, OWNER);
+  assert.deepEqual(
+    publicEnd.gameState.poisonEffectsByPlayer[OWNER],
+    memberPlay.gameState.poisonEffectsByPlayer[OWNER],
+  );
+  assert.equal(JSON.stringify(publicEnd).includes('"seed"'), false);
+  assert.equal(JSON.stringify(memberEnd).includes('"seed"'), false);
+  assertNoPrivateAuthorityFields(publicPlay);
+  assertNoPrivateAuthorityFields(memberPlay);
+  assertNoPrivateAuthorityFields(publicEnd);
+  assertNoPrivateAuthorityFields(memberEnd);
+});
+
+test('play wormhole projection exposes progress but never the hidden internal wall layout', () => {
+  const ownerMap: GameMap = {
+    rulesVersion: 3,
+    startPosition: { row: 5, col: 5 },
+    endPosition: { row: 5, col: 3 },
+    obstacles: [],
+    items: [],
+    skillLoadout: 'scoutPulse',
+  };
+  const guestMap: GameMap = {
+    rulesVersion: 3,
+    startPosition: { row: 0, col: 0 },
+    endPosition: { row: 0, col: 3 },
+    obstacles: [],
+    items: [{
+      type: 'wormhole',
+      entrance: { row: 0, col: 1 },
+      exit: { row: 4, col: 4 },
+      challenge: PRIVATE_WORMHOLE_CHALLENGE,
+    }],
+    skillLoadout: 'scoutPulse',
+  };
+  let state = startMatch(readyRoom(ownerMap, guestMap));
+  state = applyMove(state, OWNER, 'right', 'view-wormhole-enter', 1_500);
+  state = applyMove(state, GUEST, 'left', 'view-wormhole-relay', 1_600);
+  state = applyMove(state, OWNER, 'right', 'view-wormhole-wall', 1_700);
+
+  assert.deepEqual(state.gameState.wormholeRunsByPlayer?.[OWNER]?.discoveredWalls, [
+    PRIVATE_WORMHOLE_CHALLENGE.obstacles[0],
+  ]);
+  const publicView = projectMazeAuthorityPublicView(state);
+  const ownerView = projectMazeAuthorityMemberView(state, OWNER);
+  const memberRun = ownerView.gameState.wormholeRunsByPlayer[OWNER];
+  assert.deepEqual(publicView.gameState.wormholeRunsByPlayer, {});
+  assert.ok(memberRun);
+  assert.deepEqual(memberRun.challenge, {
+    version: 1,
+    startPosition: PRIVATE_WORMHOLE_CHALLENGE.startPosition,
+    endPosition: PRIVATE_WORMHOLE_CHALLENGE.endPosition,
+    seals: PRIVATE_WORMHOLE_CHALLENGE.seals,
+  });
+  assert.deepEqual(memberRun.discoveredWalls, [PRIVATE_WORMHOLE_CHALLENGE.obstacles[0]]);
+  assert.equal(Object.prototype.hasOwnProperty.call(memberRun.challenge, 'obstacles'), false);
+
+  const undiscoveredWall = JSON.stringify(PRIVATE_WORMHOLE_CHALLENGE.obstacles[1]);
+  assert.equal(JSON.stringify(ownerView).includes(undiscoveredWall), false);
+  assert.equal(JSON.stringify(publicView).includes(undiscoveredWall), false);
+
+  memberRun.challenge.startPosition.row = 5;
+  memberRun.discoveredWalls![0].position.row = 5;
+  assert.deepEqual(
+    state.gameState.wormholeRunsByPlayer?.[OWNER]?.challenge.startPosition,
+    PRIVATE_WORMHOLE_CHALLENGE.startPosition,
+  );
+  assert.deepEqual(
+    state.gameState.wormholeRunsByPlayer?.[OWNER]?.discoveredWalls,
+    [PRIVATE_WORMHOLE_CHALLENGE.obstacles[0]],
+  );
 });
 
 test('collision projection keeps a consumed fake wall disguised as a discovered normal wall', () => {

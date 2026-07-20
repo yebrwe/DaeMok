@@ -36,14 +36,13 @@ const BOARD_BACKGROUND = 'radial-gradient(circle at 50% 4%, #3f7377 0%, #24515b 
 
 // 색상 팔레트
 const COLORS = {
-  tileA: '#fff4d6',
-  tileB: '#f2d39b',
+  tileA: '#fffaf0',
+  tileB: '#eff7df',
   tileHover: '#31b7a6',
-  base: '#7c3f22',
-  baseSide: '#4b2418',
+  base: '#c7d7b3',
+  baseSide: '#557568',
   wall: '#6b1111', // 2D 보드와 같은 짙은 적색 일반 벽
   wallPreview: '#b91c1c',
-  fakeWall: '#008e95',
   collision: '#ff334f', // 충돌한 벽 (일반벽보다 밝은 빨강)
   reveal: '#991b1b', // 게임 종료 후 공개된 일반벽
   start: '#12a66a',
@@ -68,7 +67,7 @@ function usePrefersReducedMotion() {
 // 보드 위 액션 이펙트 (지뢰 폭발/웜홀/탐지 파동/충돌 스파크/골인 축포)
 export interface BoardFx {
   key: number;
-  type: 'bump' | 'mine' | 'wormhole' | 'radar' | 'goal';
+  type: 'bump' | 'mine' | 'wormhole' | 'radar' | 'goal' | 'fire' | 'poison';
   at?: Position;
   to?: Position;
   dir?: Direction;
@@ -165,41 +164,6 @@ function WallBox({ seg, color, opacity = 1, height = WALL_HEIGHT }: { seg: WallS
         roughness={0.74}
       />
     </RoundedBox>
-  );
-}
-
-function FakeWallBox({ seg, consumed = false }: { seg: WallSegment; consumed?: boolean }) {
-  const [x, , z] = segmentToWorld(seg);
-  const size = segmentSize(seg);
-  const length = seg.type === 'H' ? size[0] : size[2];
-  const pieceLength = length * 0.27;
-  const offsets = [-length * 0.36, 0, length * 0.36];
-  const height = consumed ? WALL_HEIGHT * 0.45 : WALL_HEIGHT;
-
-  return (
-    <group>
-      {offsets.map((offset) => (
-        <RoundedBox
-          key={offset}
-          args={seg.type === 'H'
-            ? [pieceLength, height, WALL_THICKNESS]
-            : [WALL_THICKNESS, height, pieceLength]}
-          radius={Math.min(0.045, height * 0.16)}
-          smoothness={3}
-          position={seg.type === 'H' ? [x + offset, height / 2, z] : [x, height / 2, z + offset]}
-          castShadow={!consumed}
-        >
-          <meshStandardMaterial
-            color={COLORS.fakeWall}
-            emissive={COLORS.fakeWall}
-            emissiveIntensity={consumed ? 0.05 : 0.25}
-            transparent={consumed}
-            opacity={consumed ? 0.32 : 1}
-            roughness={0.35}
-          />
-        </RoundedBox>
-      ))}
-    </group>
   );
 }
 
@@ -485,6 +449,7 @@ function Tile({
   placeMode = 'wall',
   isPendingEntrance = false,
   reducedMotion = false,
+  goalLocked = false,
 }: {
   position: Position;
   selectable: boolean;
@@ -495,6 +460,7 @@ function Tile({
   placeMode?: 'wall' | ItemType;
   isPendingEntrance?: boolean;
   reducedMotion?: boolean;
+  goalLocked?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const checker = (position.row + position.col) % 2 === 0;
@@ -537,7 +503,7 @@ function Tile({
       {isStart && <StartPad reducedMotion={reducedMotion} />}
 
       {/* 도착점 패드 + 펄럭이는 깃발 */}
-      {isEnd && <GoalFlag reducedMotion={reducedMotion} />}
+      {isEnd && <GoalFlag reducedMotion={reducedMotion} locked={goalLocked} />}
 
       {/* 시작/도착 선택 모드 호버 미리보기 */}
       {hovered && selectable && selectionMode !== 'none' && !isStart && !isEnd && (
@@ -597,7 +563,7 @@ function StartPad({ reducedMotion = false }: { reducedMotion?: boolean }) {
 }
 
 // 도착점 깃발 - 좌우로 살랑이는 애니메이션
-function GoalFlag({ reducedMotion = false }: { reducedMotion?: boolean }) {
+function GoalFlag({ reducedMotion = false, locked = false }: { reducedMotion?: boolean; locked?: boolean }) {
   const flagRef = useRef<THREE.Mesh>(null);
   useFrame((state) => {
     if (flagRef.current) {
@@ -608,7 +574,11 @@ function GoalFlag({ reducedMotion = false }: { reducedMotion?: boolean }) {
     <group position={[0, 0.09, 0]}>
       <mesh receiveShadow>
         <cylinderGeometry args={[0.36, 0.36, 0.05, 32]} />
-        <meshStandardMaterial color={COLORS.end} emissive={COLORS.end} emissiveIntensity={0.2} />
+        <meshStandardMaterial
+          color={locked ? '#6b4b7a' : COLORS.end}
+          emissive={locked ? '#7e22ce' : COLORS.end}
+          emissiveIntensity={locked ? 0.12 : 0.2}
+        />
       </mesh>
       <mesh position={[0, 0.4, 0]} castShadow>
         <cylinderGeometry args={[0.03, 0.03, 0.8, 8]} />
@@ -617,9 +587,175 @@ function GoalFlag({ reducedMotion = false }: { reducedMotion?: boolean }) {
       <group position={[0, 0.66, 0]}>
         <mesh ref={flagRef} position={[0.16, 0, 0]} castShadow>
           <boxGeometry args={[0.32, 0.2, 0.02]} />
-          <meshStandardMaterial color={COLORS.end} side={THREE.DoubleSide} />
+          <meshStandardMaterial color={locked ? '#a78bfa' : COLORS.end} side={THREE.DoubleSide} />
         </mesh>
       </group>
+      {locked && (
+        <mesh position={[0, 0.23, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.17, 0.045, 10, 22]} />
+          <meshStandardMaterial color="#c4b5fd" emissive="#7c3aed" emissiveIntensity={0.45} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+function WormholeSealMarker({ position, activated }: { position: Position; activated: boolean }) {
+  const [x, , z] = cellToWorld(position);
+  return (
+    <group position={[x, 0.26, z]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+        <torusGeometry args={[0.24, 0.045, 10, 28]} />
+        <meshStandardMaterial
+          color={activated ? '#34d399' : '#e879f9'}
+          emissive={activated ? '#059669' : '#a21caf'}
+          emissiveIntensity={activated ? 0.35 : 0.7}
+          transparent
+          opacity={activated ? 0.52 : 0.94}
+        />
+      </mesh>
+      <mesh position={[0, 0.08, 0]} rotation={[0, Math.PI / 4, 0]} castShadow={!activated}>
+        <octahedronGeometry args={[0.15, 0]} />
+        <meshStandardMaterial
+          color={activated ? '#a7f3d0' : '#f5d0fe'}
+          emissive={activated ? '#10b981' : '#d946ef'}
+          emissiveIntensity={activated ? 0.2 : 0.75}
+          transparent
+          opacity={activated ? 0.45 : 1}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+const FIRE_AURA_POINTS: Array<[number, number, number]> = [
+  [-0.19, 0.24, 0.08],
+  [0.2, 0.28, 0.03],
+  [-0.12, 0.5, -0.08],
+  [0.13, 0.56, 0.03],
+  [0, 0.75, -0.08],
+];
+
+function PawnFireAura({ reducedMotion = false }: { reducedMotion?: boolean }) {
+  const flameRefs = useRef<Array<THREE.Group | null>>([]);
+
+  useFrame((state) => {
+    flameRefs.current.forEach((flame, index) => {
+      if (!flame) return;
+      if (reducedMotion) {
+        flame.position.y = FIRE_AURA_POINTS[index][1];
+        flame.scale.setScalar(1);
+        return;
+      }
+      const phase = state.clock.elapsedTime * 8.5 + index * 1.7;
+      flame.position.y = FIRE_AURA_POINTS[index][1] + Math.sin(phase) * 0.035;
+      flame.scale.set(0.84 + Math.sin(phase * 1.19) * 0.13, 0.92 + Math.cos(phase) * 0.18, 0.84);
+    });
+  });
+
+  return (
+    <group name="maze-toon-effect-fire-status">
+      {FIRE_AURA_POINTS.map(([x, y, z], index) => (
+        <group
+          key={`pawn-fire-${index}`}
+          ref={(element) => { flameRefs.current[index] = element; }}
+          position={[x, y, z]}
+          rotation={[0, index * 1.31, index % 2 === 0 ? -0.12 : 0.12]}
+        >
+          <mesh position={[0, 0.085, 0]}>
+            <coneGeometry args={[0.105, 0.28, 9]} />
+            <meshStandardMaterial
+              color="#ff5a1f"
+              emissive="#f97316"
+              emissiveIntensity={1.8}
+              transparent
+              opacity={0.88}
+              depthWrite={false}
+            />
+          </mesh>
+          <mesh position={[0, 0.035, 0.012]}>
+            <coneGeometry args={[0.052, 0.16, 8]} />
+            <meshStandardMaterial
+              color="#fde047"
+              emissive="#facc15"
+              emissiveIntensity={2.2}
+              transparent
+              opacity={0.96}
+              depthWrite={false}
+            />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+const POISON_AURA_POINTS: Array<[number, number, number, number]> = [
+  [-0.24, 0.2, 0.06, 0.065],
+  [0.23, 0.31, -0.04, 0.08],
+  [-0.17, 0.52, -0.1, 0.055],
+  [0.17, 0.62, 0.02, 0.07],
+  [0.02, 0.82, -0.08, 0.045],
+];
+
+function PawnPoisonAura({ reducedMotion = false }: { reducedMotion?: boolean }) {
+  const bubbleRefs = useRef<Array<THREE.Mesh | null>>([]);
+  const mistRef = useRef<THREE.Mesh>(null);
+
+  useFrame((state) => {
+    const time = state.clock.elapsedTime;
+    bubbleRefs.current.forEach((bubble, index) => {
+      if (!bubble) return;
+      const [baseX, baseY, baseZ] = POISON_AURA_POINTS[index];
+      if (reducedMotion) {
+        bubble.position.set(baseX, baseY, baseZ);
+        bubble.scale.setScalar(1);
+        return;
+      }
+      const phase = time * 2.7 + index * 1.53;
+      bubble.position.set(
+        baseX + Math.sin(phase * 0.83) * 0.035,
+        baseY + Math.sin(phase) * 0.1,
+        baseZ + Math.cos(phase * 0.71) * 0.03,
+      );
+      bubble.scale.setScalar(0.78 + (Math.sin(phase * 1.4) + 1) * 0.18);
+    });
+    if (mistRef.current) {
+      mistRef.current.rotation.z = reducedMotion ? 0 : time * 0.32;
+      mistRef.current.scale.setScalar(reducedMotion ? 1 : 0.92 + Math.sin(time * 2.2) * 0.08);
+    }
+  });
+
+  return (
+    <group name="maze-toon-effect-poison-status">
+      <mesh ref={mistRef} position={[0, 0.17, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.25, 0.09, 10, 24]} />
+        <meshStandardMaterial
+          color="#65a30d"
+          emissive="#4d7c0f"
+          emissiveIntensity={0.75}
+          transparent
+          opacity={0.38}
+          depthWrite={false}
+        />
+      </mesh>
+      {POISON_AURA_POINTS.map(([x, y, z, radius], index) => (
+        <mesh
+          key={`pawn-poison-${index}`}
+          ref={(element) => { bubbleRefs.current[index] = element; }}
+          position={[x, y, z]}
+        >
+          <sphereGeometry args={[radius, 12, 10]} />
+          <meshStandardMaterial
+            color={index % 2 === 0 ? '#a3e635' : '#4ade80'}
+            emissive="#3f6212"
+            emissiveIntensity={0.9}
+            transparent
+            opacity={0.68}
+            depthWrite={false}
+          />
+        </mesh>
+      ))}
     </group>
   );
 }
@@ -633,6 +769,8 @@ function Pawn({
   color,
   fx,
   celebrating = false,
+  fireAffected = false,
+  poisonAffected = false,
   reducedMotion = false,
 }: {
   position: Position;
@@ -640,6 +778,8 @@ function Pawn({
   color: string;
   fx?: BoardFx | null;
   celebrating?: boolean;
+  fireAffected?: boolean;
+  poisonAffected?: boolean;
   reducedMotion?: boolean;
 }) {
   const outerRef = useRef<THREE.Group>(null); // 위치 이동 담당
@@ -798,7 +938,27 @@ function Pawn({
       scale = 0.3 + 0.7 * (1 - Math.pow(1 - p, 2));
     }
 
+    let statusTiltX = 0;
+    let statusTiltZ = 0;
+    if (!reducedMotion && fireAffected && !celebrating) {
+      // 화염 상태에서는 열기를 떨쳐 내듯 빠르게 몸을 턴다.
+      jx += Math.sin(now * 21) * 0.035;
+      jz += Math.cos(now * 17) * 0.025;
+      y += Math.abs(Math.sin(now * 10)) * 0.045;
+      statusTiltX += Math.cos(now * 13) * 0.075;
+      statusTiltZ += Math.sin(now * 17) * 0.13;
+    }
+    if (!reducedMotion && poisonAffected && !celebrating) {
+      // 중독 상태는 빠른 떨림과 구분되는 느린 비틀거림으로 보인다.
+      jx += Math.sin(now * 3.1) * 0.055;
+      jz += Math.cos(now * 2.7) * 0.04;
+      statusTiltX += Math.cos(now * 2.4) * 0.08;
+      statusTiltZ += Math.sin(now * 3.2) * 0.17;
+    }
+
     inner.position.set(jx, y, jz);
+    inner.rotation.x = statusTiltX;
+    inner.rotation.z = statusTiltZ;
     inner.scale.setScalar(scale);
 
     // 숨쉬기 스쿼시
@@ -871,6 +1031,8 @@ function Pawn({
           <sphereGeometry args={[0.02, 8, 8]} />
           <meshStandardMaterial color="#1e293b" />
         </mesh>
+        {fireAffected && <PawnFireAura reducedMotion={reducedMotion} />}
+        {poisonAffected && <PawnPoisonAura reducedMotion={reducedMotion} />}
       </group>
     </group>
   );
@@ -1074,6 +1236,110 @@ function BumpFX({ at, dir, reducedMotion = false }: { at: Position; dir?: Direct
   );
 }
 
+function ElementalBurstFX({
+  at,
+  dir,
+  kind,
+  delay = 0,
+  reducedMotion = false,
+}: {
+  at: Position;
+  dir?: Direction;
+  kind: 'fire' | 'poison';
+  delay?: number;
+  reducedMotion?: boolean;
+}) {
+  const [x, , z] = cellToWorld(at);
+  const offset = dir ? DIR_VECTOR[dir] : [0, 0];
+  const px = x + offset[0] * (SPACING / 2);
+  const pz = z + offset[1] * (SPACING / 2);
+  const coreRef = useRef<THREE.Mesh>(null);
+  const coreMaterialRef = useRef<THREE.MeshStandardMaterial>(null);
+  const particleRefs = useRef<Array<THREE.Mesh | null>>([]);
+  const startRef = useRef<number | null>(null);
+  const [started, setStarted] = useState(delay === 0);
+  const [done, setDone] = useState(false);
+  const life = kind === 'fire' ? 0.82 : 1.05;
+
+  useFrame((state, delta) => {
+    if (startRef.current === null) startRef.current = state.clock.elapsedTime;
+    const elapsed = state.clock.elapsedTime - startRef.current - delay;
+    if (elapsed < 0) return;
+    if (!started) setStarted(true);
+    if (elapsed > life) {
+      if (!done) setDone(true);
+      return;
+    }
+
+    const progress = Math.max(0, Math.min(1, elapsed / life));
+    if (coreRef.current && coreMaterialRef.current) {
+      const baseScale = reducedMotion ? 0.9 : 0.28 + progress * (kind === 'fire' ? 1.9 : 1.45);
+      coreRef.current.scale.setScalar(baseScale);
+      coreMaterialRef.current.opacity = Math.max(0, (kind === 'fire' ? 0.88 : 0.62) * (1 - progress));
+    }
+    particleRefs.current.forEach((particle, index) => {
+      if (!particle) return;
+      if (reducedMotion) {
+        particle.scale.setScalar(Math.max(0.05, 1 - progress));
+        return;
+      }
+      const vector = BURST_DIRS[index % BURST_DIRS.length];
+      const speed = kind === 'fire' ? 1.25 : 0.62;
+      particle.position.x += vector[0] * delta * speed;
+      particle.position.z += vector[2] * delta * speed;
+      particle.position.y = kind === 'fire'
+        ? Math.max(0.02, 0.18 + vector[1] * elapsed - 3.2 * elapsed * elapsed)
+        : 0.12 + vector[1] * elapsed * 0.36;
+      particle.scale.setScalar(Math.max(0.04, 1 - progress * 0.82));
+    });
+  });
+
+  if (done) return null;
+
+  const coreColor = kind === 'fire' ? '#ff5a1f' : '#65a30d';
+  const glowColor = kind === 'fire' ? '#facc15' : '#a3e635';
+  return (
+    <group
+      name={`maze-toon-effect-${kind}-burst`}
+      position={[px, 0.26, pz]}
+      visible={started}
+    >
+      <mesh ref={coreRef}>
+        <sphereGeometry args={[kind === 'fire' ? 0.24 : 0.28, 18, 14]} />
+        <meshStandardMaterial
+          ref={coreMaterialRef}
+          color={coreColor}
+          emissive={coreColor}
+          emissiveIntensity={kind === 'fire' ? 2 : 1.2}
+          transparent
+          opacity={kind === 'fire' ? 0.88 : 0.62}
+          depthWrite={false}
+        />
+      </mesh>
+      {BURST_DIRS.map((_, index) => (
+        <mesh
+          key={`${kind}-particle-${index}`}
+          ref={(element) => { particleRefs.current[index] = element; }}
+          position={[0, 0.08, 0]}
+          rotation={kind === 'fire' ? [0, 0, index * 0.39] : undefined}
+        >
+          {kind === 'fire'
+            ? <coneGeometry args={[0.055, 0.16, 7]} />
+            : <sphereGeometry args={[0.065 + (index % 3) * 0.012, 10, 8]} />}
+          <meshStandardMaterial
+            color={index % 2 === 0 ? glowColor : coreColor}
+            emissive={coreColor}
+            emissiveIntensity={kind === 'fire' ? 1.8 : 0.9}
+            transparent
+            opacity={0.88}
+            depthWrite={false}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 // 골인: 도착점에서 터지는 축포
 function GoalFX({ at, reducedMotion = false }: { at: Position; reducedMotion?: boolean }) {
   const [x, , z] = cellToWorld(at);
@@ -1132,6 +1398,12 @@ function FxLayer({ fx, reducedMotion = false }: { fx?: BoardFx | null; reducedMo
     case 'bump':
       effect = <BumpFX key={fx.key} at={fx.at} dir={fx.dir} reducedMotion={reducedMotion} />;
       break;
+    case 'fire':
+      effect = <ElementalBurstFX key={fx.key} at={fx.at} dir={fx.dir} kind="fire" delay={fx.delay ?? 0} reducedMotion={reducedMotion} />;
+      break;
+    case 'poison':
+      effect = <ElementalBurstFX key={fx.key} at={fx.at} dir={fx.dir} kind="poison" delay={fx.delay ?? 0} reducedMotion={reducedMotion} />;
+      break;
     case 'goal':
       effect = <GoalFX key={fx.key} at={fx.at} reducedMotion={reducedMotion} />;
       break;
@@ -1148,8 +1420,9 @@ function ItemVisuals({
   active,
   phaseOpen,
   visible,
-  setup = false,
-  distinguishOneTimeWalls = false,
+  setup,
+  revealObstacles,
+  collided,
   reducedMotion = false,
 }: {
   item: MapItem;
@@ -1157,8 +1430,9 @@ function ItemVisuals({
   active: boolean;
   phaseOpen: boolean;
   visible: boolean;
-  setup?: boolean;
-  distinguishOneTimeWalls?: boolean;
+  setup: boolean;
+  revealObstacles: boolean;
+  collided: boolean;
   reducedMotion?: boolean;
 }) {
   if (!visible) return null;
@@ -1166,11 +1440,12 @@ function ItemVisuals({
   if (item.type === 'oneTimeWall' && item.wallPosition && item.wallDirection) {
     const seg = obstacleToSegment(item.wallPosition, item.wallDirection);
     if (!seg) return null;
-    // 위장 벽: 상대 시점에서는 일반 벽과 같은 불투명 블록으로 렌더링한다.
-    // 첫 충돌로 소비된 뒤 통과 가능해지는 판정은 엔진이 담당한다.
-    if (consumed) return distinguishOneTimeWalls ? <FakeWallBox seg={seg} consumed /> : null;
-    if (setup || distinguishOneTimeWalls) return <FakeWallBox seg={seg} />;
-    return <WallBox seg={seg} color={COLORS.wall} />;
+    // 가짜벽은 어느 시점에서도 별도 재질이나 형상을 갖지 않는다. 일반벽이
+    // 숨겨진 동안 함께 숨고, 설정/공개/충돌 레이어도 같은 WallBox 인자를 쓴다.
+    if (consumed || collided || (!setup && !revealObstacles)) return null;
+    return setup
+      ? <WallBox seg={seg} color={COLORS.wall} />
+      : <WallBox seg={seg} color={COLORS.reveal} opacity={0.75} />;
   }
 
   if (
@@ -1322,13 +1597,13 @@ interface GameBoard3DProps {
   selectionMode?: 'start' | 'end' | 'none';
   revealObstacles?: boolean; // 게임 종료 후 상대 벽 공개
   revealItems?: boolean; // 맵 제작자 시점 또는 게임 종료 후 숨은 아이템 공개
-  distinguishOneTimeWalls?: boolean;
   pawnColor?: string; // 말 색상 (기본 파랑, 관전 시 상대 말은 빨강)
   items?: MapItem[] | null;
   itemsConsumed?: Record<number, boolean> | null; // 인덱스별 사용 여부
   itemActiveWalls?: Record<number, boolean> | null;
   itemPhaseOpen?: Record<number, boolean> | null;
   revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들
+  heatWalls?: Obstacle[]; // 화염 상태의 열기 환영. 공개 벽과 완전히 같은 외형으로 그린다.
   placeMode?: 'wall' | ItemType;
   pendingCell?: Position | null;
   fx?: BoardFx | null; // 액션 이펙트
@@ -1337,6 +1612,11 @@ interface GameBoard3DProps {
   fullscreen?: boolean;
   heightClassName?: string;
   compact?: boolean; // 동시 보드용 저비용 렌더링
+  challengeSeals?: Position[];
+  challengeActivatedSeals?: Record<number, boolean> | null;
+  wormholeChallenge?: boolean;
+  fireAffected?: boolean;
+  poisonAffected?: boolean;
 }
 
 function FixedBoardCamera({ compact }: { compact: boolean }) {
@@ -1440,26 +1720,36 @@ const BoardContents: React.FC<GameBoard3DProps & { reducedMotion?: boolean }> = 
   selectionMode = 'none',
   revealObstacles = false,
   revealItems = false,
-  distinguishOneTimeWalls = false,
   pawnColor,
   items = null,
   itemsConsumed = null,
   itemActiveWalls = null,
   itemPhaseOpen = null,
   revealedWalls = [],
+  heatWalls = [],
   placeMode = 'wall',
   pendingCell = null,
   fx = null,
   pawnVia = null,
   celebrating = false,
+  challengeSeals = [],
+  challengeActivatedSeals = null,
+  wormholeChallenge = false,
+  fireAffected = false,
+  poisonAffected = false,
   reducedMotion = false,
 }) => {
   const isSetup = gamePhase === GamePhase.SETUP;
 
   const obstacleSegments = dedupeSegments(obstacles || []);
   const collisionSegments = dedupeSegments(collisionWalls || []);
-  const radarSegments = dedupeSegments(revealedWalls || []);
+  // 열기 환영은 탐지/공개 벽과 같은 변환 및 WallBox를 공유해야 진짜 벽과
+  // 렌더 단서로 구분되지 않는다.
+  const sensedWallSegments = dedupeSegments([...(revealedWalls || []), ...(heatWalls || [])]);
   const collisionKeys = new Set(collisionSegments.map(segmentKey));
+  const allChallengeSealsActivated = challengeSeals.length > 0 && challengeSeals.every(
+    (_, index) => !!challengeActivatedSeals?.[index]
+  );
   const allSlots: WallSegment[] = [];
   for (let row = 0; row < BOARD_SIZE - 1; row += 1) {
     for (let col = 0; col < BOARD_SIZE; col += 1) allSlots.push({ type: 'H', row, col });
@@ -1491,6 +1781,7 @@ const BoardContents: React.FC<GameBoard3DProps & { reducedMotion?: boolean }> = 
           placeMode={placeMode}
           isPendingEntrance={!!pendingCell && isSamePosition(position, pendingCell)}
           reducedMotion={reducedMotion}
+          goalLocked={wormholeChallenge && !allChallengeSealsActivated}
         />
       );
     }
@@ -1523,6 +1814,14 @@ const BoardContents: React.FC<GameBoard3DProps & { reducedMotion?: boolean }> = 
 
       {/* 타일 */}
       {tiles}
+
+      {challengeSeals.map((position, index) => (
+        <WormholeSealMarker
+          key={`wormhole-seal-${index}`}
+          position={position}
+          activated={!!challengeActivatedSeals?.[index]}
+        />
+      ))}
 
       {/* 설치 단계: 배치된 노란 벽 */}
       {isSetup &&
@@ -1558,7 +1857,7 @@ const BoardContents: React.FC<GameBoard3DProps & { reducedMotion?: boolean }> = 
 
       {/* 탐지기로 밝혀낸 벽 (게임 종료 공개 전까지만) */}
       {gamePhase === GamePhase.PLAY && !revealObstacles &&
-        radarSegments
+        sensedWallSegments
           .filter((seg) => !collisionKeys.has(segmentKey(seg)))
           .map((seg) => (
             <WallBox key={`radar-${segmentKey(seg)}`} seg={seg} color={COLORS.wall} />
@@ -1574,7 +1873,12 @@ const BoardContents: React.FC<GameBoard3DProps & { reducedMotion?: boolean }> = 
           phaseOpen={!!itemPhaseOpen?.[idx]}
           visible={isSetup || revealItems}
           setup={isSetup}
-          distinguishOneTimeWalls={distinguishOneTimeWalls}
+          revealObstacles={revealObstacles}
+          collided={(() => {
+            if (!isWallItemType(it.type) || !it.wallPosition || !it.wallDirection) return false;
+            const segment = obstacleToSegment(it.wallPosition, it.wallDirection);
+            return !!segment && collisionKeys.has(segmentKey(segment));
+          })()}
           reducedMotion={reducedMotion}
         />
       ))}
@@ -1590,6 +1894,8 @@ const BoardContents: React.FC<GameBoard3DProps & { reducedMotion?: boolean }> = 
           color={pawnColor || COLORS.player}
           fx={fx}
           celebrating={celebrating}
+          fireAffected={fireAffected}
+          poisonAffected={poisonAffected}
           reducedMotion={reducedMotion}
         />
       )}
@@ -1616,7 +1922,12 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
     <div
       data-testid="game-board-3d"
       data-maze-render-style="inked-toy"
+      data-maze-floor-tone="cream-sage"
       data-reduced-motion={reducedMotion ? 'true' : 'false'}
+      data-board-realm={props.wormholeChallenge ? 'wormhole' : 'main'}
+      data-fire-affected={props.fireAffected ? 'true' : 'false'}
+      data-poison-affected={props.poisonAffected ? 'true' : 'false'}
+      data-heat-wall-count={props.heatWalls?.length || 0}
       style={{ background: BOARD_BACKGROUND }}
       className={
         fullscreen
@@ -1658,7 +1969,7 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
           shadow-radius={compact ? 2 : 4}
         />
         <directionalLight position={[CENTER - 5, 5, CENTER + 6]} color="#76bcc2" intensity={0.24} />
-        <hemisphereLight args={['#dff6ef', '#5a2d22', 0.32]} />
+        <hemisphereLight args={['#dff6ef', '#557568', 0.32]} />
 
         <BoardContents {...props} reducedMotion={reducedMotion} />
       </Canvas>

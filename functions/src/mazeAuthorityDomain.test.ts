@@ -499,6 +499,107 @@ test('idempotency receipts bind command ids to the exact actor and canonical pay
   );
 });
 
+test('one-time wall Authority outcomes and receipts are indistinguishable from static wall bumps', () => {
+  const wallPosition = { row: 2, col: 2 };
+  const wallDirection = 'right' as const;
+  const playedMapBase = simpleMap(wallPosition, { row: 2, col: 4 });
+  const staticWallState = startMatch(readyTwoPlayerRoom(
+    simpleMap(),
+    {
+      ...playedMapBase,
+      obstacles: [{ position: wallPosition, direction: wallDirection }],
+    },
+  ));
+  const oneTimeWallState = startMatch(readyTwoPlayerRoom(
+    simpleMap(),
+    {
+      ...playedMapBase,
+      items: [{
+        type: 'oneTimeWall',
+        wallPosition,
+        wallDirection,
+      }],
+    },
+  ));
+  assert.equal(staticWallState.gameState.currentTurn, OWNER);
+  assert.equal(oneTimeWallState.gameState.currentTurn, OWNER);
+  assert.equal(oneTimeWallState.gameState.assignments?.[OWNER], GUEST);
+
+  const staticCommand = {
+    type: 'turn',
+    commandId: 'command-static-wall-bump',
+    roomId: ROOM_ID,
+    expectedGeneration: staticWallState.meta.generation,
+    expectedRevision: staticWallState.meta.revision,
+    action: { type: 'move', direction: wallDirection },
+  } as const;
+  const oneTimeCommand = {
+    ...staticCommand,
+    commandId: 'command-one-time-wall-bump',
+    expectedGeneration: oneTimeWallState.meta.generation,
+    expectedRevision: oneTimeWallState.meta.revision,
+  } as const;
+  const staticTurn = reduceMazeAuthorityCommand(
+    staticWallState,
+    OWNER,
+    staticCommand,
+    2_000,
+  );
+  const oneTimeTurn = reduceMazeAuthorityCommand(
+    oneTimeWallState,
+    OWNER,
+    oneTimeCommand,
+    2_000,
+  );
+  assert.equal(staticTurn.result.type, 'turn');
+  assert.equal(oneTimeTurn.result.type, 'turn');
+  assert.deepEqual(oneTimeTurn.result.outcome, staticTurn.result.outcome);
+  assert.deepEqual(
+    Object.keys(oneTimeTurn.result.outcome).sort(),
+    Object.keys(staticTurn.result.outcome).sort(),
+  );
+  assert.equal(oneTimeTurn.result.outcome.type, 'move');
+  assert.equal(oneTimeTurn.result.outcome.effect, 'bump');
+  assert.equal(oneTimeTurn.result.outcome.consumedItemIndex, null);
+  assert.equal(oneTimeTurn.result.outcome.message, '플레이어가 벽에 부딪혔습니다.');
+  assert.equal(
+    oneTimeTurn.state.gameState.turnMessage,
+    staticTurn.state.gameState.turnMessage,
+  );
+  for (const leakedField of ['wallEffect', 'wallItemIndex', 'itemPosition']) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(oneTimeTurn.result.outcome, leakedField),
+      false,
+      `Authority outcome leaked ${leakedField}`,
+    );
+  }
+
+  const consumed = oneTimeTurn.state.gameState.itemState?.[GUEST]?.consumed;
+  assert.ok(consumed && typeof consumed === 'object');
+  assert.equal((consumed as Record<number, boolean>)[0], true);
+  const storedReceipt = oneTimeTurn.state.receipts.byId[oneTimeCommand.commandId];
+  assert.deepEqual(storedReceipt.result, oneTimeTurn.result);
+  assert.equal(
+    JSON.stringify(storedReceipt.result).includes('wallItemIndex'),
+    false,
+  );
+
+  const persistedState = simulateRealtimeDatabase(oneTimeTurn.state);
+  assert.ok(persistedState);
+  const replay = reduceMazeAuthorityCommand(
+    persistedState as MazeAuthorityState,
+    OWNER,
+    oneTimeCommand,
+    9_999,
+  );
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.result, oneTimeTurn.result);
+  assert.deepEqual(
+    (replay.result as TurnResult).outcome,
+    staticTurn.result.outcome,
+  );
+});
+
 test('Realtime Database sparse values rehydrate to canonical maps and exactly replay nullable outcomes', () => {
   const created = reduceMazeAuthorityCommand(null, OWNER, createCommand('command-rtdb-create'), 2_500);
   const persistedCreate = simulateRealtimeDatabase(created.state);
@@ -774,6 +875,66 @@ test('turn delegates to the generated V3 engine and preserves winner/end settlem
   assert.equal(state.gameState.winner, OWNER);
   assert.equal(state.gameState.draw, null);
   assert.equal(state.gameState.players[GUEST].finishMoves, 3);
+});
+
+test('Authority replaces a new poison effect seed with deterministic private-state entropy', () => {
+  const poisonMap = (hiddenWallDirection: 'right' | 'down'): GameMap => ({
+    rulesVersion: 3,
+    startPosition: { row: 2, col: 2 },
+    endPosition: { row: 5, col: 5 },
+    obstacles: [{ position: { row: 4, col: 4 }, direction: hiddenWallDirection }],
+    items: [{
+      type: 'poisonWall',
+      wallPosition: { row: 2, col: 2 },
+      wallDirection: 'right',
+    }],
+    skillLoadout: 'scoutPulse',
+  });
+  const poisonTurn = (state: MazeAuthorityState) => ({
+    type: 'turn' as const,
+    commandId: 'authority-private-poison-turn',
+    roomId: ROOM_ID,
+    expectedGeneration: state.meta.generation,
+    expectedRevision: state.meta.revision,
+    action: { type: 'move' as const, direction: 'right' as const },
+  });
+
+  const initial = startMatch(readyTwoPlayerRoom(simpleMap(), poisonMap('right')));
+  const command = poisonTurn(initial);
+  const first = reduceMazeAuthorityCommand(initial, OWNER, command, 1_500);
+  const retried = reduceMazeAuthorityCommand(initial, OWNER, command, 9_999);
+  const firstEffect = first.state.gameState.poisonEffectsByPlayer?.[OWNER];
+  const retriedEffect = retried.state.gameState.poisonEffectsByPlayer?.[OWNER];
+  assert.ok(firstEffect);
+  assert.ok(retriedEffect);
+  assert.equal(firstEffect.seed, retriedEffect.seed);
+  assert.ok(Number.isInteger(firstEffect.seed));
+  assert.ok(firstEffect.seed >= 0 && firstEffect.seed <= 0xffff_ffff);
+
+  const hiddenMapChanged = startMatch(readyTwoPlayerRoom(simpleMap(), poisonMap('down')));
+  assert.equal(hiddenMapChanged.meta.generation, initial.meta.generation);
+  assert.equal(hiddenMapChanged.meta.revision, initial.meta.revision);
+  const changed = reduceMazeAuthorityCommand(
+    hiddenMapChanged,
+    OWNER,
+    poisonTurn(hiddenMapChanged),
+    1_500,
+  );
+  const changedEffect = changed.state.gameState.poisonEffectsByPlayer?.[OWNER];
+  assert.ok(changedEffect);
+  assert.notEqual(
+    changedEffect.seed,
+    firstEffect.seed,
+    'a hidden full-map/receipt change must perturb the server-only poison seed',
+  );
+
+  const missingSeed = cloneJson(first.state);
+  delete (missingSeed.gameState.poisonEffectsByPlayer?.[OWNER] as Partial<typeof firstEffect>).seed;
+  expectDomainError(
+    () => parseMazeAuthorityState(missingSeed),
+    'data-loss',
+    'authority-poison-effect',
+  );
 });
 
 test('forfeit is retired while a server-owned offline skip preserves every runner and result field', () => {

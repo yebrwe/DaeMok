@@ -69,6 +69,16 @@ export type ItemType = WallItemType | 'mine' | 'wormhole' | 'radar' | 'smoke';
 
 export type MazeSkillId = 'scoutPulse' | 'breach' | 'anchor' | 'dash';
 
+export interface WormholeChallenge {
+  version: 1;
+  startPosition: Position;
+  endPosition: Position;
+  // 모든 봉인을 밟은 뒤에만 내부 출구가 열린다.
+  seals: Position[];
+  // 내부 맵은 재귀 아이템 없이 일반 벽만 가진다.
+  obstacles: Obstacle[];
+}
+
 export interface MazeSkillStateData {
   version: 1;
   loadout: MazeSkillId[];
@@ -85,9 +95,12 @@ export interface MapItem {
   // mine: 밟으면 2턴 전 위치로 되돌아감 (벽 1개 소모)
   // smoke: 밟으면 다음 유효 행동까지 주행 보드 시야가 가려짐 (벽 1개 소모)
   position?: Position;
-  // wormhole: 입구를 밟으면 출구로 순간이동, 1회성 (벽 7개 소모)
+  // wormhole: 입구를 밟으면 별도 내부 미로로 이동하고, 봉인을 모두 해제한
+  // 뒤 내부 출구에 도달해야 외부 exit로 복귀하는 1회성 함정 (벽 7개 소모)
   entrance?: Position;
   exit?: Position;
+  // challenge가 없는 값은 이미 진행 중인 V3 즉시이동 웜홀의 읽기 호환용이다.
+  challenge?: WormholeChallenge;
   // radar: 한 개당 1턴을 사용해 내 주변 3x3의 벽을 탐지 (벽 4개 소모)
 }
 
@@ -125,11 +138,40 @@ export interface ItemStateEntry {
   consumedAt?: unknown;
 }
 
-export interface VisionEffect {
+export interface SmokeVisionEffect {
   type: 'smoke';
   sourcePlayerId: string;
   appliedAtTurn: number;
   expiresAtTargetMove: number;
+}
+
+export interface FireVisionEffect {
+  type: 'fire';
+  sourcePlayerId: string;
+  appliedAtTurn: number;
+  expiresAtTargetMove: number;
+  // 실제 벽 일부와 빈 벽선을 섞어 같은 정상벽으로 보여 주는 열기 환영이다.
+  phantomWalls: Obstacle[];
+}
+
+export type VisionEffect = SmokeVisionEffect | FireVisionEffect;
+
+export interface PoisonEffect {
+  sourcePlayerId: string;
+  appliedAtTurn: number;
+  expiresAtTargetMove: number;
+  // 트랜잭션 재시도와 서버/클라이언트가 같은 25% 판정을 내리기 위한 고정 시드.
+  seed: number;
+}
+
+export interface WormholeRunState {
+  mapOwnerId: string;
+  itemIndex: number;
+  position: Position;
+  challenge: WormholeChallenge;
+  activatedSeals?: Record<number, boolean>;
+  discoveredWalls?: Obstacle[];
+  enteredAtTurn: number;
 }
 
 export interface GameRuleSnapshot {
@@ -160,6 +202,9 @@ export interface GameState {
   itemState?: Record<string, ItemStateEntry>;
   revealedWallsByPlayer?: Record<string, Obstacle[]>;
   visionEffectsByPlayer?: Record<string, VisionEffect> | null;
+  poisonEffectsByPlayer?: Record<string, PoisonEffect> | null;
+  // 외부 player.position은 입구에 고정하고 내부 좌표는 주자별 세션에 분리한다.
+  wormholeRunsByPlayer?: Record<string, WormholeRunState>;
   turnMessage?: string;
   turnMessageTimestamp?: unknown;
 }

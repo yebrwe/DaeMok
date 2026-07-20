@@ -41,6 +41,13 @@ export type SpecialWallType = 'steelWall' | 'fireWall' | 'poisonWall' | 'iceWall
 export type WallItemType = 'oneTimeWall' | SpecialWallType;
 export type ItemType = WallItemType | 'mine' | 'wormhole' | 'radar' | 'smoke';
 export type MazeSkillId = 'scoutPulse' | 'breach' | 'anchor' | 'dash';
+export interface WormholeChallenge {
+    version: 1;
+    startPosition: Position;
+    endPosition: Position;
+    seals: Position[];
+    obstacles: Obstacle[];
+}
 export interface MazeSkillStateData {
     version: 1;
     loadout: MazeSkillId[];
@@ -54,6 +61,7 @@ export interface MapItem {
     position?: Position;
     entrance?: Position;
     exit?: Position;
+    challenge?: WormholeChallenge;
 }
 export interface GameMap {
     rulesVersion?: number;
@@ -80,11 +88,34 @@ export interface ItemStateEntry {
     type?: ItemType;
     consumedAt?: unknown;
 }
-export interface VisionEffect {
+export interface SmokeVisionEffect {
     type: 'smoke';
     sourcePlayerId: string;
     appliedAtTurn: number;
     expiresAtTargetMove: number;
+}
+export interface FireVisionEffect {
+    type: 'fire';
+    sourcePlayerId: string;
+    appliedAtTurn: number;
+    expiresAtTargetMove: number;
+    phantomWalls: Obstacle[];
+}
+export type VisionEffect = SmokeVisionEffect | FireVisionEffect;
+export interface PoisonEffect {
+    sourcePlayerId: string;
+    appliedAtTurn: number;
+    expiresAtTargetMove: number;
+    seed: number;
+}
+export interface WormholeRunState {
+    mapOwnerId: string;
+    itemIndex: number;
+    position: Position;
+    challenge: WormholeChallenge;
+    activatedSeals?: Record<number, boolean>;
+    discoveredWalls?: Obstacle[];
+    enteredAtTurn: number;
 }
 export interface GameRuleSnapshot {
     version: number;
@@ -110,6 +141,8 @@ export interface GameState {
     itemState?: Record<string, ItemStateEntry>;
     revealedWallsByPlayer?: Record<string, Obstacle[]>;
     visionEffectsByPlayer?: Record<string, VisionEffect> | null;
+    poisonEffectsByPlayer?: Record<string, PoisonEffect> | null;
+    wormholeRunsByPlayer?: Record<string, WormholeRunState>;
     turnMessage?: string;
     turnMessageTimestamp?: unknown;
 }

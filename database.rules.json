@@ -219,14 +219,104 @@
             ".write": "auth != null && $ownerId === auth.uid && root.child('rooms').child($roomId).child('gameState').child('players').child($ownerId).exists() && root.child('rooms').child($roomId).child('gameState').child('phase').val() === 'setup' && (root.child('rooms').child($roomId).child('gameState').child('players').child($ownerId).child('isReady').val() !== true || (!newData.exists() && newData.parent().parent().child('gameState').child('players').child($ownerId).child('isReady').val() !== true))",
             ".validate": "newData.child('rulesVersion').isNumber() && newData.child('rulesVersion').val() === root.child('rooms').child($roomId).child('rulesVersion').val() && newData.child('skillLoadout').isString() && newData.child('skillLoadout').val() === 'scoutPulse'",
             "item": {
+              ".validate": "newData.child('type').val() !== 'wormhole' || (newData.child('entrance').exists() && newData.child('exit').exists() && newData.child('challenge').exists())",
               "type": {
                 ".validate": "newData.val() !== 'radar' && newData.val() !== 'collapseWall' && newData.val() !== 'mirrorWall'"
+              },
+              "challenge": {
+                ".validate": "newData.hasChildren(['version', 'startPosition', 'endPosition', 'seals']) && newData.child('version').isNumber() && newData.child('version').val() === 1 && newData.child('startPosition').hasChildren(['row', 'col']) && newData.child('startPosition').child('row').isNumber() && newData.child('startPosition').child('row').val() >= 0 && newData.child('startPosition').child('row').val() <= 5 && newData.child('startPosition').child('row').val() % 1 === 0 && newData.child('startPosition').child('col').isNumber() && newData.child('startPosition').child('col').val() >= 0 && newData.child('startPosition').child('col').val() <= 5 && newData.child('startPosition').child('col').val() % 1 === 0 && newData.child('endPosition').hasChildren(['row', 'col']) && newData.child('endPosition').child('row').isNumber() && newData.child('endPosition').child('row').val() >= 0 && newData.child('endPosition').child('row').val() <= 5 && newData.child('endPosition').child('row').val() % 1 === 0 && newData.child('endPosition').child('col').isNumber() && newData.child('endPosition').child('col').val() >= 0 && newData.child('endPosition').child('col').val() <= 5 && newData.child('endPosition').child('col').val() % 1 === 0 && newData.child('seals').hasChildren(['0', '1', '2']) && newData.child('seals').child('0').hasChildren(['row', 'col']) && newData.child('seals').child('0').child('row').isNumber() && newData.child('seals').child('0').child('row').val() >= 0 && newData.child('seals').child('0').child('row').val() <= 5 && newData.child('seals').child('0').child('row').val() % 1 === 0 && newData.child('seals').child('0').child('col').isNumber() && newData.child('seals').child('0').child('col').val() >= 0 && newData.child('seals').child('0').child('col').val() <= 5 && newData.child('seals').child('0').child('col').val() % 1 === 0 && newData.child('seals').child('1').hasChildren(['row', 'col']) && newData.child('seals').child('1').child('row').isNumber() && newData.child('seals').child('1').child('row').val() >= 0 && newData.child('seals').child('1').child('row').val() <= 5 && newData.child('seals').child('1').child('row').val() % 1 === 0 && newData.child('seals').child('1').child('col').isNumber() && newData.child('seals').child('1').child('col').val() >= 0 && newData.child('seals').child('1').child('col').val() <= 5 && newData.child('seals').child('1').child('col').val() % 1 === 0 && newData.child('seals').child('2').hasChildren(['row', 'col']) && newData.child('seals').child('2').child('row').isNumber() && newData.child('seals').child('2').child('row').val() >= 0 && newData.child('seals').child('2').child('row').val() <= 5 && newData.child('seals').child('2').child('row').val() % 1 === 0 && newData.child('seals').child('2').child('col').isNumber() && newData.child('seals').child('2').child('col').val() >= 0 && newData.child('seals').child('2').child('col').val() <= 5 && newData.child('seals').child('2').child('col').val() % 1 === 0",
+                "version": {
+                  ".validate": "newData.isNumber() && newData.val() === 1"
+                },
+                "startPosition": {
+                  "$coordinate": {
+                    ".validate": "$coordinate === 'row' || $coordinate === 'col'"
+                  }
+                },
+                "endPosition": {
+                  "$coordinate": {
+                    ".validate": "$coordinate === 'row' || $coordinate === 'col'"
+                  }
+                },
+                "seals": {
+                  ".validate": "newData.parent().child('obstacles').hasChildren(['0', '1', '2', '3'])",
+                  "$sealIndex": {
+                    ".validate": "$sealIndex === '0' || $sealIndex === '1' || $sealIndex === '2'",
+                    "$coordinate": {
+                      ".validate": "$coordinate === 'row' || $coordinate === 'col'"
+                    }
+                  }
+                },
+                "obstacles": {
+                  "$wallIndex": {
+                    ".validate": "($wallIndex === '0' || $wallIndex === '1' || $wallIndex === '2' || $wallIndex === '3' || $wallIndex === '4' || $wallIndex === '5' || $wallIndex === '6' || $wallIndex === '7' || $wallIndex === '8' || $wallIndex === '9' || $wallIndex === '10' || $wallIndex === '11') && newData.hasChildren(['position', 'direction']) && newData.child('position').hasChildren(['row', 'col']) && newData.child('position').child('row').isNumber() && newData.child('position').child('row').val() >= 0 && newData.child('position').child('row').val() <= 5 && newData.child('position').child('row').val() % 1 === 0 && newData.child('position').child('col').isNumber() && newData.child('position').child('col').val() >= 0 && newData.child('position').child('col').val() <= 5 && newData.child('position').child('col').val() % 1 === 0 && newData.child('direction').isString() && ((newData.child('direction').val() === 'up' && newData.child('position').child('row').val() > 0) || (newData.child('direction').val() === 'down' && newData.child('position').child('row').val() < 5) || (newData.child('direction').val() === 'left' && newData.child('position').child('col').val() > 0) || (newData.child('direction').val() === 'right' && newData.child('position').child('col').val() < 5))",
+                    "position": {
+                      "$coordinate": {
+                        ".validate": "$coordinate === 'row' || $coordinate === 'col'"
+                      }
+                    },
+                    "direction": {
+                      ".validate": "newData.isString()"
+                    },
+                    "$other": {
+                      ".validate": false
+                    }
+                  }
+                },
+                "$other": {
+                  ".validate": false
+                }
               }
             },
             "items": {
               "$itemIndex": {
+                ".validate": "newData.child('type').val() !== 'wormhole' || (newData.child('entrance').exists() && newData.child('exit').exists() && newData.child('challenge').exists())",
                 "type": {
                   ".validate": "newData.val() !== 'radar' && newData.val() !== 'collapseWall' && newData.val() !== 'mirrorWall'"
+                },
+                "challenge": {
+                  ".validate": "newData.hasChildren(['version', 'startPosition', 'endPosition', 'seals']) && newData.child('version').isNumber() && newData.child('version').val() === 1 && newData.child('startPosition').hasChildren(['row', 'col']) && newData.child('startPosition').child('row').isNumber() && newData.child('startPosition').child('row').val() >= 0 && newData.child('startPosition').child('row').val() <= 5 && newData.child('startPosition').child('row').val() % 1 === 0 && newData.child('startPosition').child('col').isNumber() && newData.child('startPosition').child('col').val() >= 0 && newData.child('startPosition').child('col').val() <= 5 && newData.child('startPosition').child('col').val() % 1 === 0 && newData.child('endPosition').hasChildren(['row', 'col']) && newData.child('endPosition').child('row').isNumber() && newData.child('endPosition').child('row').val() >= 0 && newData.child('endPosition').child('row').val() <= 5 && newData.child('endPosition').child('row').val() % 1 === 0 && newData.child('endPosition').child('col').isNumber() && newData.child('endPosition').child('col').val() >= 0 && newData.child('endPosition').child('col').val() <= 5 && newData.child('endPosition').child('col').val() % 1 === 0 && newData.child('seals').hasChildren(['0', '1', '2']) && newData.child('seals').child('0').hasChildren(['row', 'col']) && newData.child('seals').child('0').child('row').isNumber() && newData.child('seals').child('0').child('row').val() >= 0 && newData.child('seals').child('0').child('row').val() <= 5 && newData.child('seals').child('0').child('row').val() % 1 === 0 && newData.child('seals').child('0').child('col').isNumber() && newData.child('seals').child('0').child('col').val() >= 0 && newData.child('seals').child('0').child('col').val() <= 5 && newData.child('seals').child('0').child('col').val() % 1 === 0 && newData.child('seals').child('1').hasChildren(['row', 'col']) && newData.child('seals').child('1').child('row').isNumber() && newData.child('seals').child('1').child('row').val() >= 0 && newData.child('seals').child('1').child('row').val() <= 5 && newData.child('seals').child('1').child('row').val() % 1 === 0 && newData.child('seals').child('1').child('col').isNumber() && newData.child('seals').child('1').child('col').val() >= 0 && newData.child('seals').child('1').child('col').val() <= 5 && newData.child('seals').child('1').child('col').val() % 1 === 0 && newData.child('seals').child('2').hasChildren(['row', 'col']) && newData.child('seals').child('2').child('row').isNumber() && newData.child('seals').child('2').child('row').val() >= 0 && newData.child('seals').child('2').child('row').val() <= 5 && newData.child('seals').child('2').child('row').val() % 1 === 0 && newData.child('seals').child('2').child('col').isNumber() && newData.child('seals').child('2').child('col').val() >= 0 && newData.child('seals').child('2').child('col').val() <= 5 && newData.child('seals').child('2').child('col').val() % 1 === 0",
+                  "version": {
+                    ".validate": "newData.isNumber() && newData.val() === 1"
+                  },
+                  "startPosition": {
+                    "$coordinate": {
+                      ".validate": "$coordinate === 'row' || $coordinate === 'col'"
+                    }
+                  },
+                  "endPosition": {
+                    "$coordinate": {
+                      ".validate": "$coordinate === 'row' || $coordinate === 'col'"
+                    }
+                  },
+                  "seals": {
+                    ".validate": "newData.parent().child('obstacles').hasChildren(['0', '1', '2', '3'])",
+                    "$sealIndex": {
+                      ".validate": "$sealIndex === '0' || $sealIndex === '1' || $sealIndex === '2'",
+                      "$coordinate": {
+                        ".validate": "$coordinate === 'row' || $coordinate === 'col'"
+                      }
+                    }
+                  },
+                  "obstacles": {
+                    "$wallIndex": {
+                      ".validate": "($wallIndex === '0' || $wallIndex === '1' || $wallIndex === '2' || $wallIndex === '3' || $wallIndex === '4' || $wallIndex === '5' || $wallIndex === '6' || $wallIndex === '7' || $wallIndex === '8' || $wallIndex === '9' || $wallIndex === '10' || $wallIndex === '11') && newData.hasChildren(['position', 'direction']) && newData.child('position').hasChildren(['row', 'col']) && newData.child('position').child('row').isNumber() && newData.child('position').child('row').val() >= 0 && newData.child('position').child('row').val() <= 5 && newData.child('position').child('row').val() % 1 === 0 && newData.child('position').child('col').isNumber() && newData.child('position').child('col').val() >= 0 && newData.child('position').child('col').val() <= 5 && newData.child('position').child('col').val() % 1 === 0 && newData.child('direction').isString() && ((newData.child('direction').val() === 'up' && newData.child('position').child('row').val() > 0) || (newData.child('direction').val() === 'down' && newData.child('position').child('row').val() < 5) || (newData.child('direction').val() === 'left' && newData.child('position').child('col').val() > 0) || (newData.child('direction').val() === 'right' && newData.child('position').child('col').val() < 5))",
+                      "position": {
+                        "$coordinate": {
+                          ".validate": "$coordinate === 'row' || $coordinate === 'col'"
+                        }
+                      },
+                      "direction": {
+                        ".validate": "newData.isString()"
+                      },
+                      "$other": {
+                        ".validate": false
+                      }
+                    }
+                  },
+                  "$other": {
+                    ".validate": false
+                  }
                 }
               }
             }
@@ -234,7 +324,7 @@
         },
         "gameState": {
           ".write": "auth != null && ((data.child('phase').val() !== 'play' && root.child('rooms').child($roomId).child('createdBy').val() === auth.uid) || (data.child('phase').val() === 'play' && data.child('players').child(auth.uid).exists() && newData.child('turnOrder').child('0').val() === data.child('turnOrder').child('0').val() && newData.child('turnOrder').child('1').val() === data.child('turnOrder').child('1').val() && newData.child('turnOrder').child('2').val() === data.child('turnOrder').child('2').val() && newData.child('turnOrder').child('3').val() === data.child('turnOrder').child('3').val() && (!data.child('turnOrder').child('0').exists() || (newData.child('assignments').child(data.child('turnOrder').child('0').val()).val() === data.child('assignments').child(data.child('turnOrder').child('0').val()).val() && newData.child('players').child(data.child('turnOrder').child('0').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']))) && (!data.child('turnOrder').child('1').exists() || (newData.child('assignments').child(data.child('turnOrder').child('1').val()).val() === data.child('assignments').child(data.child('turnOrder').child('1').val()).val() && newData.child('players').child(data.child('turnOrder').child('1').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']))) && (!data.child('turnOrder').child('2').exists() || (newData.child('assignments').child(data.child('turnOrder').child('2').val()).val() === data.child('assignments').child(data.child('turnOrder').child('2').val()).val() && newData.child('players').child(data.child('turnOrder').child('2').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']))) && (!data.child('turnOrder').child('3').exists() || (newData.child('assignments').child(data.child('turnOrder').child('3').val()).val() === data.child('assignments').child(data.child('turnOrder').child('3').val()).val() && newData.child('players').child(data.child('turnOrder').child('3').val()).hasChildren(['id', 'position', 'isReady', 'finished', 'forfeited', 'moves']))) && (data.child('currentTurn').val() === auth.uid || !data.child('currentTurn').exists() || !data.child('players').child(data.child('currentTurn').val()).exists() || data.child('players').child(data.child('currentTurn').val()).child('finished').val() === true || data.child('players').child(data.child('currentTurn').val()).child('forfeited').val() === true || (newData.child('players').child(auth.uid).child('forfeited').val() === true && data.child('players').child(auth.uid).child('forfeited').val() !== true) || (data.child('players').child(auth.uid).child('finished').val() === true && newData.child('phase').val() === 'end') || (data.child('currentTurn').exists() && data.child('currentTurn').val() !== auth.uid && data.child('players').child(auth.uid).child('isOnline').val() === true && newData.child('players').child(auth.uid).child('isOnline').val() === true && data.child('players').child(data.child('currentTurn').val()).child('isOnline').val() === false && data.child('players').child(data.child('currentTurn').val()).child('lastSeen').isNumber() && data.child('players').child(data.child('currentTurn').val()).child('lastSeen').val() <= now - 45000 && data.child('players').child(data.child('currentTurn').val()).child('finished').val() !== true && data.child('players').child(data.child('currentTurn').val()).child('forfeited').val() !== true && data.child('players').child(data.child('currentTurn').val()).child('hasLeft').val() !== true && newData.child('players').child(data.child('currentTurn').val()).child('forfeited').val() === data.child('players').child(data.child('currentTurn').val()).child('forfeited').val() && newData.child('players').child(data.child('currentTurn').val()).child('hasLeft').val() === data.child('players').child(data.child('currentTurn').val()).child('hasLeft').val() && newData.child('currentTurn').val() !== data.child('currentTurn').val() && newData.child('turnNumber').val() === data.child('turnNumber').val() + 1))))",
-          ".validate": "newData.hasChildren(['rulesVersion', 'matchNumber', 'phase', 'players']) && (data.child('phase').val() !== 'end' || newData.child('phase').val() === 'end' || ((!data.child('turnOrder').child('0').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('0').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true) && (!data.child('turnOrder').child('1').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('1').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true) && (!data.child('turnOrder').child('2').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('2').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true) && (!data.child('turnOrder').child('3').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('3').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true)))",
+          ".validate": "newData.hasChildren(['rulesVersion', 'matchNumber', 'phase', 'players']) && (data.child('phase').val() !== 'end' || newData.child('phase').val() === 'end' || ((!data.child('turnOrder').child('0').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('0').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true) && (!data.child('turnOrder').child('1').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('1').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true) && (!data.child('turnOrder').child('2').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('2').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true) && (!data.child('turnOrder').child('3').exists() || root.child('mazeRankings').child(data.child('turnOrder').child('3').val()).child('settledMatches').child($roomId + ':' + data.child('matchNumber').val()).val() === true))) && (data.child('phase').val() !== 'play' || (((!data.child('turnOrder').child('0').exists() || data.child('turnOrder').child('0').val() === auth.uid || (newData.child('wormholeRunsByPlayer').child(data.child('turnOrder').child('0').val()).exists() === data.child('wormholeRunsByPlayer').child(data.child('turnOrder').child('0').val()).exists() && newData.child('visionEffectsByPlayer').child(data.child('turnOrder').child('0').val()).exists() === data.child('visionEffectsByPlayer').child(data.child('turnOrder').child('0').val()).exists() && newData.child('poisonEffectsByPlayer').child(data.child('turnOrder').child('0').val()).exists() === data.child('poisonEffectsByPlayer').child(data.child('turnOrder').child('0').val()).exists())) && (!data.child('turnOrder').child('1').exists() || data.child('turnOrder').child('1').val() === auth.uid || (newData.child('wormholeRunsByPlayer').child(data.child('turnOrder').child('1').val()).exists() === data.child('wormholeRunsByPlayer').child(data.child('turnOrder').child('1').val()).exists() && newData.child('visionEffectsByPlayer').child(data.child('turnOrder').child('1').val()).exists() === data.child('visionEffectsByPlayer').child(data.child('turnOrder').child('1').val()).exists() && newData.child('poisonEffectsByPlayer').child(data.child('turnOrder').child('1').val()).exists() === data.child('poisonEffectsByPlayer').child(data.child('turnOrder').child('1').val()).exists())) && (!data.child('turnOrder').child('2').exists() || data.child('turnOrder').child('2').val() === auth.uid || (newData.child('wormholeRunsByPlayer').child(data.child('turnOrder').child('2').val()).exists() === data.child('wormholeRunsByPlayer').child(data.child('turnOrder').child('2').val()).exists() && newData.child('visionEffectsByPlayer').child(data.child('turnOrder').child('2').val()).exists() === data.child('visionEffectsByPlayer').child(data.child('turnOrder').child('2').val()).exists() && newData.child('poisonEffectsByPlayer').child(data.child('turnOrder').child('2').val()).exists() === data.child('poisonEffectsByPlayer').child(data.child('turnOrder').child('2').val()).exists())) && (!data.child('turnOrder').child('3').exists() || data.child('turnOrder').child('3').val() === auth.uid || (newData.child('wormholeRunsByPlayer').child(data.child('turnOrder').child('3').val()).exists() === data.child('wormholeRunsByPlayer').child(data.child('turnOrder').child('3').val()).exists() && newData.child('visionEffectsByPlayer').child(data.child('turnOrder').child('3').val()).exists() === data.child('visionEffectsByPlayer').child(data.child('turnOrder').child('3').val()).exists() && newData.child('poisonEffectsByPlayer').child(data.child('turnOrder').child('3').val()).exists() === data.child('poisonEffectsByPlayer').child(data.child('turnOrder').child('3').val()).exists()))) && ((newData.child('wormholeRunsByPlayer').child(auth.uid).exists() === data.child('wormholeRunsByPlayer').child(auth.uid).exists() && newData.child('visionEffectsByPlayer').child(auth.uid).exists() === data.child('visionEffectsByPlayer').child(auth.uid).exists() && newData.child('poisonEffectsByPlayer').child(auth.uid).exists() === data.child('poisonEffectsByPlayer').child(auth.uid).exists()) || (data.child('currentTurn').val() === auth.uid && data.child('players').child(auth.uid).child('moves').isNumber() && newData.child('players').child(auth.uid).child('moves').isNumber() && newData.child('players').child(auth.uid).child('moves').val() >= data.child('players').child(auth.uid).child('moves').val() + 1 && newData.child('players').child(auth.uid).child('moves').val() <= data.child('players').child(auth.uid).child('moves').val() + 3 && newData.child('turnNumber').val() === data.child('turnNumber').val() + 1))))",
           "phase": {
             ".validate": "newData.isString() && (newData.val() === 'setup' || newData.val() === 'play' || newData.val() === 'end') && ((!data.exists() && newData.val() === 'setup') || newData.val() === data.val() || (data.val() === 'setup' && newData.val() === 'play') || (data.val() === 'play' && newData.val() === 'end') || (data.val() === 'end' && newData.val() === 'setup')) && (newData.val() !== 'end' || (newData.parent().child('turnOrder').child('0').exists() && !newData.parent().child('currentTurn').exists() && (!newData.parent().child('turnOrder').child('0').exists() || (newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).exists() && (newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('finished').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('forfeited').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('0').val()).child('hasLeft').val() === true))) && (!newData.parent().child('turnOrder').child('1').exists() || (newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).exists() && (newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('finished').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('forfeited').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('1').val()).child('hasLeft').val() === true))) && (!newData.parent().child('turnOrder').child('2').exists() || (newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).exists() && (newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('finished').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('forfeited').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('2').val()).child('hasLeft').val() === true))) && (!newData.parent().child('turnOrder').child('3').exists() || (newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).exists() && (newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('finished').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('forfeited').val() === true || newData.parent().child('players').child(newData.parent().child('turnOrder').child('3').val()).child('hasLeft').val() === true))) && ((newData.parent().child('winner').exists() && newData.parent().child('draw').val() !== true) || (!newData.parent().child('winner').exists() && newData.parent().child('draw').val() === true))))"
           },
@@ -281,6 +371,162 @@
                     ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || newData.val() === data.val()"
                   }
                 }
+              }
+            }
+          },
+          "wormholeRunsByPlayer": {
+            "$playerId": {
+              ".validate": "newData.hasChildren(['mapOwnerId', 'itemIndex', 'position', 'challenge', 'enteredAtTurn']) && newData.child('mapOwnerId').isString() && newData.child('mapOwnerId').val() === newData.parent().parent().child('assignments').child($playerId).val() && newData.child('itemIndex').isNumber() && newData.child('itemIndex').val() >= 0 && newData.child('itemIndex').val() <= 15 && newData.child('itemIndex').val() % 1 === 0 && newData.child('position').hasChildren(['row', 'col']) && newData.child('position').child('row').isNumber() && newData.child('position').child('row').val() >= 0 && newData.child('position').child('row').val() <= 5 && newData.child('position').child('row').val() % 1 === 0 && newData.child('position').child('col').isNumber() && newData.child('position').child('col').val() >= 0 && newData.child('position').child('col').val() <= 5 && newData.child('position').child('col').val() % 1 === 0 && newData.child('enteredAtTurn').isNumber() && newData.child('enteredAtTurn').val() >= 1 && newData.child('enteredAtTurn').val() <= newData.parent().parent().child('turnNumber').val() && newData.child('enteredAtTurn').val() % 1 === 0 && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || (($playerId === auth.uid && root.child('rooms').child($roomId).child('gameState').child('currentTurn').val() === auth.uid && root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).child('moves').isNumber() && newData.parent().parent().child('players').child(auth.uid).child('moves').isNumber() && newData.parent().parent().child('players').child(auth.uid).child('moves').val() >= root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).child('moves').val() + 1 && newData.parent().parent().child('players').child(auth.uid).child('moves').val() <= root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).child('moves').val() + 3 && newData.parent().parent().child('turnNumber').val() === root.child('rooms').child($roomId).child('gameState').child('turnNumber').val() + 1) || ($playerId !== auth.uid && newData.child('challenge').child('obstacles').exists() === data.child('challenge').child('obstacles').exists() && newData.child('activatedSeals').exists() === data.child('activatedSeals').exists() && newData.child('discoveredWalls').exists() === data.child('discoveredWalls').exists())))",
+              "mapOwnerId": {
+                ".validate": "newData.isString() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "itemIndex": {
+                ".validate": "newData.isNumber() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "position": {
+                "$coordinate": {
+                  ".validate": "($coordinate === 'row' || $coordinate === 'col') && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                }
+              },
+              "challenge": {
+                ".validate": "newData.hasChildren(['version', 'startPosition', 'endPosition', 'seals']) && newData.child('version').isNumber() && newData.child('version').val() === 1 && newData.child('startPosition').hasChildren(['row', 'col']) && newData.child('startPosition').child('row').isNumber() && newData.child('startPosition').child('row').val() >= 0 && newData.child('startPosition').child('row').val() <= 5 && newData.child('startPosition').child('row').val() % 1 === 0 && newData.child('startPosition').child('col').isNumber() && newData.child('startPosition').child('col').val() >= 0 && newData.child('startPosition').child('col').val() <= 5 && newData.child('startPosition').child('col').val() % 1 === 0 && newData.child('endPosition').hasChildren(['row', 'col']) && newData.child('endPosition').child('row').isNumber() && newData.child('endPosition').child('row').val() >= 0 && newData.child('endPosition').child('row').val() <= 5 && newData.child('endPosition').child('row').val() % 1 === 0 && newData.child('endPosition').child('col').isNumber() && newData.child('endPosition').child('col').val() >= 0 && newData.child('endPosition').child('col').val() <= 5 && newData.child('endPosition').child('col').val() % 1 === 0 && newData.child('seals').hasChildren(['0', '1', '2']) && newData.child('seals').child('0').hasChildren(['row', 'col']) && newData.child('seals').child('0').child('row').isNumber() && newData.child('seals').child('0').child('row').val() >= 0 && newData.child('seals').child('0').child('row').val() <= 5 && newData.child('seals').child('0').child('row').val() % 1 === 0 && newData.child('seals').child('0').child('col').isNumber() && newData.child('seals').child('0').child('col').val() >= 0 && newData.child('seals').child('0').child('col').val() <= 5 && newData.child('seals').child('0').child('col').val() % 1 === 0 && newData.child('seals').child('1').hasChildren(['row', 'col']) && newData.child('seals').child('1').child('row').isNumber() && newData.child('seals').child('1').child('row').val() >= 0 && newData.child('seals').child('1').child('row').val() <= 5 && newData.child('seals').child('1').child('row').val() % 1 === 0 && newData.child('seals').child('1').child('col').isNumber() && newData.child('seals').child('1').child('col').val() >= 0 && newData.child('seals').child('1').child('col').val() <= 5 && newData.child('seals').child('1').child('col').val() % 1 === 0 && newData.child('seals').child('2').hasChildren(['row', 'col']) && newData.child('seals').child('2').child('row').isNumber() && newData.child('seals').child('2').child('row').val() >= 0 && newData.child('seals').child('2').child('row').val() <= 5 && newData.child('seals').child('2').child('row').val() % 1 === 0 && newData.child('seals').child('2').child('col').isNumber() && newData.child('seals').child('2').child('col').val() >= 0 && newData.child('seals').child('2').child('col').val() <= 5 && newData.child('seals').child('2').child('col').val() % 1 === 0",
+                "version": {
+                  ".validate": "newData.isNumber() && newData.val() === 1 && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                },
+                "startPosition": {
+                  "$coordinate": {
+                    ".validate": "($coordinate === 'row' || $coordinate === 'col') && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                  }
+                },
+                "endPosition": {
+                  "$coordinate": {
+                    ".validate": "($coordinate === 'row' || $coordinate === 'col') && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                  }
+                },
+                "seals": {
+                  ".validate": "newData.parent().child('obstacles').hasChildren(['0', '1', '2', '3'])",
+                  "$sealIndex": {
+                    ".validate": "$sealIndex === '0' || $sealIndex === '1' || $sealIndex === '2'",
+                    "$coordinate": {
+                      ".validate": "($coordinate === 'row' || $coordinate === 'col') && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                    }
+                  }
+                },
+                "obstacles": {
+                  ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || (newData.child('0').exists() === data.child('0').exists() && newData.child('1').exists() === data.child('1').exists() && newData.child('2').exists() === data.child('2').exists() && newData.child('3').exists() === data.child('3').exists() && newData.child('4').exists() === data.child('4').exists() && newData.child('5').exists() === data.child('5').exists() && newData.child('6').exists() === data.child('6').exists() && newData.child('7').exists() === data.child('7').exists() && newData.child('8').exists() === data.child('8').exists() && newData.child('9').exists() === data.child('9').exists() && newData.child('10').exists() === data.child('10').exists() && newData.child('11').exists() === data.child('11').exists())",
+                  "$wallIndex": {
+                    ".validate": "($wallIndex === '0' || $wallIndex === '1' || $wallIndex === '2' || $wallIndex === '3' || $wallIndex === '4' || $wallIndex === '5' || $wallIndex === '6' || $wallIndex === '7' || $wallIndex === '8' || $wallIndex === '9' || $wallIndex === '10' || $wallIndex === '11') && newData.hasChildren(['position', 'direction']) && newData.child('position').hasChildren(['row', 'col']) && newData.child('position').child('row').isNumber() && newData.child('position').child('row').val() >= 0 && newData.child('position').child('row').val() <= 5 && newData.child('position').child('row').val() % 1 === 0 && newData.child('position').child('col').isNumber() && newData.child('position').child('col').val() >= 0 && newData.child('position').child('col').val() <= 5 && newData.child('position').child('col').val() % 1 === 0 && newData.child('direction').isString() && ((newData.child('direction').val() === 'up' && newData.child('position').child('row').val() > 0) || (newData.child('direction').val() === 'down' && newData.child('position').child('row').val() < 5) || (newData.child('direction').val() === 'left' && newData.child('position').child('col').val() > 0) || (newData.child('direction').val() === 'right' && newData.child('position').child('col').val() < 5))",
+                    "position": {
+                      "$coordinate": {
+                        ".validate": "($coordinate === 'row' || $coordinate === 'col') && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                      }
+                    },
+                    "direction": {
+                      ".validate": "newData.isString() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                    },
+                    "$other": {
+                      ".validate": false
+                    }
+                  }
+                },
+                "$other": {
+                  ".validate": false
+                }
+              },
+              "enteredAtTurn": {
+                ".validate": "newData.isNumber() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "activatedSeals": {
+                ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || (newData.child('0').exists() === data.child('0').exists() && newData.child('1').exists() === data.child('1').exists() && newData.child('2').exists() === data.child('2').exists())",
+                "0": {
+                  ".validate": "newData.isBoolean() && newData.val() === true"
+                },
+                "1": {
+                  ".validate": "newData.isBoolean() && newData.val() === true"
+                },
+                "2": {
+                  ".validate": "newData.isBoolean() && newData.val() === true"
+                },
+                "$other": {
+                  ".validate": false
+                }
+              },
+              "discoveredWalls": {
+                ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || (newData.child('0').exists() === data.child('0').exists() && newData.child('1').exists() === data.child('1').exists() && newData.child('2').exists() === data.child('2').exists() && newData.child('3').exists() === data.child('3').exists() && newData.child('4').exists() === data.child('4').exists() && newData.child('5').exists() === data.child('5').exists() && newData.child('6').exists() === data.child('6').exists() && newData.child('7').exists() === data.child('7').exists() && newData.child('8').exists() === data.child('8').exists() && newData.child('9').exists() === data.child('9').exists() && newData.child('10').exists() === data.child('10').exists() && newData.child('11').exists() === data.child('11').exists())",
+                "$wallIndex": {
+                  ".validate": "($wallIndex === '0' || $wallIndex === '1' || $wallIndex === '2' || $wallIndex === '3' || $wallIndex === '4' || $wallIndex === '5' || $wallIndex === '6' || $wallIndex === '7' || $wallIndex === '8' || $wallIndex === '9' || $wallIndex === '10' || $wallIndex === '11') && newData.hasChildren(['position', 'direction']) && newData.child('position').hasChildren(['row', 'col']) && newData.child('position').child('row').isNumber() && newData.child('position').child('row').val() >= 0 && newData.child('position').child('row').val() <= 5 && newData.child('position').child('row').val() % 1 === 0 && newData.child('position').child('col').isNumber() && newData.child('position').child('col').val() >= 0 && newData.child('position').child('col').val() <= 5 && newData.child('position').child('col').val() % 1 === 0 && newData.child('direction').isString() && ((newData.child('direction').val() === 'up' && newData.child('position').child('row').val() > 0) || (newData.child('direction').val() === 'down' && newData.child('position').child('row').val() < 5) || (newData.child('direction').val() === 'left' && newData.child('position').child('col').val() > 0) || (newData.child('direction').val() === 'right' && newData.child('position').child('col').val() < 5))",
+                  "position": {
+                    "$coordinate": {
+                      ".validate": "($coordinate === 'row' || $coordinate === 'col') && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                    }
+                  },
+                  "direction": {
+                    ".validate": "newData.isString() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                  },
+                  "$other": {
+                    ".validate": false
+                  }
+                }
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          },
+          "visionEffectsByPlayer": {
+            "$playerId": {
+              ".validate": "newData.hasChildren(['type', 'sourcePlayerId', 'appliedAtTurn', 'expiresAtTargetMove']) && ((newData.child('type').val() === 'smoke' && !newData.child('phantomWalls').exists()) || (newData.child('type').val() === 'fire' && newData.child('phantomWalls').exists())) && newData.child('sourcePlayerId').isString() && newData.parent().parent().child('players').child(newData.child('sourcePlayerId').val()).exists() && newData.child('appliedAtTurn').isNumber() && newData.child('appliedAtTurn').val() >= 0 && newData.child('appliedAtTurn').val() <= newData.parent().parent().child('turnNumber').val() && newData.child('appliedAtTurn').val() % 1 === 0 && newData.child('expiresAtTargetMove').isNumber() && newData.child('expiresAtTargetMove').val() >= 0 && newData.child('expiresAtTargetMove').val() <= 9007199254740991 && newData.child('expiresAtTargetMove').val() % 1 === 0 && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || (($playerId === auth.uid && root.child('rooms').child($roomId).child('gameState').child('currentTurn').val() === auth.uid && root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).child('moves').isNumber() && newData.parent().parent().child('players').child(auth.uid).child('moves').isNumber() && newData.parent().parent().child('players').child(auth.uid).child('moves').val() >= root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).child('moves').val() + 1 && newData.parent().parent().child('players').child(auth.uid).child('moves').val() <= root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).child('moves').val() + 3 && newData.parent().parent().child('turnNumber').val() === root.child('rooms').child($roomId).child('gameState').child('turnNumber').val() + 1) || ($playerId !== auth.uid && newData.child('phantomWalls').exists() === data.child('phantomWalls').exists())))",
+              "type": {
+                ".validate": "newData.isString() && (newData.val() === 'smoke' || newData.val() === 'fire') && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "sourcePlayerId": {
+                ".validate": "newData.isString() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "appliedAtTurn": {
+                ".validate": "newData.isNumber() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "expiresAtTargetMove": {
+                ".validate": "newData.isNumber() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "phantomWalls": {
+                ".validate": "root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || (newData.child('0').exists() === data.child('0').exists() && newData.child('1').exists() === data.child('1').exists() && newData.child('2').exists() === data.child('2').exists() && newData.child('3').exists() === data.child('3').exists() && newData.child('4').exists() === data.child('4').exists() && newData.child('5').exists() === data.child('5').exists())",
+                "$wallIndex": {
+                  ".validate": "($wallIndex === '0' || $wallIndex === '1' || $wallIndex === '2' || $wallIndex === '3' || $wallIndex === '4' || $wallIndex === '5') && newData.hasChildren(['position', 'direction']) && newData.child('position').hasChildren(['row', 'col']) && newData.child('position').child('row').isNumber() && newData.child('position').child('row').val() >= 0 && newData.child('position').child('row').val() <= 5 && newData.child('position').child('row').val() % 1 === 0 && newData.child('position').child('col').isNumber() && newData.child('position').child('col').val() >= 0 && newData.child('position').child('col').val() <= 5 && newData.child('position').child('col').val() % 1 === 0 && newData.child('direction').isString() && ((newData.child('direction').val() === 'up' && newData.child('position').child('row').val() > 0) || (newData.child('direction').val() === 'down' && newData.child('position').child('row').val() < 5) || (newData.child('direction').val() === 'left' && newData.child('position').child('col').val() > 0) || (newData.child('direction').val() === 'right' && newData.child('position').child('col').val() < 5))",
+                  "position": {
+                    "$coordinate": {
+                      ".validate": "($coordinate === 'row' || $coordinate === 'col') && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                    }
+                  },
+                  "direction": {
+                    ".validate": "newData.isString() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+                  },
+                  "$other": {
+                    ".validate": false
+                  }
+                }
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          },
+          "poisonEffectsByPlayer": {
+            "$playerId": {
+              ".validate": "newData.hasChildren(['sourcePlayerId', 'appliedAtTurn', 'expiresAtTargetMove', 'seed']) && newData.child('sourcePlayerId').isString() && newData.parent().parent().child('players').child(newData.child('sourcePlayerId').val()).exists() && newData.child('appliedAtTurn').isNumber() && newData.child('appliedAtTurn').val() >= 0 && newData.child('appliedAtTurn').val() <= newData.parent().parent().child('turnNumber').val() && newData.child('appliedAtTurn').val() % 1 === 0 && newData.child('expiresAtTargetMove').isNumber() && newData.child('expiresAtTargetMove').val() >= 0 && newData.child('expiresAtTargetMove').val() <= 9007199254740991 && newData.child('expiresAtTargetMove').val() % 1 === 0 && newData.child('seed').isNumber() && newData.child('seed').val() >= 0 && newData.child('seed').val() <= 4294967295 && newData.child('seed').val() % 1 === 0 && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || ($playerId === auth.uid && root.child('rooms').child($roomId).child('gameState').child('currentTurn').val() === auth.uid && root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).child('moves').isNumber() && newData.parent().parent().child('players').child(auth.uid).child('moves').isNumber() && newData.parent().parent().child('players').child(auth.uid).child('moves').val() >= root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).child('moves').val() + 1 && newData.parent().parent().child('players').child(auth.uid).child('moves').val() <= root.child('rooms').child($roomId).child('gameState').child('players').child(auth.uid).child('moves').val() + 3 && newData.parent().parent().child('turnNumber').val() === root.child('rooms').child($roomId).child('gameState').child('turnNumber').val() + 1) || $playerId !== auth.uid)",
+              "sourcePlayerId": {
+                ".validate": "newData.isString() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "appliedAtTurn": {
+                ".validate": "newData.isNumber() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "expiresAtTargetMove": {
+                ".validate": "newData.isNumber() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "seed": {
+                ".validate": "newData.isNumber() && (root.child('rooms').child($roomId).child('gameState').child('phase').val() !== 'play' || $playerId === auth.uid || newData.val() === data.val())"
+              },
+              "$other": {
+                ".validate": false
               }
             }
           },

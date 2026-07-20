@@ -298,14 +298,17 @@ function deterministicFixtures() {
       type: 'fireWall',
       verify(resolved) {
         assert.equal(resolved.outcome.effect, 'bump');
-        assert.equal(resolved.outcome.moves, 2);
+        assert.equal(resolved.outcome.moves, 1);
+        assert.equal(resolved.state.visionEffectsByPlayer.a.type, 'fire');
+        assert.equal(resolved.state.visionEffectsByPlayer.a.phantomWalls.length, 6);
       },
     },
     {
       type: 'poisonWall',
       verify(resolved) {
         assert.deepEqual(resolved.outcome.position, position(0, 1));
-        assert.equal(resolved.outcome.moves, 3);
+        assert.equal(resolved.outcome.moves, 1);
+        assert.equal(resolved.state.poisonEffectsByPlayer.a.expiresAtTargetMove, 5);
       },
     },
     {

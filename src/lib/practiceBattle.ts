@@ -8,10 +8,12 @@ import {
   Obstacle,
   Player,
   Position,
+  WormholeChallenge,
 } from '@/types/game';
 import {
   BOARD_SIZE,
   canMove,
+  cloneMapItem,
   findShortestPath,
   getMapBudgetUsed,
   getMapItems,
@@ -73,10 +75,34 @@ const specialWall = (
   ...(effectDirection ? { effectDirection } : {}),
 });
 
+function createPracticeWormholeChallenge(): WormholeChallenge {
+  return {
+    version: 1,
+    startPosition: { row: 0, col: 0 },
+    endPosition: { row: 2, col: 2 },
+    seals: [
+      { row: 0, col: 5 },
+      { row: 5, col: 5 },
+      { row: 5, col: 0 },
+    ],
+    obstacles: [
+      wall(0, 1, 'down'),
+      wall(0, 2, 'down'),
+      wall(1, 3, 'right'),
+      wall(2, 3, 'right'),
+      wall(3, 1, 'right'),
+      wall(4, 1, 'right'),
+      wall(4, 3, 'down'),
+      wall(4, 4, 'down'),
+    ],
+  };
+}
+
 const wormhole = (entrance: Position, exit: Position): MapItem => ({
   type: 'wormhole',
   entrance,
   exit,
+  challenge: createPracticeWormholeChallenge(),
 });
 
 const smoke = (row: number, col: number): MapItem => ({
@@ -175,13 +201,7 @@ export function clonePracticeMap(map: GameMap): GameMap {
       position: clonePosition(entry.position),
       direction: entry.direction,
     })),
-    items: getMapItems(map).map((item) => ({
-      ...item,
-      position: item.position ? clonePosition(item.position) : undefined,
-      wallPosition: item.wallPosition ? clonePosition(item.wallPosition) : undefined,
-      entrance: item.entrance ? clonePosition(item.entrance) : undefined,
-      exit: item.exit ? clonePosition(item.exit) : undefined,
-    })),
+    items: getMapItems(map).map(cloneMapItem),
     // 연습전에서는 스킬을 노출하거나 사용하지 않는다. V3 맵 필드는 유지하되
     // 자동 발동형 anchor가 이동 결과에 개입하지 않도록 수동형 기본값으로 통일한다.
     skillLoadout: 'scoutPulse',
@@ -404,6 +424,29 @@ function directionBetween(from: Position, to: Position): Direction | null {
   return null;
 }
 
+function chooseWormholeAiDirection(state: GameState, runnerId: string): Direction | null {
+  const run = state.wormholeRunsByPlayer?.[runnerId];
+  if (!run) return null;
+
+  let targetPath: Position[] | null = null;
+  run.challenge.seals.forEach((seal, index) => {
+    if (run.activatedSeals?.[index]) return;
+    const path = findShortestPath(run.position, seal, run.challenge.obstacles);
+    if (path && (!targetPath || path.length < targetPath.length)) targetPath = path;
+  });
+
+  if (!targetPath) {
+    targetPath = findShortestPath(
+      run.position,
+      run.challenge.endPosition,
+      run.challenge.obstacles
+    );
+  }
+  if (!targetPath || targetPath.length < 2) return null;
+
+  return directionBetween(run.position, targetPath[1]);
+}
+
 function findExplorationPath(
   start: Position,
   end: Position,
@@ -478,6 +521,11 @@ export function choosePracticeAiAction(
   const mapOwnerId = state.assignments?.[runnerId];
   const playedMap = mapOwnerId ? state.maps?.[mapOwnerId] : null;
   if (!player || player.finished || !playedMap) return null;
+
+  if (state.wormholeRunsByPlayer?.[runnerId]) {
+    const direction = chooseWormholeAiDirection(state, runnerId);
+    return direction ? { type: 'move', direction } : null;
+  }
 
   if (isVisionObscuredForPlayer(state, runnerId)) {
     const knownWalls = knownWallsForRunner(state, runnerId);

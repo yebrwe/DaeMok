@@ -2,7 +2,7 @@ import type { BoardFx } from '@/components/three/GameBoard3D';
 import type { CollisionWall, Direction, GameState, MapItem, MazeSkillId, Position } from '@/types/game';
 import { getMapItems, getNewPosition, isSamePosition, isSameWallSegment } from '@/lib/gameUtils';
 
-export type LiveBoardVisualAction = 'move' | 'bump' | 'mine' | 'wormhole' | 'radar' | 'goal';
+export type LiveBoardVisualAction = 'move' | 'bump' | 'fire' | 'poison' | 'mine' | 'wormhole' | 'radar' | 'goal';
 
 export interface LiveBoardVisualTransition {
   action: LiveBoardVisualAction;
@@ -191,6 +191,17 @@ export function deriveLiveBoardVisualTransition(
       sequence,
       fx: { key: sequence, type: 'wormhole', at: wormhole.entrance, to: position, delay: 0.35 },
       via: route.length > 0 ? route : [wormhole.entrance],
+    };
+  }
+
+  const fireWall = consumedOnPlayedMap.find(({ item }) => item.type === 'fireWall')?.item;
+  const fireDirection = fireWall ? crossedDirection(origin, fireWall) : null;
+  if (fireWall && fireDirection) {
+    return {
+      action: 'fire',
+      sequence,
+      fx: { key: sequence, type: 'fire', at: origin, dir: fireDirection },
+      via: null,
     };
   }
 

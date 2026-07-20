@@ -12,6 +12,8 @@ import {
   type Obstacle,
   type Position,
   type VisionEffect,
+  type WormholeChallenge,
+  type WormholeRunState,
 } from '../vendor/maze-engine/dist/types/game';
 import {
   MAZE_AUTHORITY_SCHEMA_VERSION,
@@ -94,6 +96,35 @@ export interface MazeAuthorityBoardBoundaryView {
 
 export type MazeAuthorityMapView = MazeAuthorityBoardBoundaryView | GameMap;
 
+/**
+ * A wormhole challenge projected to clients. Internal walls are deliberately
+ * absent during PLAY and are only populated for an END projection.
+ */
+export interface MazeAuthorityWormholeChallengeView {
+  version: 1;
+  startPosition: Position;
+  endPosition: Position;
+  seals: Position[];
+  obstacles?: Obstacle[];
+}
+
+export interface MazeAuthorityWormholeRunView {
+  mapOwnerId: string;
+  itemIndex: number;
+  position: Position;
+  challenge: MazeAuthorityWormholeChallengeView;
+  activatedSeals?: Record<number, boolean>;
+  discoveredWalls?: Obstacle[];
+  enteredAtTurn: number;
+}
+
+/** Public/member poison status. The authority-only direction seed never crosses this boundary. */
+export interface MazeAuthorityPoisonEffectView {
+  sourcePlayerId: string;
+  appliedAtTurn: number;
+  expiresAtTargetMove: number;
+}
+
 export interface MazeAuthorityItemStateView {
   consumed?: Record<number, boolean> | boolean;
   activeWalls?: Record<number, boolean>;
@@ -123,6 +154,8 @@ export interface MazeAuthorityGameStateView {
   itemState: Record<string, MazeAuthorityItemStateView>;
   revealedWallsByPlayer: Record<string, Obstacle[]>;
   visionEffectsByPlayer: Record<string, VisionEffect>;
+  poisonEffectsByPlayer: Record<string, MazeAuthorityPoisonEffectView>;
+  wormholeRunsByPlayer: Record<string, MazeAuthorityWormholeRunView>;
   turnMessage?: string;
   turnMessageTimestamp?: number;
 }
@@ -168,6 +201,16 @@ function cloneObstacle(obstacle: Obstacle): Obstacle {
   };
 }
 
+function cloneWormholeChallenge(challenge: WormholeChallenge): WormholeChallenge {
+  return {
+    version: 1,
+    startPosition: clonePosition(challenge.startPosition),
+    endPosition: clonePosition(challenge.endPosition),
+    seals: challenge.seals.map(clonePosition),
+    obstacles: challenge.obstacles.map(cloneObstacle),
+  };
+}
+
 function projectMapItem(item: MapItem): MapItem {
   if (WALL_ITEM_TYPE_SET.has(item.type)) {
     return {
@@ -190,6 +233,7 @@ function projectMapItem(item: MapItem): MapItem {
       type: item.type,
       ...(item.entrance ? { entrance: clonePosition(item.entrance) } : {}),
       ...(item.exit ? { exit: clonePosition(item.exit) } : {}),
+      ...(item.challenge ? { challenge: cloneWormholeChallenge(item.challenge) } : {}),
     };
   }
   return { type: 'radar' };
@@ -480,6 +524,7 @@ function projectVisionEffects(
   const projected: Record<string, VisionEffect> = {};
   const source = state.gameState.visionEffectsByPlayer;
   if (!source) return projected;
+  const memberSet = new Set(memberIds);
   const visibleIds = state.gameState.phase === GamePhase.END
     ? memberIds
     : state.gameState.phase === GamePhase.PLAY && viewerUid
@@ -487,13 +532,101 @@ function projectVisionEffects(
       : [];
   for (const uid of visibleIds) {
     const effect = source[uid];
-    if (!effect) continue;
+    if (!effect || !memberSet.has(effect.sourcePlayerId)) continue;
+    projected[uid] = effect.type === 'fire'
+      ? {
+          type: 'fire',
+          sourcePlayerId: effect.sourcePlayerId,
+          appliedAtTurn: effect.appliedAtTurn,
+          expiresAtTargetMove: effect.expiresAtTargetMove,
+          phantomWalls: effect.phantomWalls.map(cloneObstacle),
+        }
+      : {
+          type: 'smoke',
+          sourcePlayerId: effect.sourcePlayerId,
+          appliedAtTurn: effect.appliedAtTurn,
+          expiresAtTargetMove: effect.expiresAtTargetMove,
+        };
+  }
+  return projected;
+}
+
+function projectPoisonEffects(
+  state: MazeAuthorityState,
+  memberIds: readonly string[],
+  viewerUid: string | null,
+): Record<string, MazeAuthorityPoisonEffectView> {
+  const projected: Record<string, MazeAuthorityPoisonEffectView> = {};
+  const source = state.gameState.poisonEffectsByPlayer;
+  if (!source) return projected;
+  const memberSet = new Set(memberIds);
+  const visibleIds = state.gameState.phase === GamePhase.END
+    ? memberIds
+    : state.gameState.phase === GamePhase.PLAY && viewerUid
+      ? [viewerUid]
+      : [];
+  for (const uid of visibleIds) {
+    const effect = source[uid];
+    if (!effect || !memberSet.has(effect.sourcePlayerId)) continue;
     projected[uid] = {
-      type: 'smoke',
       sourcePlayerId: effect.sourcePlayerId,
       appliedAtTurn: effect.appliedAtTurn,
       expiresAtTargetMove: effect.expiresAtTargetMove,
     };
+  }
+  return projected;
+}
+
+function projectWormholeRun(
+  run: WormholeRunState,
+  revealObstacles: boolean,
+): MazeAuthorityWormholeRunView {
+  const activatedSeals: Record<number, boolean> = {};
+  for (let index = 0; index < run.challenge.seals.length; index += 1) {
+    const activated = run.activatedSeals?.[index];
+    if (typeof activated === 'boolean') activatedSeals[index] = activated;
+  }
+  return {
+    mapOwnerId: run.mapOwnerId,
+    itemIndex: run.itemIndex,
+    position: clonePosition(run.position),
+    challenge: {
+      version: 1,
+      startPosition: clonePosition(run.challenge.startPosition),
+      endPosition: clonePosition(run.challenge.endPosition),
+      seals: run.challenge.seals.map(clonePosition),
+      ...(revealObstacles
+        ? { obstacles: run.challenge.obstacles.map(cloneObstacle) }
+        : {}),
+    },
+    enteredAtTurn: run.enteredAtTurn,
+    ...(Object.keys(activatedSeals).length > 0 ? { activatedSeals } : {}),
+    ...(Array.isArray(run.discoveredWalls) && run.discoveredWalls.length > 0
+      ? { discoveredWalls: run.discoveredWalls.map(cloneObstacle) }
+      : {}),
+  };
+}
+
+function projectWormholeRuns(
+  state: MazeAuthorityState,
+  memberIds: readonly string[],
+  viewerUid: string | null,
+): Record<string, MazeAuthorityWormholeRunView> {
+  const projected: Record<string, MazeAuthorityWormholeRunView> = {};
+  const source = state.gameState.wormholeRunsByPlayer ?? {};
+  const memberSet = new Set(memberIds);
+  const visibleIds = state.gameState.phase === GamePhase.END
+    ? memberIds
+    : state.gameState.phase === GamePhase.PLAY && viewerUid
+      ? [viewerUid]
+      : [];
+  for (const uid of visibleIds) {
+    if (hasOwn(source, uid) && memberSet.has(source[uid].mapOwnerId)) {
+      projected[uid] = projectWormholeRun(
+        source[uid],
+        state.gameState.phase === GamePhase.END,
+      );
+    }
   }
   return projected;
 }
@@ -520,6 +653,8 @@ function projectGameState(
     itemState: projectItemState(state, memberIds, viewerUid),
     revealedWallsByPlayer: projectRevealedWalls(state, memberIds, viewerUid),
     visionEffectsByPlayer: projectVisionEffects(state, memberIds, viewerUid),
+    poisonEffectsByPlayer: projectPoisonEffects(state, memberIds, viewerUid),
+    wormholeRunsByPlayer: projectWormholeRuns(state, memberIds, viewerUid),
   };
   if (typeof state.gameState.rulesVersion === 'number') {
     projected.rulesVersion = state.gameState.rulesVersion;

@@ -727,6 +727,8 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       delete restartState.itemState;
       delete restartState.revealedWallsByPlayer;
       delete restartState.visionEffectsByPlayer;
+      delete restartState.poisonEffectsByPlayer;
+      delete restartState.wormholeRunsByPlayer;
       delete restartState.turnMessage;
       delete restartState.turnMessageTimestamp;
 
@@ -1195,6 +1197,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         pawnColor: pawnColors[index],
         smokeAffected: isVisionObscuredForPlayer(gameState, runnerId),
         visionObscured: false,
+        wormholeRun: gameState.wormholeRunsByPlayer?.[runnerId] || null,
       }];
     });
 

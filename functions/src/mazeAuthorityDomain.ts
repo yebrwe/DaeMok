@@ -14,8 +14,15 @@ import {
   GAME_RULES_VERSION,
   getMapItems,
   getFirstTurnPlayerId,
+  getNewPosition,
   getNextTurnPlayerId,
   getTurnOrder,
+  isPositionInBoard,
+  isSamePosition,
+  isSameWallSegment,
+  isValidWormholeChallenge,
+  WORMHOLE_CHALLENGE_MAX_WALLS,
+  WORMHOLE_CHALLENGE_SEAL_COUNT,
 } from '../vendor/maze-engine/dist/lib/gameUtils';
 import {
   GamePhase,
@@ -27,7 +34,11 @@ import {
   type MazeSkillId,
   type Obstacle,
   type Player,
+  type PoisonEffect,
   type Position,
+  type VisionEffect,
+  type WormholeChallenge,
+  type WormholeRunState,
 } from '../vendor/maze-engine/dist/types/game';
 
 export const MAZE_AUTHORITY_SCHEMA_VERSION = 1 as const;
@@ -40,12 +51,20 @@ const MAX_COMMAND_ID_LENGTH = 64;
 const MAX_UID_LENGTH = 128;
 const MAX_MAP_OBSTACLE_INPUTS = 64;
 const MAX_MAP_ITEM_INPUTS = 16;
+const MAX_FIRE_PHANTOM_WALLS = 6;
+const MAX_POISON_EFFECT_SEED = 0xFFFF_FFFF;
 const INVALID_FIREBASE_KEY = /[.#$\[\]\/\u0000-\u001F\u007F-\u009F]/u;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9_-]+$/u;
 const SHA256_HEX = /^[a-f0-9]{64}$/u;
 const RESERVED_RECORD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 const DIRECTIONS = new Set<Direction>(['up', 'down', 'left', 'right']);
+const DIRECTION_LABELS: Record<Direction, string> = {
+  up: '위',
+  right: '오른쪽',
+  down: '아래',
+  left: '왼쪽',
+};
 const MAZE_SKILLS = new Set<MazeSkillId>(['scoutPulse', 'breach', 'anchor', 'dash']);
 const ITEM_TYPES = new Set<ItemType>([
   'oneTimeWall',
@@ -442,7 +461,281 @@ function parseObstacle(value: unknown, label: string): Obstacle {
   };
 }
 
-function parseMapItem(value: unknown, label: string): MapItem {
+function parseVisionEffect(value: unknown, label: string): VisionEffect {
+  const commonKeys = ['type', 'sourcePlayerId', 'appliedAtTurn', 'expiresAtTargetMove'];
+  if (!isPlainRecord(value)
+    || (value.type !== 'smoke' && value.type !== 'fire')
+    || !hasExactKeys(value, value.type === 'fire' ? [...commonKeys, 'phantomWalls'] : commonKeys)
+    || !validUid(value.sourcePlayerId)
+    || !isSafeIntegerInRange(value.appliedAtTurn, 0, Number.MAX_SAFE_INTEGER)
+    || !isSafeIntegerInRange(value.expiresAtTargetMove, 0, Number.MAX_SAFE_INTEGER)) {
+    fail('invalid-argument', `${label}-invalid`, `The ${label} vision effect is malformed.`);
+  }
+  if (value.type === 'smoke') {
+    return {
+      type: 'smoke',
+      sourcePlayerId: value.sourcePlayerId,
+      appliedAtTurn: value.appliedAtTurn,
+      expiresAtTargetMove: value.expiresAtTargetMove,
+    };
+  }
+  if (!isDenseArray(value.phantomWalls, MAX_FIRE_PHANTOM_WALLS)
+    || value.phantomWalls.length !== MAX_FIRE_PHANTOM_WALLS) {
+    fail(
+      'invalid-argument',
+      `${label}-phantom-walls-invalid`,
+      `The ${label} fire hallucination walls are malformed.`,
+    );
+  }
+  return {
+    type: 'fire',
+    sourcePlayerId: value.sourcePlayerId,
+    appliedAtTurn: value.appliedAtTurn,
+    expiresAtTargetMove: value.expiresAtTargetMove,
+    phantomWalls: value.phantomWalls.map((obstacle, index) => (
+      parseObstacle(obstacle, `${label}-phantom-wall-${index}`)
+    )),
+  };
+}
+
+function parsePoisonEffect(value: unknown, label: string): PoisonEffect {
+  if (!isPlainRecord(value)
+    || !hasExactKeys(value, ['sourcePlayerId', 'appliedAtTurn', 'expiresAtTargetMove', 'seed'])
+    || !validUid(value.sourcePlayerId)
+    || !isSafeIntegerInRange(value.appliedAtTurn, 0, Number.MAX_SAFE_INTEGER)
+    || !isSafeIntegerInRange(value.expiresAtTargetMove, 0, Number.MAX_SAFE_INTEGER)
+    || !isSafeIntegerInRange(value.seed, 0, MAX_POISON_EFFECT_SEED)) {
+    fail('invalid-argument', `${label}-invalid`, `The ${label} poison effect is malformed.`);
+  }
+  return {
+    sourcePlayerId: value.sourcePlayerId,
+    appliedAtTurn: value.appliedAtTurn,
+    expiresAtTargetMove: value.expiresAtTargetMove,
+    seed: value.seed,
+  };
+}
+
+function parseStoredVisionEffects(
+  value: unknown,
+): Record<string, VisionEffect> | null {
+  if (value === null) return null;
+  if (!isPlainRecord(value)) {
+    fail(
+      'data-loss',
+      'authority-vision-effects',
+      'The stored vision effect ledger is malformed.',
+    );
+  }
+  const parsed: Record<string, VisionEffect> = {};
+  for (const [playerId, rawEffect] of Object.entries(value)) {
+    if (!validUid(playerId)) {
+      fail(
+        'data-loss',
+        'authority-vision-effect-player',
+        'A stored vision effect player id is malformed.',
+      );
+    }
+    try {
+      parsed[playerId] = parseVisionEffect(rawEffect, `authority-vision-effect-${playerId}`);
+    } catch (error) {
+      if (error instanceof MazeAuthorityDomainError) {
+        fail(
+          'data-loss',
+          'authority-vision-effect',
+          'A stored vision effect is malformed.',
+        );
+      }
+      throw error;
+    }
+  }
+  return parsed;
+}
+
+function parseStoredPoisonEffects(
+  value: unknown,
+): Record<string, PoisonEffect> | null {
+  if (value === null) return null;
+  if (!isPlainRecord(value)) {
+    fail(
+      'data-loss',
+      'authority-poison-effects',
+      'The stored poison effect ledger is malformed.',
+    );
+  }
+  const parsed: Record<string, PoisonEffect> = {};
+  for (const [playerId, rawEffect] of Object.entries(value)) {
+    if (!validUid(playerId)) {
+      fail(
+        'data-loss',
+        'authority-poison-effect-player',
+        'A stored poison effect player id is malformed.',
+      );
+    }
+    try {
+      parsed[playerId] = parsePoisonEffect(rawEffect, `authority-poison-effect-${playerId}`);
+    } catch (error) {
+      if (error instanceof MazeAuthorityDomainError) {
+        fail(
+          'data-loss',
+          'authority-poison-effect',
+          'A stored poison effect is malformed.',
+        );
+      }
+      throw error;
+    }
+  }
+  return parsed;
+}
+
+function parseWormholeChallenge(value: unknown, label: string): WormholeChallenge {
+  if (!isPlainRecord(value)
+    || !hasExactKeys(value, ['version', 'startPosition', 'endPosition', 'seals', 'obstacles'])
+    || value.version !== 1
+    || !isDenseArray(value.seals, WORMHOLE_CHALLENGE_SEAL_COUNT)
+    || value.seals.length !== WORMHOLE_CHALLENGE_SEAL_COUNT
+    || !isDenseArray(value.obstacles, WORMHOLE_CHALLENGE_MAX_WALLS)) {
+    fail(
+      'invalid-argument',
+      `${label}-invalid`,
+      `The ${label} wormhole challenge is malformed.`,
+    );
+  }
+  const challenge: WormholeChallenge = {
+    version: 1,
+    startPosition: parsePosition(value.startPosition, `${label}-start`),
+    endPosition: parsePosition(value.endPosition, `${label}-end`),
+    seals: value.seals.map((position, index) => (
+      parsePosition(position, `${label}-seal-${index}`)
+    )),
+    obstacles: value.obstacles.map((obstacle, index) => (
+      parseObstacle(obstacle, `${label}-obstacle-${index}`)
+    )),
+  };
+  if (!isValidWormholeChallenge(challenge)) {
+    fail(
+      'invalid-argument',
+      `${label}-invalid`,
+      `The ${label} wormhole challenge violates the V3 rules.`,
+    );
+  }
+  return challenge;
+}
+
+function parseBooleanIndexRecord(
+  value: unknown,
+  label: string,
+  maximumExclusive: number,
+): Record<number, boolean> {
+  if (Array.isArray(value)) {
+    if (!isDenseArray(value, maximumExclusive)
+      || value.some((entry) => (
+        entry !== null && entry !== undefined && typeof entry !== 'boolean'
+      ))) {
+      fail('invalid-argument', `${label}-invalid`, `The ${label} flags are malformed.`);
+    }
+    const parsed: Record<number, boolean> = {};
+    value.forEach((entry, index) => {
+      if (typeof entry === 'boolean') parsed[index] = entry;
+    });
+    return parsed;
+  }
+  if (!isPlainRecord(value)) {
+    fail('invalid-argument', `${label}-invalid`, `The ${label} flags are malformed.`);
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.length > maximumExclusive) {
+    fail('invalid-argument', `${label}-invalid`, `The ${label} flags are malformed.`);
+  }
+  const parsed: Record<number, boolean> = {};
+  for (const key of keys) {
+    if (typeof key !== 'string'
+      || !/^(0|[1-9][0-9]*)$/u.test(key)
+      || !isSafeIntegerInRange(Number(key), 0, maximumExclusive - 1)
+      || typeof value[key] !== 'boolean') {
+      fail('invalid-argument', `${label}-invalid`, `The ${label} flags are malformed.`);
+    }
+    parsed[Number(key)] = value[key] as boolean;
+  }
+  return parsed;
+}
+
+function parseWormholeRunState(value: unknown, label: string): WormholeRunState {
+  const required = ['mapOwnerId', 'itemIndex', 'position', 'challenge', 'enteredAtTurn'];
+  const allowed = [...required, 'activatedSeals', 'discoveredWalls'];
+  if (!isPlainRecord(value)
+    || !hasRequiredAndAllowedKeys(value, required, allowed)
+    || !validUid(value.mapOwnerId)
+    || !isSafeIntegerInRange(value.itemIndex, 0, MAX_MAP_ITEM_INPUTS - 1)
+    || !isSafeIntegerInRange(value.enteredAtTurn, 1, Number.MAX_SAFE_INTEGER)) {
+    fail('invalid-argument', `${label}-invalid`, `The ${label} wormhole run is malformed.`);
+  }
+  const run: WormholeRunState = {
+    mapOwnerId: value.mapOwnerId,
+    itemIndex: value.itemIndex,
+    position: parsePosition(value.position, `${label}-position`),
+    challenge: parseWormholeChallenge(value.challenge, `${label}-challenge`),
+    enteredAtTurn: value.enteredAtTurn,
+  };
+  if (Object.prototype.hasOwnProperty.call(value, 'activatedSeals')) {
+    run.activatedSeals = parseBooleanIndexRecord(
+      value.activatedSeals,
+      `${label}-activated-seals`,
+      WORMHOLE_CHALLENGE_SEAL_COUNT,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'discoveredWalls')) {
+    if (!isDenseArray(value.discoveredWalls, WORMHOLE_CHALLENGE_MAX_WALLS)) {
+      fail(
+        'invalid-argument',
+        `${label}-discovered-walls-invalid`,
+        `The ${label} discovered walls are malformed.`,
+      );
+    }
+    run.discoveredWalls = value.discoveredWalls.map((obstacle, index) => (
+      parseObstacle(obstacle, `${label}-discovered-wall-${index}`)
+    ));
+  }
+  return run;
+}
+
+function parseStoredWormholeRuns(value: unknown): Record<string, WormholeRunState> {
+  if (!isPlainRecord(value)) {
+    fail(
+      'data-loss',
+      'authority-wormhole-runs',
+      'The stored wormhole run ledger is malformed.',
+    );
+  }
+  const parsed: Record<string, WormholeRunState> = {};
+  for (const [runnerId, rawRun] of Object.entries(value)) {
+    if (!validUid(runnerId)) {
+      fail(
+        'data-loss',
+        'authority-wormhole-run-player',
+        'A stored wormhole runner id is malformed.',
+      );
+    }
+    try {
+      parsed[runnerId] = parseWormholeRunState(rawRun, `authority-wormhole-run-${runnerId}`);
+    } catch (error) {
+      if (error instanceof MazeAuthorityDomainError) {
+        fail(
+          'data-loss',
+          'authority-wormhole-run',
+          'A stored wormhole run is malformed.',
+        );
+      }
+      throw error;
+    }
+  }
+  return parsed;
+}
+
+function parseMapItem(
+  value: unknown,
+  label: string,
+  requireWormholeChallenge = false,
+): MapItem {
   if (!isPlainRecord(value) || typeof value.type !== 'string' || !ITEM_TYPES.has(value.type as ItemType)) {
     fail('invalid-argument', `${label}-invalid`, `The ${label} item is malformed.`);
   }
@@ -474,13 +767,26 @@ function parseMapItem(value: unknown, label: string): MapItem {
   }
 
   if (type === 'wormhole') {
-    if (!hasExactKeys(value, ['type', 'entrance', 'exit'])) {
+    const hasChallenge = Object.prototype.hasOwnProperty.call(value, 'challenge');
+    if (!hasExactKeys(value, hasChallenge
+      ? ['type', 'entrance', 'exit', 'challenge']
+      : ['type', 'entrance', 'exit'])) {
       fail('invalid-argument', `${label}-keys`, `The ${label} wormhole has unknown fields.`);
+    }
+    if (requireWormholeChallenge && !hasChallenge) {
+      fail(
+        'invalid-argument',
+        `${label}-challenge-required`,
+        `The ${label} wormhole requires an internal challenge.`,
+      );
     }
     return {
       type,
       entrance: parsePosition(value.entrance, `${label}-entrance`),
       exit: parsePosition(value.exit, `${label}-exit`),
+      ...(hasChallenge
+        ? { challenge: parseWormholeChallenge(value.challenge, `${label}-challenge`) }
+        : {}),
     };
   }
 
@@ -522,10 +828,10 @@ function parseGameMap(value: unknown): GameMap {
     }
     map.items = value.items === null
       ? null
-      : value.items.map((item, index) => parseMapItem(item, `map-item-${index}`));
+      : value.items.map((item, index) => parseMapItem(item, `map-item-${index}`, true));
   }
   if (hasLegacyItem) {
-    map.item = value.item === null ? null : parseMapItem(value.item, 'map-legacy-item');
+    map.item = value.item === null ? null : parseMapItem(value.item, 'map-legacy-item', true);
   }
   if (hasItems
     && hasLegacyItem
@@ -692,6 +998,39 @@ function commandPayloadHash(actorId: string, command: MazeAuthorityReceiptComman
     .digest('hex');
 }
 
+function createAuthorityPoisonEffectSeed(
+  state: MazeAuthorityState,
+  actorId: string,
+  command: TurnCommand,
+): number {
+  const privateSeedMaterial = {
+    domain: 'maze-authority-poison-effect-v1',
+    generation: state.meta.generation,
+    revision: state.meta.revision,
+    actorId,
+    commandId: command.commandId,
+    action: command.action,
+    fullMaps: state.gameState.maps,
+    receiptLedger: state.receipts,
+  };
+  return createHash('sha256')
+    .update(stableSerialize(privateSeedMaterial), 'utf8')
+    .digest()
+    .readUInt32BE(0);
+}
+
+function poisonEffectWasCreatedOrReplaced(
+  previous: PoisonEffect | undefined,
+  next: PoisonEffect | undefined,
+): next is PoisonEffect {
+  return next !== undefined && (
+    previous === undefined
+    || next.sourcePlayerId !== previous.sourcePlayerId
+    || next.appliedAtTurn !== previous.appliedAtTurn
+    || next.expiresAtTargetMove !== previous.expiresAtTargetMove
+  );
+}
+
 function validTimestamp(value: unknown): value is number {
   return isSafeIntegerInRange(value, 0, Number.MAX_SAFE_INTEGER);
 }
@@ -709,6 +1048,281 @@ function sameIdentifierSet(left: readonly string[], right: readonly string[]): b
   return left.length === right.length
     && new Set(left).size === left.length
     && left.every((identifier) => right.includes(identifier));
+}
+
+function sameWormholeChallenge(
+  left: WormholeChallenge,
+  right: WormholeChallenge,
+): boolean {
+  return left.version === right.version
+    && isSamePosition(left.startPosition, right.startPosition)
+    && isSamePosition(left.endPosition, right.endPosition)
+    && left.seals.length === right.seals.length
+    && left.seals.every((seal, index) => isSamePosition(seal, right.seals[index]))
+    && left.obstacles.length === right.obstacles.length
+    && left.obstacles.every((obstacle, index) => (
+      obstacle.direction === right.obstacles[index]?.direction
+      && isSamePosition(obstacle.position, right.obstacles[index].position)
+    ));
+}
+
+function storedItemWasConsumed(
+  state: MazeAuthorityState,
+  mapOwnerId: string,
+  itemIndex: number,
+): boolean {
+  return gameItemWasConsumed(state.gameState, mapOwnerId, itemIndex);
+}
+
+function gameItemWasConsumed(
+  gameState: GameState,
+  mapOwnerId: string,
+  itemIndex: number,
+): boolean {
+  const consumed = gameState.itemState?.[mapOwnerId]?.consumed;
+  if (consumed === true) return itemIndex === 0;
+  if (Array.isArray(consumed)) return consumed[itemIndex] === true;
+  return isPlainRecord(consumed)
+    && (consumed as Record<string, unknown>)[String(itemIndex)] === true;
+}
+
+interface OneTimeWallCollision {
+  mapOwnerId: string;
+  itemIndex: number;
+}
+
+function detectOneTimeWallCollision(
+  state: MazeAuthorityState,
+  actorId: string,
+  outcome: TurnOutcome,
+): OneTimeWallCollision | null {
+  if (outcome.type !== 'move'
+    || state.gameState.wormholeRunsByPlayer?.[actorId]) return null;
+
+  const mapOwnerId = state.gameState.assignments?.[actorId];
+  const playedMap = mapOwnerId ? state.gameState.maps?.[mapOwnerId] : null;
+  if (!mapOwnerId || !playedMap) return null;
+
+  const itemIndex = getMapItems(playedMap).findIndex((item, index) => (
+    item.type === 'oneTimeWall'
+    && !!item.wallPosition
+    && !!item.wallDirection
+    && !gameItemWasConsumed(state.gameState, mapOwnerId, index)
+    && isSameWallSegment(
+      outcome.origin,
+      outcome.direction,
+      item.wallPosition,
+      item.wallDirection,
+    )
+  ));
+  if (itemIndex < 0) return null;
+
+  if (outcome.effect !== 'bump'
+    || outcome.consumedItemIndex !== itemIndex
+    || outcome.wallItemIndex !== itemIndex
+    || !isSamePosition(outcome.position, outcome.origin)
+    || outcome.reachedGoal) {
+    fail(
+      'data-loss',
+      'one-time-wall-resolution',
+      'The one-time wall resolution is inconsistent with the assigned map.',
+    );
+  }
+
+  return { mapOwnerId, itemIndex };
+}
+
+function sanitizeOneTimeWallCollisionOutcome(
+  state: MazeAuthorityState,
+  actorId: string,
+  outcome: TurnOutcome,
+): TurnOutcome {
+  if (outcome.type !== 'move') return cloneJson(outcome);
+
+  const playerName = state.gameState.players[actorId]?.displayName || '플레이어';
+  const wallMessage = `${playerName}가 벽에 부딪혔습니다.`;
+  const poisonMisdirected = outcome.poisonMisdirected === true
+    && outcome.requestedDirection !== undefined;
+  const message = poisonMisdirected
+    ? `중독으로 ${DIRECTION_LABELS[outcome.requestedDirection as Direction]} 입력이 ${DIRECTION_LABELS[outcome.direction]} 방향으로 뒤틀렸습니다. ${wallMessage}`
+    : wallMessage;
+
+  return {
+    type: 'move',
+    direction: outcome.direction,
+    origin: cloneJson(outcome.origin),
+    attempted: cloneJson(outcome.attempted),
+    position: cloneJson(outcome.origin),
+    moves: outcome.moves,
+    effect: 'bump',
+    consumedItemIndex: null,
+    ...(poisonMisdirected ? {
+      requestedDirection: outcome.requestedDirection,
+      poisonMisdirected: true,
+    } : {}),
+    reachedGoal: false,
+    message,
+  };
+}
+
+function parseStoredWormholeMapItem(value: unknown, label: string): MapItem {
+  try {
+    return parseMapItem(value, label);
+  } catch (error) {
+    if (error instanceof MazeAuthorityDomainError) {
+      fail(
+        'data-loss',
+        'authority-wormhole-map-item',
+        'A wormhole run references a malformed stored map item.',
+      );
+    }
+    throw error;
+  }
+}
+
+function assertValidPrivateEffects(
+  state: MazeAuthorityState,
+  playerIds: readonly string[],
+): void {
+  const visionEffects = state.gameState.visionEffectsByPlayer == null
+    ? {}
+    : parseStoredVisionEffects(state.gameState.visionEffectsByPlayer) ?? {};
+  const poisonEffects = state.gameState.poisonEffectsByPlayer == null
+    ? {}
+    : parseStoredPoisonEffects(state.gameState.poisonEffectsByPlayer) ?? {};
+  const effectPlayerIds = new Set([
+    ...Object.keys(visionEffects),
+    ...Object.keys(poisonEffects),
+  ]);
+  if (effectPlayerIds.size === 0) return;
+  if (state.gameState.phase === GamePhase.SETUP
+    || state.lobby.status === 'closed'
+    || !isPlainRecord(state.gameState.assignments)
+    || !isSafeIntegerInRange(state.gameState.turnNumber, 1, Number.MAX_SAFE_INTEGER)) {
+    fail(
+      'data-loss',
+      'authority-private-effect-context',
+      'The stored private effect context is malformed.',
+    );
+  }
+
+  const assertCommonEffect = (
+    playerId: string,
+    effect: { sourcePlayerId: string; appliedAtTurn: number; expiresAtTargetMove: number },
+  ): void => {
+    const player = state.gameState.players[playerId];
+    if (!playerIds.includes(playerId)
+      || !playerIds.includes(effect.sourcePlayerId)
+      || !player
+      || state.gameState.assignments?.[playerId] !== effect.sourcePlayerId
+      || effect.appliedAtTurn > (state.gameState.turnNumber as number)
+      || effect.expiresAtTargetMove <= (player.moves ?? 0)) {
+      fail(
+        'data-loss',
+        'authority-private-effect-reference',
+        'A stored private effect does not match its player and map owner.',
+      );
+    }
+  };
+
+  for (const [playerId, effect] of Object.entries(visionEffects)) {
+    assertCommonEffect(playerId, effect);
+    if (effect.type !== 'fire') continue;
+    for (let index = 0; index < effect.phantomWalls.length; index += 1) {
+      const wall = effect.phantomWalls[index];
+      if (!isPositionInBoard(getNewPosition(wall.position, wall.direction))
+        || effect.phantomWalls.slice(0, index).some((existing) => isSameWallSegment(
+          wall.position,
+          wall.direction,
+          existing.position,
+          existing.direction,
+        ))) {
+        fail(
+          'data-loss',
+          'authority-fire-phantom-walls',
+          'A stored fire vision effect contains duplicate hallucination walls.',
+        );
+      }
+    }
+  }
+  for (const [playerId, effect] of Object.entries(poisonEffects)) {
+    assertCommonEffect(playerId, effect);
+  }
+}
+
+function assertValidWormholeRuns(
+  state: MazeAuthorityState,
+  playerIds: readonly string[],
+): void {
+  const rawRuns = state.gameState.wormholeRunsByPlayer;
+  if (rawRuns === undefined) return;
+  const runs = parseStoredWormholeRuns(rawRuns);
+  const entries = Object.entries(runs);
+  if (entries.length === 0) return;
+  if (state.gameState.phase === GamePhase.SETUP || state.lobby.status === 'closed') {
+    fail(
+      'data-loss',
+      'authority-wormhole-run-phase',
+      'Wormhole runs cannot exist outside a match.',
+    );
+  }
+  if (!isPlainRecord(state.gameState.assignments)
+    || !isSafeIntegerInRange(state.gameState.turnNumber, 1, Number.MAX_SAFE_INTEGER)) {
+    fail(
+      'data-loss',
+      'authority-wormhole-run-context',
+      'The stored wormhole run context is malformed.',
+    );
+  }
+
+  for (const [runnerId, run] of entries) {
+    const player = state.gameState.players[runnerId];
+    const map = state.gameState.maps?.[run.mapOwnerId];
+    const rawItem = map ? getMapItems(map)[run.itemIndex] : undefined;
+    const item = rawItem?.type === 'wormhole'
+      ? parseStoredWormholeMapItem(rawItem, `authority-wormhole-item-${run.mapOwnerId}-${run.itemIndex}`)
+      : null;
+    if (!playerIds.includes(runnerId)
+      || !player
+      || state.gameState.assignments[runnerId] !== run.mapOwnerId
+      || !map
+      || !item
+      || item.type !== 'wormhole'
+      || !item.entrance
+      || !item.challenge
+      || !sameWormholeChallenge(run.challenge, item.challenge)
+      || !isSamePosition(player.position, item.entrance)
+      || !storedItemWasConsumed(state, run.mapOwnerId, run.itemIndex)
+      || run.enteredAtTurn > state.gameState.turnNumber) {
+      fail(
+        'data-loss',
+        'authority-wormhole-run-reference',
+        'A stored wormhole run does not match its runner and map item.',
+      );
+    }
+
+    const discoveredWalls = run.discoveredWalls ?? [];
+    for (let index = 0; index < discoveredWalls.length; index += 1) {
+      const discovered = discoveredWalls[index];
+      if (!run.challenge.obstacles.some((obstacle) => isSameWallSegment(
+        discovered.position,
+        discovered.direction,
+        obstacle.position,
+        obstacle.direction,
+      )) || discoveredWalls.slice(0, index).some((existing) => isSameWallSegment(
+        discovered.position,
+        discovered.direction,
+        existing.position,
+        existing.direction,
+      ))) {
+        fail(
+          'data-loss',
+          'authority-wormhole-run-discovery',
+          'A stored wormhole run contains an invalid discovered wall.',
+        );
+      }
+    }
+  }
 }
 
 function validReceiptResult(
@@ -921,6 +1535,9 @@ function assertValidCurrentState(state: MazeAuthorityState): void {
     }
   }
 
+  assertValidWormholeRuns(state, playerIds);
+  assertValidPrivateEffects(state, playerIds);
+
   const receiptIds = state.receipts.order;
   if (new Set(receiptIds).size !== receiptIds.length
     || Object.keys(state.receipts.byId).length !== receiptIds.length
@@ -960,6 +1577,34 @@ function assertValidCurrentState(state: MazeAuthorityState): void {
   }
 }
 
+function mapItemValuesForMaterialization(map: Record<string, unknown>): unknown[] {
+  const items = Array.isArray(map.items) ? [...map.items] : [];
+  if (isPlainRecord(map.item)) items.push(map.item);
+  return items;
+}
+
+function wormholeChallengeNeedsMaterialization(value: unknown): boolean {
+  return isPlainRecord(value)
+    && value.version === 1
+    && !Object.prototype.hasOwnProperty.call(value, 'obstacles');
+}
+
+function materializeWormholeChallenge(value: unknown): void {
+  if (isPlainRecord(value) && wormholeChallengeNeedsMaterialization(value)) value.obstacles = [];
+}
+
+function fireVisionEffectNeedsMaterialization(value: unknown): boolean {
+  return isPlainRecord(value)
+    && value.type === 'fire'
+    && !Object.prototype.hasOwnProperty.call(value, 'phantomWalls');
+}
+
+function materializeFireVisionEffect(value: unknown): void {
+  if (isPlainRecord(value) && fireVisionEffectNeedsMaterialization(value)) {
+    value.phantomWalls = [];
+  }
+}
+
 function needsRealtimeDatabaseMaterialization(value: unknown): boolean {
   if (!isPlainRecord(value) || !isPlainRecord(value.gameState)) return false;
   const gameState = value.gameState;
@@ -986,8 +1631,21 @@ function needsRealtimeDatabaseMaterialization(value: unknown): boolean {
             && !Object.prototype.hasOwnProperty.call(map, 'item')))) {
         return true;
       }
+      if (isPlainRecord(map) && mapItemValuesForMaterialization(map).some((item) => (
+        isPlainRecord(item)
+        && item.type === 'wormhole'
+        && wormholeChallengeNeedsMaterialization(item.challenge)
+      ))) return true;
     }
   }
+  if (isPlainRecord(gameState.wormholeRunsByPlayer)
+    && Object.values(gameState.wormholeRunsByPlayer).some((run) => (
+      isPlainRecord(run) && wormholeChallengeNeedsMaterialization(run.challenge)
+    ))) return true;
+  if (isPlainRecord(gameState.visionEffectsByPlayer)
+    && Object.values(gameState.visionEffectsByPlayer).some(
+      fireVisionEffectNeedsMaterialization,
+    )) return true;
   if (!isPlainRecord(value.receipts) || !isPlainRecord(value.receipts.byId)) return false;
   for (const receipt of Object.values(value.receipts.byId)) {
     if (!isPlainRecord(receipt) || !isPlainRecord(receipt.result)) continue;
@@ -1054,6 +1712,9 @@ export function parseMazeAuthorityState(value: unknown): MazeAuthorityState {
       if (!Object.prototype.hasOwnProperty.call(state.gameState, 'visionEffectsByPlayer')) {
         state.gameState.visionEffectsByPlayer = {};
       }
+      if (!Object.prototype.hasOwnProperty.call(state.gameState, 'poisonEffectsByPlayer')) {
+        state.gameState.poisonEffectsByPlayer = {};
+      }
       if (isPlainRecord(state.gameState.itemState)) {
         for (const entry of Object.values(state.gameState.itemState)) {
           if (!isPlainRecord(entry)) continue;
@@ -1074,7 +1735,38 @@ export function parseMazeAuthorityState(value: unknown): MazeAuthorityState {
           && !Object.prototype.hasOwnProperty.call(map, 'item')) {
           map.items = [];
         }
+        for (const item of mapItemValuesForMaterialization(map)) {
+          if (isPlainRecord(item) && item.type === 'wormhole') {
+            materializeWormholeChallenge(item.challenge);
+          }
+        }
       }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(state.gameState, 'wormholeRunsByPlayer')) {
+      if (isPlainRecord(state.gameState.wormholeRunsByPlayer)) {
+        for (const run of Object.values(state.gameState.wormholeRunsByPlayer)) {
+          if (isPlainRecord(run)) materializeWormholeChallenge(run.challenge);
+        }
+      }
+      state.gameState.wormholeRunsByPlayer = parseStoredWormholeRuns(
+        state.gameState.wormholeRunsByPlayer,
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(state.gameState, 'visionEffectsByPlayer')) {
+      if (isPlainRecord(state.gameState.visionEffectsByPlayer)) {
+        for (const effect of Object.values(state.gameState.visionEffectsByPlayer)) {
+          materializeFireVisionEffect(effect);
+        }
+      }
+      state.gameState.visionEffectsByPlayer = parseStoredVisionEffects(
+        state.gameState.visionEffectsByPlayer,
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(state.gameState, 'poisonEffectsByPlayer')) {
+      state.gameState.poisonEffectsByPlayer = parseStoredPoisonEffects(
+        state.gameState.poisonEffectsByPlayer,
+      );
     }
   }
 
@@ -1416,6 +2108,8 @@ function reduceStartMatch(
   // This avoids reviving the retired per-player skill state and round-trips
   // cleanly through RTDB, which elides empty objects.
   delete gameState.itemState;
+  delete gameState.poisonEffectsByPlayer;
+  delete gameState.wormholeRunsByPlayer;
   const nextGameState: GameState = {
     ...gameState,
     rulesVersion: state.ruleSnapshot.version,
@@ -1428,6 +2122,7 @@ function reduceStartMatch(
     collisionWalls: {},
     revealedWallsByPlayer: {},
     visionEffectsByPlayer: {},
+    poisonEffectsByPlayer: {},
     winner: null,
     draw: null,
     turnMessage: `${gameState.players[currentTurn]?.displayName || '플레이어'}의 턴`,
@@ -1469,8 +2164,40 @@ function reduceTurn(
   if (!resolution) {
     fail('failed-precondition', 'turn-rejected', 'The V3 engine rejected the turn action.');
   }
+  const previousPoisonEffect = state.gameState.poisonEffectsByPlayer?.[actorId];
+  const nextPoisonEffect = resolution.state.poisonEffectsByPlayer?.[actorId];
+  if (poisonEffectWasCreatedOrReplaced(previousPoisonEffect, nextPoisonEffect)) {
+    resolution.state.poisonEffectsByPlayer = {
+      ...(resolution.state.poisonEffectsByPlayer || {}),
+      [actorId]: {
+        ...nextPoisonEffect,
+        seed: createAuthorityPoisonEffectSeed(state, actorId, command),
+      },
+    };
+  }
+  const oneTimeWallCollision = detectOneTimeWallCollision(
+    state,
+    actorId,
+    resolution.outcome,
+  );
+  if (oneTimeWallCollision
+    && !gameItemWasConsumed(
+      resolution.state,
+      oneTimeWallCollision.mapOwnerId,
+      oneTimeWallCollision.itemIndex,
+    )) {
+    fail(
+      'data-loss',
+      'one-time-wall-not-consumed',
+      'The one-time wall collision did not consume the trusted map item.',
+    );
+  }
+  const outcome = oneTimeWallCollision
+    ? sanitizeOneTimeWallCollisionOutcome(state, actorId, resolution.outcome)
+    : cloneJson(resolution.outcome);
   const next = withAdvancedMeta(cloneJson(state), now);
   next.gameState = cloneJson(resolution.state);
+  if (oneTimeWallCollision) next.gameState.turnMessage = outcome.message;
   if (next.gameState.phase === GamePhase.END) next.lobby.status = 'ended';
   return {
     state: next,
@@ -1481,7 +2208,7 @@ function reduceTurn(
       currentTurn: next.gameState.currentTurn ?? null,
       winner: next.gameState.winner ?? null,
       draw: next.gameState.draw ?? null,
-      outcome: cloneJson(resolution.outcome),
+      outcome,
     },
   };
 }

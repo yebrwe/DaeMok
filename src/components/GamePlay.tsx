@@ -10,6 +10,8 @@ import { useSwipeMove } from '@/hooks/useSwipeMove';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Gamepad2 } from 'lucide-react';
 import { getNewPosition, isPositionInBoard, isSamePosition } from '@/lib/gameUtils';
 import {
+  getActiveFireVisionEffect,
+  getActivePoisonEffect,
   isVisionObscuredForPlayer,
   MoveTurnOutcome,
   normalizeConsumed,
@@ -176,7 +178,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const currentTurnName = currentTurnId === userId
     ? playerName
     : gameState?.players?.[currentTurnId || '']?.displayName || '상대방';
-  const moveVia = getActiveLocalBoardVia(localVisualRoute, playerPosition, moveCount);
+  const activeWormholeRun = gameState?.wormholeRunsByPlayer?.[userId] || null;
+  const displayedPlayerPosition = activeWormholeRun?.position || playerPosition;
+  const moveVia = getActiveLocalBoardVia(localVisualRoute, displayedPlayerPosition, moveCount);
 
   // 상위 방 구독의 위치와 턴 수를 따라가 다중 탭에서도 같은 상태를 유지한다.
   useEffect(() => {
@@ -224,7 +228,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
       setMessage(`${currentTurnName}의 턴입니다. 차례를 기다려주세요.`);
       return;
     }
-    if (!isPositionInBoard(getNewPosition(playerPosition, direction))) {
+    const actionPosition = gameState?.wormholeRunsByPlayer?.[userId]?.position || playerPosition;
+    if (!isPositionInBoard(getNewPosition(actionPosition, direction))) {
       setLastMoveValid(null);
       setMessage('보드 밖으로는 이동할 수 없습니다.');
       return;
@@ -255,7 +260,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
       const committed = outcome as MoveTurnOutcome;
       setMoveCount(committed.moves);
-      setPlayerPosition(committed.position);
+      if (committed.realm !== 'wormhole') setPlayerPosition(committed.position);
       setLastMoveValid(
         committed.effect === 'move' || committed.effect === 'smoke'
           ? true
@@ -273,7 +278,11 @@ const GamePlay: React.FC<GamePlayProps> = ({
           committed.position,
           committed.moves
         ));
-        fireFx({ type: 'bump', at: committed.origin, dir: direction });
+        fireFx({
+          type: committed.wallEffect === 'fireWall' ? 'fire' : 'bump',
+          at: committed.origin,
+          dir: committed.direction,
+        });
       } else if (committed.effect === 'mine') {
         setLocalVisualRoute(createLocalBoardVisualRoute(
           [committed.attempted, committed.origin],
@@ -282,11 +291,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
         ));
         fireFx({ type: 'mine', at: committed.itemPosition, delay: 0.35 });
       } else if (committed.effect === 'wormhole') {
-        setLocalVisualRoute(createLocalBoardVisualRoute(
-          [committed.attempted],
-          committed.position,
-          committed.moves
-        ));
+        setLocalVisualRoute(null);
         fireFx({ type: 'wormhole', at: committed.itemPosition, to: committed.wormholeExit, delay: 0.35 });
       } else if (
         (committed.wallEffect === 'iceWall' ||
@@ -301,6 +306,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
         ));
       } else {
         setLocalVisualRoute(null);
+        if (committed.poisonMisdirected) {
+          fireFx({ type: 'poison', at: committed.origin, dir: committed.direction });
+        }
       }
 
       update(ref(database, `rooms/${roomId}`), { lastActivity: serverTimestamp() }).catch(() => {});
@@ -316,7 +324,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
     } finally {
       releaseActionLock();
     }
-  }, [isFinished, isMyTurn, currentTurnName, playerPosition, roomId, userId, onGameComplete, fireFx, immutableMaps, releaseActionLock]);
+  }, [isFinished, isMyTurn, currentTurnName, playerPosition, roomId, userId, onGameComplete, fireFx, immutableMaps, releaseActionLock, gameState?.wormholeRunsByPlayer]);
 
   const handleMove = useCallback(
     async (direction: Direction) => {
@@ -392,6 +400,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
       const mapItemState = gameState.itemState?.[ownerId];
 
       const isMine = runnerId === userId;
+      const fireEffect = isMine ? getActiveFireVisionEffect(gameState, runnerId) : null;
+      const poisonEffect = isMine ? getActivePoisonEffect(gameState, runnerId) : null;
       return [{
         runnerId,
         runnerName: runner.displayName || (isMine ? playerName : `플레이어 ${index + 1}`),
@@ -399,7 +409,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
         mapOwnerId: ownerId,
         mapOwnerName: players[ownerId]?.displayName || null,
         map: runnerMap,
-        position: isMine ? playerPosition : (runner.position || runnerMap.startPosition),
+        position: isMine ? displayedPlayerPosition : (runner.position || runnerMap.startPosition),
         moves: isMine ? moveCount : (runner.moves || 0),
         finished: !!runner.finished,
         finishMoves: runner.finishMoves ?? null,
@@ -413,6 +423,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
         revealedWalls: isMine
           ? revealedWalls
           : (gameState.revealedWallsByPlayer?.[runnerId] || []),
+        heatWalls: fireEffect?.phantomWalls || [],
+        fireAffected: !!fireEffect,
+        poisonAffected: !!poisonEffect,
         fx: isMine ? fx : (remoteVisuals[runnerId]?.fx || null),
         via: isMine ? moveVia : (remoteVisuals[runnerId]?.via || null),
         visualAction: isMine ? undefined : remoteVisuals[runnerId]?.action,
@@ -425,9 +438,10 @@ const GamePlay: React.FC<GamePlayProps> = ({
           isMine &&
           currentTurnId === runnerId &&
           isVisionObscuredForPlayer(gameState, runnerId),
+        wormholeRun: gameState.wormholeRunsByPlayer?.[runnerId] || null,
       }];
     });
-  }, [gameState, userId, playerName, playerPosition, moveCount, revealedWalls, fx, moveVia, remoteVisuals, currentTurnId]);
+  }, [gameState, userId, playerName, displayedPlayerPosition, moveCount, revealedWalls, fx, moveVia, remoteVisuals, currentTurnId]);
 
   const renderControls = () => {
     const sizeClass = '!h-11 !w-11 !rounded-lg';

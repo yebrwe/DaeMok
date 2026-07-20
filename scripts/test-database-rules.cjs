@@ -139,6 +139,71 @@ function validMap(skillLoadout = 'scoutPulse') {
   };
 }
 
+function validWormholeChallenge() {
+  return {
+    version: 1,
+    startPosition: { row: 0, col: 0 },
+    endPosition: { row: 2, col: 2 },
+    seals: [
+      { row: 0, col: 5 },
+      { row: 5, col: 5 },
+      { row: 5, col: 0 },
+    ],
+    obstacles: [
+      { position: { row: 0, col: 1 }, direction: 'down' },
+      { position: { row: 0, col: 2 }, direction: 'down' },
+      { position: { row: 1, col: 3 }, direction: 'right' },
+      { position: { row: 2, col: 3 }, direction: 'right' },
+      { position: { row: 3, col: 1 }, direction: 'right' },
+      { position: { row: 4, col: 1 }, direction: 'right' },
+      { position: { row: 4, col: 3 }, direction: 'down' },
+      { position: { row: 4, col: 4 }, direction: 'down' },
+    ],
+  };
+}
+
+function validWormholeItem() {
+  return {
+    type: 'wormhole',
+    entrance: { row: 2, col: 0 },
+    exit: { row: 4, col: 1 },
+    challenge: validWormholeChallenge(),
+  };
+}
+
+function validWormholeRun(mapOwnerId, enteredAtTurn = 1) {
+  const challenge = validWormholeChallenge();
+  return {
+    mapOwnerId,
+    itemIndex: 0,
+    position: { ...challenge.startPosition },
+    challenge,
+    enteredAtTurn,
+  };
+}
+
+function validFireVisionEffect(sourcePlayerId, appliedAtTurn = 1) {
+  return {
+    type: 'fire',
+    sourcePlayerId,
+    appliedAtTurn,
+    expiresAtTargetMove: 2,
+    phantomWalls: [
+      { position: { row: 1, col: 1 }, direction: 'right' },
+      { position: { row: 2, col: 2 }, direction: 'down' },
+    ],
+  };
+}
+
+function validPoisonEffect(sourcePlayerId, appliedAtTurn = 1) {
+  return {
+    sourcePlayerId,
+    appliedAtTurn,
+    expiresAtTargetMove: 2,
+    seed: 1_234_567,
+  };
+}
+
 async function expectAllowed(label, promise) {
   const result = await promise;
   assert.equal(result.ok, true, `${label} should be allowed (${result.status}): ${JSON.stringify(result.payload)}`);
@@ -281,6 +346,110 @@ async function main() {
     databaseRequest(`rooms/${roomId}`, owner.token, 'PATCH', {
       [`maps/${owner.uid}`]: null,
       [`gameState/players/${owner.uid}/isReady`]: false,
+    })
+  );
+  const mapWithWormholeChallenge = {
+    ...validMap(),
+    items: [validWormholeItem()],
+  };
+  await expectAllowed(
+    'new wormhole map includes a bounded configured challenge',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      mapWithWormholeChallenge
+    )
+  );
+  const missingWormholeChallenge = clone(mapWithWormholeChallenge);
+  delete missingWormholeChallenge.items[0].challenge;
+  await expectDenied(
+    'new wormhole item cannot omit its configured challenge',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      missingWormholeChallenge
+    )
+  );
+  const tooFewWormholeSeals = clone(mapWithWormholeChallenge);
+  tooFewWormholeSeals.items[0].challenge.seals.pop();
+  await expectDenied(
+    'wormhole challenge requires exactly three indexed seals',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      tooFewWormholeSeals
+    )
+  );
+  const extraWormholeChallengeField = clone(mapWithWormholeChallenge);
+  extraWormholeChallengeField.items[0].challenge.forged = true;
+  await expectDenied(
+    'wormhole challenge rejects unknown top-level fields',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      extraWormholeChallengeField
+    )
+  );
+  const tooFewWormholeWalls = clone(mapWithWormholeChallenge);
+  tooFewWormholeWalls.items[0].challenge.obstacles =
+    tooFewWormholeWalls.items[0].challenge.obstacles.slice(0, 3);
+  await expectDenied(
+    'wormhole challenge requires at least four persisted internal walls',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      tooFewWormholeWalls
+    )
+  );
+  const tooManyWormholeWalls = clone(mapWithWormholeChallenge);
+  tooManyWormholeWalls.items[0].challenge.obstacles = Array.from(
+    { length: 13 },
+    () => ({ position: { row: 1, col: 1 }, direction: 'right' })
+  );
+  await expectDenied(
+    'wormhole challenge rejects more than twelve internal walls',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      tooManyWormholeWalls
+    )
+  );
+  const invalidWormholeWall = clone(mapWithWormholeChallenge);
+  invalidWormholeWall.items[0].challenge.obstacles[0] = {
+    position: { row: 0, col: 1 },
+    direction: 'up',
+  };
+  await expectDenied(
+    'wormhole challenge rejects an outward-facing boundary wall',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      invalidWormholeWall
+    )
+  );
+  const invalidWormholeCoordinate = clone(mapWithWormholeChallenge);
+  invalidWormholeCoordinate.items[0].challenge.seals[1].row = 6;
+  await expectDenied(
+    'wormhole challenge positions stay inside the six-by-six board',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      invalidWormholeCoordinate
+    )
+  );
+  await expectAllowed(
+    'non-wormhole setup items retain their existing write behavior',
+    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
+      ...validMap(),
+      items: [{ type: 'mine', position: { row: 2, col: 2 } }],
     })
   );
   await expectDenied(
@@ -522,6 +691,164 @@ async function main() {
     ['scoutPulse'],
     'setup to play may retain a legacy skill envelope for read compatibility'
   );
+
+  await seedAdminFixture(`rooms/${roomId}/gameState`, 'PATCH', {
+    wormholeRunsByPlayer: {
+      [outsider.uid]: validWormholeRun(owner.uid),
+    },
+    visionEffectsByPlayer: {
+      [outsider.uid]: {
+        type: 'smoke',
+        sourcePlayerId: owner.uid,
+        appliedAtTurn: 1,
+        expiresAtTargetMove: 2,
+      },
+    },
+    poisonEffectsByPlayer: {
+      [outsider.uid]: validPoisonEffect(owner.uid),
+    },
+  });
+  await expectDenied(
+    'unauthenticated callers cannot read live wormhole run state',
+    databaseRequest(`rooms/${roomId}/gameState/wormholeRunsByPlayer`, null, 'GET')
+  );
+  await expectDenied(
+    'authenticated non-members cannot write live wormhole run state',
+    databaseRequest(
+      `rooms/${roomId}/gameState/wormholeRunsByPlayer/${owner.uid}`,
+      drawTarget.token,
+      'PUT',
+      validWormholeRun(outsider.uid)
+    )
+  );
+
+  const privateStateRead = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
+  assert.equal(privateStateRead.ok, true, 'seeded live private state should be readable');
+  await expectDenied(
+    'current player cannot create a wormhole run outside the atomic turn reducer',
+    databaseRequest(
+      `rooms/${roomId}/gameState/wormholeRunsByPlayer/${owner.uid}`,
+      owner.token,
+      'PUT',
+      validWormholeRun(outsider.uid)
+    )
+  );
+
+  const forgedForeignRun = clone(privateStateRead.payload);
+  forgedForeignRun.players[owner.uid].moves = 1;
+  forgedForeignRun.currentTurn = outsider.uid;
+  forgedForeignRun.turnNumber = 2;
+  delete forgedForeignRun.wormholeRunsByPlayer[outsider.uid];
+  await expectDenied(
+    'current player cannot delete another player wormhole run in an otherwise atomic turn',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', forgedForeignRun)
+  );
+
+  const invalidRunShape = clone(privateStateRead.payload);
+  invalidRunShape.players[owner.uid].moves = 1;
+  invalidRunShape.currentTurn = outsider.uid;
+  invalidRunShape.turnNumber = 2;
+  invalidRunShape.wormholeRunsByPlayer[owner.uid] = validWormholeRun(outsider.uid);
+  invalidRunShape.wormholeRunsByPlayer[owner.uid].challenge.version = 2;
+  await expectDenied(
+    'atomic turn rejects a malformed own wormhole run',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', invalidRunShape)
+  );
+
+  const invalidFireVisionShape = clone(privateStateRead.payload);
+  invalidFireVisionShape.players[owner.uid].moves = 1;
+  invalidFireVisionShape.currentTurn = outsider.uid;
+  invalidFireVisionShape.turnNumber = 2;
+  invalidFireVisionShape.visionEffectsByPlayer[owner.uid] = validFireVisionEffect(outsider.uid);
+  invalidFireVisionShape.visionEffectsByPlayer[owner.uid].phantomWalls = Array.from(
+    { length: 7 },
+    () => ({ position: { row: 1, col: 1 }, direction: 'right' })
+  );
+  await expectDenied(
+    'fire vision effect rejects more than six phantom walls',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', invalidFireVisionShape)
+  );
+
+  const invalidPoisonShape = clone(privateStateRead.payload);
+  invalidPoisonShape.players[owner.uid].moves = 1;
+  invalidPoisonShape.currentTurn = outsider.uid;
+  invalidPoisonShape.turnNumber = 2;
+  invalidPoisonShape.poisonEffectsByPlayer[owner.uid] = validPoisonEffect(outsider.uid);
+  invalidPoisonShape.poisonEffectsByPlayer[owner.uid].seed = 0x1_0000_0000;
+  await expectDenied(
+    'poison effect requires a bounded unsigned 32-bit seed',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', invalidPoisonShape)
+  );
+
+  const ownPrivateStateTurn = clone(privateStateRead.payload);
+  ownPrivateStateTurn.players[owner.uid].moves = 1;
+  ownPrivateStateTurn.currentTurn = outsider.uid;
+  ownPrivateStateTurn.turnNumber = 2;
+  ownPrivateStateTurn.wormholeRunsByPlayer[owner.uid] = validWormholeRun(outsider.uid);
+  ownPrivateStateTurn.visionEffectsByPlayer[owner.uid] = validFireVisionEffect(outsider.uid);
+  ownPrivateStateTurn.poisonEffectsByPlayer[owner.uid] = validPoisonEffect(outsider.uid);
+  await expectAllowed(
+    'current player atomically creates only their own wormhole and status effects',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', ownPrivateStateTurn)
+  );
+
+  const afterOwnPrivateTurn = await databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'GET');
+  assert.equal(afterOwnPrivateTurn.ok, true, 'private-state turn should persist');
+  const forgedOwnerRunExpiry = clone(afterOwnPrivateTurn.payload);
+  forgedOwnerRunExpiry.players[outsider.uid].moves = 1;
+  forgedOwnerRunExpiry.currentTurn = owner.uid;
+  forgedOwnerRunExpiry.turnNumber = 3;
+  delete forgedOwnerRunExpiry.wormholeRunsByPlayer[owner.uid];
+  await expectDenied(
+    'next player cannot expire the previous player wormhole run',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', forgedOwnerRunExpiry)
+  );
+  const forgedOwnerVisionExpiry = clone(afterOwnPrivateTurn.payload);
+  forgedOwnerVisionExpiry.players[outsider.uid].moves = 1;
+  forgedOwnerVisionExpiry.currentTurn = owner.uid;
+  forgedOwnerVisionExpiry.turnNumber = 3;
+  delete forgedOwnerVisionExpiry.visionEffectsByPlayer[owner.uid];
+  await expectDenied(
+    'next player cannot expire the previous player vision effect',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', forgedOwnerVisionExpiry)
+  );
+  const forgedOwnerPoisonExpiry = clone(afterOwnPrivateTurn.payload);
+  forgedOwnerPoisonExpiry.players[outsider.uid].moves = 1;
+  forgedOwnerPoisonExpiry.currentTurn = owner.uid;
+  forgedOwnerPoisonExpiry.turnNumber = 3;
+  delete forgedOwnerPoisonExpiry.poisonEffectsByPlayer[owner.uid];
+  await expectDenied(
+    'next player cannot expire the previous player poison effect',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', forgedOwnerPoisonExpiry)
+  );
+
+  const ownPrivateStateExpiry = clone(afterOwnPrivateTurn.payload);
+  ownPrivateStateExpiry.players[outsider.uid].moves = 1;
+  ownPrivateStateExpiry.currentTurn = owner.uid;
+  ownPrivateStateExpiry.turnNumber = 3;
+  ownPrivateStateExpiry.wormholeRunsByPlayer[outsider.uid].position = { row: 0, col: 1 };
+  ownPrivateStateExpiry.wormholeRunsByPlayer[outsider.uid].activatedSeals = { 0: true };
+  ownPrivateStateExpiry.visionEffectsByPlayer[outsider.uid] = validFireVisionEffect(owner.uid, 2);
+  ownPrivateStateExpiry.poisonEffectsByPlayer[outsider.uid].expiresAtTargetMove = 3;
+  ownPrivateStateExpiry.poisonEffectsByPlayer[outsider.uid].seed += 1;
+  await expectAllowed(
+    'current player atomically updates only their own private run and effects',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', ownPrivateStateExpiry)
+  );
+  const afterOwnPrivateUpdate = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
+  assert.equal(afterOwnPrivateUpdate.ok, true, 'private-state update should persist');
+  const ownPrivateStateRemoval = clone(afterOwnPrivateUpdate.payload);
+  ownPrivateStateRemoval.players[owner.uid].moves = 2;
+  ownPrivateStateRemoval.currentTurn = outsider.uid;
+  ownPrivateStateRemoval.turnNumber = 4;
+  delete ownPrivateStateRemoval.wormholeRunsByPlayer[owner.uid];
+  delete ownPrivateStateRemoval.visionEffectsByPlayer[owner.uid];
+  delete ownPrivateStateRemoval.poisonEffectsByPlayer[owner.uid];
+  await expectAllowed(
+    'current player atomically expires only their own private run and effects',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', ownPrivateStateRemoval)
+  );
+  await seedAdminFixture(`rooms/${roomId}/gameState`, 'PUT', liveRead.payload);
 
   const retiredSkillCreation = clone(liveRead.payload);
   retiredSkillCreation.itemState ||= {};

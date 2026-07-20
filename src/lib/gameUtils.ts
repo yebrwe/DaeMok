@@ -10,6 +10,7 @@ import {
   Position,
   SpecialWallType,
   WallItemType,
+  WormholeChallenge,
 } from '@/types/game';
 
 // 보드 크기 상수
@@ -26,6 +27,11 @@ export function isMazeSkillId(value: unknown): value is MazeSkillId {
 
 // 벽 예산 (아이템 비용 포함)
 export const MAX_OBSTACLES = 24;
+export const WORMHOLE_CHALLENGE_SEAL_COUNT = 3;
+export const WORMHOLE_CHALLENGE_MIN_WALLS = 4;
+export const WORMHOLE_CHALLENGE_MAX_WALLS = 12;
+export const WORMHOLE_CHALLENGE_MIN_STEPS = 12;
+export const WORMHOLE_CHALLENGE_MAX_STEPS = 28;
 
 export const SPECIAL_WALL_TYPES: SpecialWallType[] = [
   'steelWall',
@@ -202,6 +208,18 @@ export function cloneMapItem(item: MapItem): MapItem {
     ...(item.position ? { position: { ...item.position } } : {}),
     ...(item.entrance ? { entrance: { ...item.entrance } } : {}),
     ...(item.exit ? { exit: { ...item.exit } } : {}),
+    ...(item.challenge ? {
+      challenge: {
+        version: 1,
+        startPosition: { ...item.challenge.startPosition },
+        endPosition: { ...item.challenge.endPosition },
+        seals: item.challenge.seals.map((position) => ({ ...position })),
+        obstacles: item.challenge.obstacles.map((obstacle) => ({
+          position: { ...obstacle.position },
+          direction: obstacle.direction,
+        })),
+      },
+    } : {}),
   };
 }
 
@@ -437,6 +455,118 @@ export function findShortestPath(
   return null;
 }
 
+function positionKey(position: Position): string {
+  return `${position.row},${position.col}`;
+}
+
+function positionPermutations(positions: readonly Position[]): Position[][] {
+  if (positions.length <= 1) return [positions.map((position) => ({ ...position }))];
+  return positions.flatMap((position, index) =>
+    positionPermutations(positions.filter((_, candidate) => candidate !== index))
+      .map((remaining) => [{ ...position }, ...remaining])
+  );
+}
+
+export function getWormholeChallengeCompletionSteps(
+  challenge: WormholeChallenge
+): number | null {
+  let shortest: number | null = null;
+  for (const sealOrder of positionPermutations(challenge.seals)) {
+    const checkpoints = [challenge.startPosition, ...sealOrder, challenge.endPosition];
+    let steps = 0;
+    let valid = true;
+    for (let index = 1; index < checkpoints.length; index += 1) {
+      const route = findShortestPath(
+        checkpoints[index - 1],
+        checkpoints[index],
+        challenge.obstacles
+      );
+      if (!route) {
+        valid = false;
+        break;
+      }
+      steps += route.length - 1;
+    }
+    if (valid && (shortest === null || steps < shortest)) shortest = steps;
+  }
+  return shortest;
+}
+
+export function getWormholeChallengeError(value: unknown): string | null {
+  if (!isRecord(value)) return '웜홀 내부 맵 정보가 없습니다.';
+  const keys = Object.keys(value).sort();
+  if (keys.join('|') !== 'endPosition|obstacles|seals|startPosition|version') {
+    return '웜홀 내부 맵 형식이 올바르지 않습니다.';
+  }
+  if (value.version !== 1) return '지원하지 않는 웜홀 내부 맵 버전입니다.';
+  if (!isPositionInBoard(value.startPosition as Position | undefined) ||
+      !isPositionInBoard(value.endPosition as Position | undefined)) {
+    return '웜홀 내부 시작점과 출구를 보드 안에 배치해야 합니다.';
+  }
+  const startPosition = value.startPosition as Position;
+  const endPosition = value.endPosition as Position;
+  if (isSamePosition(startPosition, endPosition)) {
+    return '웜홀 내부 시작점과 출구는 서로 달라야 합니다.';
+  }
+
+  if (!Array.isArray(value.seals) ||
+      value.seals.length !== WORMHOLE_CHALLENGE_SEAL_COUNT ||
+      !isDenseRecordArray(value.seals) ||
+      value.seals.some((position) => !isPositionInBoard(position as Position))) {
+    return `웜홀 내부 봉인을 정확히 ${WORMHOLE_CHALLENGE_SEAL_COUNT}개 배치해야 합니다.`;
+  }
+  const seals = value.seals as Position[];
+  const specialPositions = [startPosition, endPosition, ...seals].map(positionKey);
+  if (new Set(specialPositions).size !== specialPositions.length) {
+    return '웜홀 내부 시작점·출구·봉인은 서로 다른 칸이어야 합니다.';
+  }
+
+  if (!Array.isArray(value.obstacles) ||
+      value.obstacles.length < WORMHOLE_CHALLENGE_MIN_WALLS ||
+      value.obstacles.length > WORMHOLE_CHALLENGE_MAX_WALLS ||
+      !isDenseRecordArray(value.obstacles)) {
+    return `웜홀 내부 벽은 ${WORMHOLE_CHALLENGE_MIN_WALLS}~${WORMHOLE_CHALLENGE_MAX_WALLS}개를 배치해야 합니다.`;
+  }
+  const obstacles = value.obstacles as Obstacle[];
+  for (const obstacle of obstacles) {
+    if (
+      Object.keys(obstacle).sort().join('|') !== 'direction|position' ||
+      !isPositionInBoard(obstacle.position) ||
+      !isDirection(obstacle.direction) ||
+      !isPositionInBoard(getNewPosition(obstacle.position, obstacle.direction))
+    ) {
+      return '웜홀 내부 벽이 유효한 두 칸 사이에 있지 않습니다.';
+    }
+  }
+  for (let index = 0; index < obstacles.length; index += 1) {
+    if (obstacles.slice(0, index).some((existing) =>
+      isSameWallSegment(
+        obstacles[index].position,
+        obstacles[index].direction,
+        existing.position,
+        existing.direction
+      )
+    )) {
+      return '웜홀 내부의 같은 물리 벽을 중복 배치할 수 없습니다.';
+    }
+  }
+
+  const challenge = value as unknown as WormholeChallenge;
+  const completionSteps = getWormholeChallengeCompletionSteps(challenge);
+  if (completionSteps === null) return '모든 봉인을 거쳐 내부 출구로 갈 수 있는 경로가 필요합니다.';
+  if (completionSteps < WORMHOLE_CHALLENGE_MIN_STEPS) {
+    return `최단 봉인 해제 동선이 ${WORMHOLE_CHALLENGE_MIN_STEPS}칸 이상이어야 합니다.`;
+  }
+  if (completionSteps > WORMHOLE_CHALLENGE_MAX_STEPS) {
+    return `최단 봉인 해제 동선은 ${WORMHOLE_CHALLENGE_MAX_STEPS}칸을 넘을 수 없습니다.`;
+  }
+  return null;
+}
+
+export function isValidWormholeChallenge(value: unknown): value is WormholeChallenge {
+  return getWormholeChallengeError(value) === null;
+}
+
 export function countUniqueMapWalls(obstacles: Obstacle[]): number {
   const unique: Obstacle[] = [];
   for (const obstacle of obstacles || []) {
@@ -541,6 +671,7 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
       if (!reserveCell(item.position)) return false;
     } else if (item.type === 'wormhole') {
       if (!reserveCell(item.entrance) || !reserveCell(item.exit)) return false;
+      if (item.challenge != null && !isValidWormholeChallenge(item.challenge)) return false;
     }
   }
 
@@ -568,5 +699,6 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
 export function isValidNewMap(map: GameMap, expectedRulesVersion?: number): boolean {
   return map?.skillLoadout === DEFAULT_MAZE_SKILL
     && !getMapItems(map).some((item) => isRetiredNewMapItemType(item.type))
+    && getMapItems(map).every((item) => item.type !== 'wormhole' || isValidWormholeChallenge(item.challenge))
     && isValidMap(map, expectedRulesVersion);
 }

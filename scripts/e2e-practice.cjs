@@ -199,6 +199,70 @@ async function expectStartSelectionUndoRedo(page) {
   ok('시작점 선택 → undo → redo 단계/버튼/마커 복구');
 }
 
+async function expectNearestWallPointerRouting(page) {
+  const board = page.locator('[data-maze-board-grid]');
+  if ((await board.getAttribute('data-wall-pointer-routing')) !== 'nearest') {
+    throw new Error('설정 보드가 가장 가까운 벽선 클릭 판정을 사용하지 않음');
+  }
+
+  const cell = await page.locator('[data-cell="2,2"]').boundingBox();
+  if (!cell) throw new Error('벽 클릭 판정 기준 셀을 찾지 못함');
+
+  const cases = [
+    {
+      label: '위쪽 벽 우선',
+      point: { x: cell.x + cell.width - 8, y: cell.y + 2 },
+      expected: '1,2:down',
+      farther: '2,2:right',
+    },
+    {
+      label: '오른쪽 벽 우선',
+      point: { x: cell.x + cell.width - 2, y: cell.y + cell.height - 8 },
+      expected: '2,2:right',
+      farther: '2,2:down',
+    },
+  ];
+
+  const usedBudget = async () => {
+    const text = await page.locator('[data-testid=setup-budget]').innerText();
+    const match = text.match(/(\d+)\/24/);
+    if (!match) throw new Error(`벽 예산을 읽지 못함: ${text}`);
+    return Number(match[1]);
+  };
+
+  for (const testCase of cases) {
+    const before = await usedBudget();
+    await page.mouse.click(testCase.point.x, testCase.point.y);
+    await page.waitForFunction(
+      (segment) => document.querySelector(`[data-wall-segment="${segment}"]`)
+        ?.getAttribute('data-wall-occupied') === 'true',
+      testCase.expected
+    );
+
+    const expected = page.locator(`[data-wall-segment="${testCase.expected}"]`);
+    const farther = page.locator(`[data-wall-segment="${testCase.farther}"]`);
+    if (
+      (await expected.getAttribute('data-wall-occupied')) !== 'true' ||
+      (await farther.getAttribute('data-wall-occupied')) !== 'false' ||
+      await usedBudget() !== before + 1
+    ) {
+      throw new Error(`${testCase.label} 좌표가 더 먼 직교 벽에 잘못 배치됨`);
+    }
+
+    await page.getByRole('button', { name: '실행 취소', exact: true }).click();
+    await page.waitForFunction(
+      (segment) => document.querySelector(`[data-wall-segment="${segment}"]`)
+        ?.getAttribute('data-wall-occupied') === 'false',
+      testCase.expected
+    );
+    if (await usedBudget() !== before) {
+      throw new Error(`${testCase.label} 회귀 검사 뒤 벽 예산이 복구되지 않음`);
+    }
+  }
+
+  ok('모바일 겹침 좌표도 가장 가까운 벽선에 정확히 1회 설치');
+}
+
 async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyHistory = false } = {}) {
   if (verifyHistory) {
     await expectStartSelectionUndoRedo(page);
@@ -212,6 +276,7 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
   const completeButton = page.getByRole('button', { name: '완료', exact: true });
   if (await completeButton.isEnabled()) throw new Error('0/24 연습 맵에서 완료 버튼이 활성화됨');
   await page.locator('[data-testid=full-budget-required]').waitFor();
+  if (verifyPreview) await expectNearestWallPointerRouting(page);
 
   if (await page.getByRole('tab', { name: '스킬' }).count() !== 0) {
     throw new Error('스킬 탭이 신규 맵 제작에 노출됨');
@@ -290,11 +355,15 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
     if (await occupiedFireSlot.locator('[data-map-item=windWall]').count() !== 0) {
       throw new Error('키보드 입력으로 기존 화염벽 위에 바람벽이 겹쳐짐');
     }
+    const occupiedFireRect = await occupiedFireSlot.boundingBox();
+    if (!occupiedFireRect) throw new Error('점유 화염벽 터치 좌표를 계산하지 못함');
     await occupiedFireSlot.dispatchEvent('pointerdown', {
       pointerType: 'touch',
       pointerId: 7,
       isPrimary: true,
       bubbles: true,
+      clientX: occupiedFireRect.x + occupiedFireRect.width / 2,
+      clientY: occupiedFireRect.y + occupiedFireRect.height / 2,
     });
     await occupiedFireSlot.locator('[data-wall-conflict=true]').waitFor();
     if (await occupiedFireSlot.getAttribute('aria-disabled') !== 'true') {
@@ -304,11 +373,15 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
       throw new Error('기존 화염벽 위에 바람벽 고스트가 겹쳐짐');
     }
     const windGuideSlot = page.locator('[data-wall-segment][data-wall-occupied=false]').first();
+    const windGuideRect = await windGuideSlot.boundingBox();
+    if (!windGuideRect) throw new Error('빈 바람벽 터치 좌표를 계산하지 못함');
     await windGuideSlot.dispatchEvent('pointerdown', {
       pointerType: 'touch',
       pointerId: 8,
       isPrimary: true,
       bubbles: true,
+      clientX: windGuideRect.x + windGuideRect.width / 2,
+      clientY: windGuideRect.y + windGuideRect.height / 2,
     });
     await windGuideSlot.locator('[data-wall-guide=windWall]').waitFor();
     await windGuideSlot.waitFor();
@@ -794,8 +867,9 @@ async function expectMobileToonCanvases(page, label, expected) {
     const dpad = page.locator('[data-testid=practice-mobile-direction-pad]');
     await dpad.getByRole('button', { name: '오른쪽으로 이동' }).click();
     await page.waitForFunction(() => {
-      const text = document.querySelector('[data-player-board="practice-user"]')?.textContent || '';
-      return Number(text.match(/턴:\s*(\d+)/)?.[1] || 0) >= 2;
+      const board = document.querySelector('[data-player-board="practice-user"]');
+      const moves = Number((board?.textContent || '').match(/턴:\s*(\d+)/)?.[1] || 0);
+      return moves === 1 && board?.getAttribute('data-fire-affected') === 'true';
     });
     if ((await ownBoard.getAttribute('data-current-turn')) !== 'true') {
       throw new Error('내 맵 테스트에서 한 행동 뒤 턴이 AI로 넘어감');
@@ -803,9 +877,9 @@ async function expectMobileToonCanvases(page, label, expected) {
     await dpad.getByRole('button', { name: '오른쪽으로 이동' }).click();
     await page.waitForFunction(() => {
       const text = document.querySelector('[data-player-board="practice-user"]')?.textContent || '';
-      return Number(text.match(/턴:\s*(\d+)/)?.[1] || 0) >= 3;
+      return Number(text.match(/턴:\s*(\d+)/)?.[1] || 0) === 2;
     });
-    ok('내 맵을 제작자 시점으로 AI 대기 없이 연속 테스트');
+    ok('화염벽 추가 턴 페널티 없이 1행동 처리 · 제작자 시점 연속 테스트');
 
     if (errors.length > 0) throw new Error(`브라우저 오류: ${errors.join(' | ')}`);
     console.log('PASS: AI 연습 대전 E2E');

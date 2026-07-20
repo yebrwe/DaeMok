@@ -2,8 +2,9 @@ import type {
   MazeAuthorityGameStateView,
   MazeAuthorityMapView,
   MazeAuthorityPlayerView,
+  MazeAuthorityWormholeRunView,
 } from '@/lib/mazeAuthorityClient';
-import type { GameMap } from '@/types/game';
+import { GamePhase, type GameMap, type WormholeRunState } from '@/types/game';
 import type { LiveBoardEntry } from '@/components/LiveBoardGrid';
 
 export function isFullMazeAuthorityMap(map: MazeAuthorityMapView): map is GameMap {
@@ -35,6 +36,42 @@ function consumedRecord(
   return consumed;
 }
 
+function materializeAuthorityWormholeRun(
+  run: MazeAuthorityWormholeRunView,
+  revealObstacles: boolean,
+): WormholeRunState {
+  return {
+    mapOwnerId: run.mapOwnerId,
+    itemIndex: run.itemIndex,
+    position: { ...run.position },
+    challenge: {
+      version: 1,
+      startPosition: { ...run.challenge.startPosition },
+      endPosition: { ...run.challenge.endPosition },
+      seals: run.challenge.seals.map((seal) => ({ ...seal })),
+      // Active Authority boards only learn walls through discoveredWalls.
+      obstacles: revealObstacles
+        ? (run.challenge.obstacles ?? []).map((wall) => ({
+            position: { ...wall.position },
+            direction: wall.direction,
+          }))
+        : [],
+    },
+    enteredAtTurn: run.enteredAtTurn,
+    ...(run.activatedSeals
+      ? { activatedSeals: { ...run.activatedSeals } }
+      : {}),
+    ...(run.discoveredWalls
+      ? {
+          discoveredWalls: run.discoveredWalls.map((wall) => ({
+            position: { ...wall.position },
+            direction: wall.direction,
+          })),
+        }
+      : {}),
+  };
+}
+
 export function buildMazeAuthorityLiveBoards(input: {
   gameState: MazeAuthorityGameStateView;
   viewerUid: string | null;
@@ -47,6 +84,13 @@ export function buildMazeAuthorityLiveBoards(input: {
     if (!runner?.position || !mapOwnerId || !projectedMap) return [];
     const mapOwner = gameState.players[mapOwnerId];
     const itemState = gameState.itemState[mapOwnerId];
+    const privateVisionEffect = runnerId === viewerUid
+      ? gameState.visionEffectsByPlayer[runnerId]
+      : null;
+    const privatePoisonEffect = runnerId === viewerUid
+      ? gameState.poisonEffectsByPlayer[runnerId]
+      : null;
+    const wormholeRun = gameState.wormholeRunsByPlayer[runnerId];
     return [{
       runnerId,
       runnerName: playerName(runner),
@@ -67,9 +111,18 @@ export function buildMazeAuthorityLiveBoards(input: {
       revealedWalls: gameState.revealedWallsByPlayer[runnerId] ?? [],
       revealObstacles: isFullMazeAuthorityMap(projectedMap) && viewerUid === mapOwnerId,
       revealMapSecrets: isFullMazeAuthorityMap(projectedMap) && viewerUid === mapOwnerId,
-      smokeAffected: !!gameState.visionEffectsByPlayer[runnerId],
-      visionObscured: !!gameState.visionEffectsByPlayer[runnerId],
+      smokeAffected: privateVisionEffect?.type === 'smoke',
+      visionObscured: privateVisionEffect?.type === 'smoke',
+      fireAffected: privateVisionEffect?.type === 'fire',
+      heatWalls: privateVisionEffect?.type === 'fire' ? privateVisionEffect.phantomWalls : [],
+      poisonAffected: !!privatePoisonEffect,
       pawnColor: runnerId === viewerUid ? '#4e9ad8' : '#f08b78',
+      wormholeRun: wormholeRun
+        ? materializeAuthorityWormholeRun(
+            wormholeRun,
+            gameState.phase === GamePhase.END,
+          )
+        : null,
     }];
   });
 }

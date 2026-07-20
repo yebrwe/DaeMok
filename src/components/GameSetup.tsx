@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Direction, GameMap, GamePhase, ItemType, MapItem, Obstacle, Position } from '@/types/game';
+import { Direction, GameMap, GamePhase, ItemType, MapItem, Obstacle, Position, WormholeChallenge } from '@/types/game';
 import {
   Aperture,
   ArrowDown,
@@ -25,6 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import GameBoard from './GameBoard';
+import WormholeChallengeEditor from './WormholeChallengeEditor';
 import {
   isValidNewMap,
   BOARD_SIZE,
@@ -110,13 +111,13 @@ const SPECIAL_WALL_ITEMS: PlaceableItemType[] = [
 ];
 
 const ITEM_DESCRIPTIONS: Record<PlaceableItemType, string> = {
-  oneTimeWall: '처음 한 번만 막고 사라지는 위장벽',
+  oneTimeWall: '발동 전까지 무기한 정상벽으로 위장하고 처음 한 번만 막음',
   mine: '밟으면 실제 2턴 전 위치로 되돌림',
-  wormhole: '안전한 출구로 한 번 순간이동',
+  wormhole: '별도 내부 미로에서 봉인 3개를 풀어야 복귀',
   smoke: '상대의 다음 행동 동안 보드를 가림',
   steelWall: '어떤 벽 효과로도 통과할 수 없는 영구벽',
-  fireWall: '처음 막고 사라지며 행동에 총 2턴 소모',
-  poisonWall: '통과시킨 뒤 행동에 총 3턴 소모',
+  fireWall: '처음 막고 불을 붙여 2행동 동안 진짜·환영벽을 뒤섞음',
+  poisonWall: '통과 후 4행동 동안 25% 확률로 입력 방향을 뒤틀음',
   iceWall: '통과 후 진행 방향으로 한 칸 더 미끄러짐',
   windWall: '첫 통과 후 가능하면 지정 방향으로 한 칸 밀고 소멸',
   phaseWall: '막힘과 통과 상태가 시도할 때마다 교대',
@@ -169,15 +170,13 @@ const GameSetup: React.FC<GameSetupProps> = ({
       .filter((item) =>
         item.type !== 'collapseWall' && item.type !== 'mirrorWall' && item.type !== 'radar'
       )
-      .map((item) => ({
-      ...item,
-      position: item.position ? { ...item.position } : undefined,
-      wallPosition: item.wallPosition ? { ...item.wallPosition } : undefined,
-      entrance: item.entrance ? { ...item.entrance } : undefined,
-      exit: item.exit ? { ...item.exit } : undefined,
-    }))
+      .map(cloneMapItem)
   );
   const [wormholeEntrance, setWormholeEntrance] = useState<Position | null>(null);
+  const [wormholeDraft, setWormholeDraft] = useState<{
+    entrance: Position;
+    returnExit: Position;
+  } | null>(null);
   const [paletteTab, setPaletteTab] = useState<'traps' | 'walls'>('traps');
   const [windDirection, setWindDirection] = useState<Direction>('right');
   const historyRef = useRef<{
@@ -233,6 +232,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
     setSetupPhase(snapshot.setupPhase);
     setPlaceMode('wall');
     setWormholeEntrance(null);
+    setWormholeDraft(null);
   }, []);
 
   const handleUndo = useCallback(() => {
@@ -478,9 +478,11 @@ const GameSetup: React.FC<GameSetupProps> = ({
             return;
           }
 
-          addItem(wormhole);
+          setWormholeDraft({
+            entrance: { ...wormholeEntrance },
+            returnExit: { ...position },
+          });
           setWormholeEntrance(null);
-          setPlaceMode('wall');
         }
       }
     }
@@ -607,6 +609,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
       return;
     }
     setWormholeEntrance(null);
+    setWormholeDraft(null);
 
     setPlaceMode((prev) => (prev === type ? 'wall' : type));
   };
@@ -709,6 +712,40 @@ const GameSetup: React.FC<GameSetupProps> = ({
   const activeWallGuide = activeItem && isWallItemType(activeItem) ? activeItem : null;
   const canUndo = historyRef.current.past.length > 0;
   const canRedo = historyRef.current.future.length > 0;
+
+  const completeWormholeChallenge = (challenge: WormholeChallenge) => {
+    if (!wormholeDraft || !canAffordItem('wormhole') || !hasItemCapacity('wormhole')) return;
+    addItem({
+      type: 'wormhole',
+      entrance: { ...wormholeDraft.entrance },
+      exit: { ...wormholeDraft.returnExit },
+      challenge,
+    });
+    setWormholeDraft(null);
+    setPlaceMode('wall');
+  };
+
+  if (wormholeDraft) {
+    return (
+      <div
+        className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950 p-2"
+        data-testid="game-setup-layout"
+        data-setup-mode="wormhole-challenge"
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
+          <WormholeChallengeEditor
+            entrance={wormholeDraft.entrance}
+            returnExit={wormholeDraft.returnExit}
+            onComplete={completeWormholeChallenge}
+            onCancel={() => {
+              setWormholeDraft(null);
+              setPlaceMode('wall');
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
