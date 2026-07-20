@@ -670,8 +670,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
         data-wall-occupied={isOccupied ? 'true' : 'false'}
         role={isInteractive ? 'button' : undefined}
         tabIndex={isInteractive ? 0 : undefined}
-        aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽` : undefined}
+        aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽${hasPlacementConflict ? ' · 이미 점유됨' : ''}` : undefined}
         aria-disabled={hasPlacementConflict || undefined}
+        onFocus={() => {
+          if (isInteractive) setHoveredWall({ position, direction });
+        }}
+        onBlur={() => setHoveredWall(null)}
         onPointerDown={(event) => {
           event.stopPropagation();
           // Touch devices do not have a durable hover state. Pin the tapped segment so an
@@ -808,8 +812,12 @@ const GameBoard: React.FC<GameBoardProps> = ({
         data-wall-occupied={isOccupied ? 'true' : 'false'}
         role={isInteractive ? 'button' : undefined}
         tabIndex={isInteractive ? 0 : undefined}
-        aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽` : undefined}
+        aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽${hasPlacementConflict ? ' · 이미 점유됨' : ''}` : undefined}
         aria-disabled={hasPlacementConflict || undefined}
+        onFocus={() => {
+          if (isInteractive) setHoveredWall({ position, direction });
+        }}
+        onBlur={() => setHoveredWall(null)}
         onPointerDown={(event) => {
           event.stopPropagation();
           // Keep overlap feedback visible after a coarse-pointer tap as well as hover.

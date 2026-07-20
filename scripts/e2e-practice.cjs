@@ -278,6 +278,18 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
     const windButton = page.getByRole('button', { name: /바람벽/ }).first();
     await windButton.click();
     const occupiedFireSlot = page.locator('[data-wall-segment="0,0:right"]');
+    await occupiedFireSlot.focus();
+    await occupiedFireSlot.locator('[data-wall-conflict=true]').waitFor();
+    if (
+      await occupiedFireSlot.getAttribute('aria-disabled') !== 'true' ||
+      !(await occupiedFireSlot.getAttribute('aria-label'))?.includes('이미 점유됨')
+    ) {
+      throw new Error('키보드 포커스가 점유 벽 충돌을 설명하지 않음');
+    }
+    await page.keyboard.press('Enter');
+    if (await occupiedFireSlot.locator('[data-map-item=windWall]').count() !== 0) {
+      throw new Error('키보드 입력으로 기존 화염벽 위에 바람벽이 겹쳐짐');
+    }
     await occupiedFireSlot.dispatchEvent('pointerdown', {
       pointerType: 'touch',
       pointerId: 7,

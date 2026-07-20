@@ -27,7 +27,6 @@ import {
   isVisionObscuredForPlayer,
   mergeWallSegments,
 } from '@/lib/gameTurn';
-import { createMazeSkillState } from '@/lib/mazeSkills';
 
 export const PRACTICE_USER_ID = 'practice-user';
 export const PRACTICE_AI_IDS = ['practice-ai-1', 'practice-ai-2', 'practice-ai-3'] as const;
@@ -322,12 +321,6 @@ export function createMapTestGameState(playerMap: GameMap): GameState {
     winner: null,
     draw: null,
     collisionWalls: {},
-    itemState: {
-      [PRACTICE_USER_ID]: {
-        consumed: {},
-        mazeSkill: createMazeSkillState(map.skillLoadout),
-      },
-    },
     revealedWallsByPlayer: {},
     visionEffectsByPlayer: {},
     turnMessage: '내 맵 테스트를 시작합니다.',
@@ -367,11 +360,6 @@ export function createPracticeGameState(playerMap: GameMap, requestedAiCount: nu
     };
   });
 
-  const itemState = Object.fromEntries(turnOrder.map((id) => [id, {
-    consumed: {},
-    mazeSkill: createMazeSkillState(maps[id].skillLoadout),
-  }]));
-
   return {
     phase: GamePhase.PLAY,
     players,
@@ -383,7 +371,6 @@ export function createPracticeGameState(playerMap: GameMap, requestedAiCount: nu
     winner: null,
     draw: null,
     collisionWalls: {},
-    itemState,
     revealedWallsByPlayer: {},
     visionEffectsByPlayer: {},
     turnMessage: '내 턴입니다.',
