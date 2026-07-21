@@ -17,6 +17,9 @@ const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'e2e-artifacts');
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3215';
 const EXPECTED_MAZE_TOON_VERSION = 'inked-toy-v3';
+const EXPECTED_MAZE_ASSET_VERSION = 'blender-cartoon-v1';
+const EXPECTED_MAZE_ASSET_CATALOG_COUNT = 29;
+const EXPECTED_MAIN_ASSET_COUNT = 25;
 const STAMP = Date.now();
 const ROOM_NAME = `권위완주-${String(STAMP).slice(-6)}`;
 const ACCOUNTS = {
@@ -158,20 +161,36 @@ async function expectRendered3DBoards(page, count, label) {
   for (let index = 0; index < count; index += 1) {
     const canvas = canvases.nth(index);
     try {
-      await page.waitForFunction(({ canvasIndex, expectedVersion }) => {
+      await page.waitForFunction(({
+        canvasIndex,
+        expectedVersion,
+        expectedAssetVersion,
+        expectedCatalogCount,
+        expectedMainAssetCount,
+      }) => {
         const candidate = document.querySelectorAll('[data-player-board] canvas')[canvasIndex];
         if (!(candidate instanceof HTMLCanvasElement)) return false;
         const rect = candidate.getBoundingClientRect();
         const mobile = window.innerWidth < 640;
+        const materialCount = Number(candidate.dataset.mazeToonMaterials);
+        const drawCalls = Number(candidate.dataset.mazeToonDrawCalls);
         return rect.width >= (mobile ? 120 : 280) && rect.height >= (mobile ? 180 : 240) &&
           candidate.width > 0 && candidate.height > 0 &&
           candidate.dataset.mazeCamera === 'fixed-orthographic' &&
           candidate.dataset.mazeToonVersion === expectedVersion &&
-          Number(candidate.dataset.mazeToonMaterials) >= 36 &&
-          Number(candidate.dataset.mazeToonDrawCalls) > 0;
+          candidate.dataset.mazeAssetState === 'ready' &&
+          candidate.dataset.mazeAssetVersion === expectedAssetVersion &&
+          Number(candidate.dataset.mazeAssetCount) === expectedMainAssetCount &&
+          Number(candidate.dataset.mazeAssetCatalogCount) === expectedCatalogCount &&
+          candidate.dataset.mazeAssetSet === 'main' &&
+          Number.isFinite(materialCount) && materialCount > 0 &&
+          Number.isFinite(drawCalls) && drawCalls > 0 && drawCalls <= 600;
       }, {
         canvasIndex: index,
         expectedVersion: EXPECTED_MAZE_TOON_VERSION,
+        expectedAssetVersion: EXPECTED_MAZE_ASSET_VERSION,
+        expectedCatalogCount: EXPECTED_MAZE_ASSET_CATALOG_COUNT,
+        expectedMainAssetCount: EXPECTED_MAIN_ASSET_COUNT,
       }, { timeout: 30_000 });
     } catch (error) {
       const diagnostics = await canvases.evaluateAll((entries) => entries.map((entry) => {
@@ -185,6 +204,11 @@ async function expectRendered3DBoards(page, count, label) {
           toonVersion: entry.dataset.mazeToonVersion,
           materials: entry.dataset.mazeToonMaterials,
           drawCalls: entry.dataset.mazeToonDrawCalls,
+          assetState: entry.dataset.mazeAssetState,
+          assetVersion: entry.dataset.mazeAssetVersion,
+          assetCount: entry.dataset.mazeAssetCount,
+          assetCatalogCount: entry.dataset.mazeAssetCatalogCount,
+          assetSet: entry.dataset.mazeAssetSet,
         };
       }));
       throw new Error(`${label}: 3D canvas readiness timed out: ${JSON.stringify(diagnostics)}`, {
@@ -448,7 +472,24 @@ async function poll(label, read, timeoutMs = 20_000) {
 
     step('the final unfinished runner cannot be skipped into a synthetic result');
     await pageB.close();
-    await pageA.getByText('마지막 미완주 플레이어예요', { exact: false }).first()
+    await pageA.bringToFront();
+    await poll('final runner to remain canonical and stably offline', async () => {
+      const [connections, status, gameState] = await Promise.all([
+        adminDatabase.ref(`mazePresence/v1/rooms/${canonical.meta.roomId}/${uidB}`).get(),
+        adminDatabase.ref(`mazePresence/v1/status/${canonical.meta.roomId}/${uidB}`).get(),
+        adminDatabase.ref(`mazeAuthority/v1/rooms/${canonical.meta.roomId}/gameState`).get(),
+      ]);
+      const state = gameState.val();
+      return connections.val() == null &&
+        status.val()?.online === false &&
+        state?.phase === 'play' &&
+        state?.currentTurn === uidB &&
+        state?.players?.[uidA]?.finished === true &&
+        state?.players?.[uidB]?.finished === false
+        ? { status: status.val(), state }
+        : null;
+    }, 30_000);
+    await pageA.getByRole('status').filter({ hasText: '마지막 미완주 플레이어예요' }).first()
       .waitFor({ state: 'visible', timeout: 20_000 });
     assert.equal(await pageA.getByText('경기 결과가 서버에 확정됐어요', { exact: false }).count(), 0);
     pageB = await contextB.newPage();

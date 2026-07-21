@@ -350,12 +350,10 @@ function openDegree(map, cell) {
 
 function safeExitCells(map) {
   if (map.safeExitCells) return map.safeExitCells;
-  const distances = goalDistances(map);
   const candidates = [];
   for (let cell = 0; cell < CELL_COUNT; cell += 1) {
     if (cell === map.start || cell === map.end) continue;
-    if (openDegree(map, cell) < 2) continue;
-    if (distances[cell] < 0) continue;
+    if (openDegree(map, cell) < 1) continue;
     candidates.push(cell);
   }
   map.safeExitCells = candidates;
@@ -539,7 +537,8 @@ function bestSafeWormhole(map, entrances) {
     if (entrance === map.start || entrance === map.end) continue;
     for (const exit of exits) {
       if (exit === entrance) continue;
-      // Safe exits have at least two open edges and a finite exit-to-goal path.
+      // A valid exit only needs one immediately open adjacent cell. Goal
+      // reachability is intentionally not part of the placement contract.
       const setback = distances[exit] - distances[entrance];
       const score = setback * 1_000 + candidate.tieBreaker;
       if (score > bestScore) {
@@ -747,7 +746,7 @@ function printResults(options, experiment) {
   console.log(`board=${SIZE}x${SIZE} budgets=${MIN_BUDGET}..${MAX_BUDGET} elapsed=${(experiment.elapsedMs / 1000).toFixed(2)}s`);
   console.log('hardlock runs are reported separately and excluded from turn/delta percentiles.');
   console.log('activation is activated/placed; optimized placement is a policy-aware oracle upper bound.');
-  console.log('wormhole exits always have >=2 open edges and a finite exit-to-goal path.');
+  console.log('wormhole exits always have >=1 open edge; exit-to-goal reachability is unrestricted.');
 
   for (const aggressiveness of AGGRESSIVENESS) {
     const { baselines, items } = experiment.results.get(aggressiveness);

@@ -5,6 +5,7 @@ import {
   createCanonicalGameRuleSnapshot,
   isValidGameRuleSnapshot,
   isValidMapForRuleSnapshot,
+  isValidNewMapForRuleSnapshot,
   type GameRuleSnapshot,
 } from '@/lib/gameRules';
 import { firebaseInitPromise } from '@/lib/firebase';
@@ -13,15 +14,26 @@ import {
   WORMHOLE_CHALLENGE_SEAL_COUNT,
   isValidWormholeChallenge,
 } from '@/lib/gameUtils';
+import {
+  DICE_WORMHOLE_BOARD_SIZE,
+  DICE_WORMHOLE_MAX_BLOCKED_CELLS,
+  DICE_WORMHOLE_MIN_BLOCKED_CELLS,
+  isDiceOrientationId,
+  isValidDiceWormholeChallenge,
+} from '@/lib/diceWormhole';
 import type { TurnAction, TurnMoveEffect, TurnOutcome } from '@/lib/gameTurn';
 import type {
   CollisionWall,
+  DiceFace,
+  DiceOrientationId,
+  DiceWormholeChallenge,
   Direction,
   GameMap,
   GamePhase,
   ItemType,
   MapItem,
   MazeSkillId,
+  LegacyWormholeChallenge,
   Obstacle,
   Position,
   SpecialWallType,
@@ -353,7 +365,7 @@ export type MazeAuthorityMapView = MazeAuthorityBoardBoundaryView | GameMap;
  * Authority never sends internal wormhole walls while a match is active.
  * `obstacles` is present only in an END projection.
  */
-export interface MazeAuthorityWormholeChallengeView {
+export interface MazeAuthorityLegacyWormholeChallengeView {
   version: 1;
   startPosition: Position;
   endPosition: Position;
@@ -361,15 +373,42 @@ export interface MazeAuthorityWormholeChallengeView {
   obstacles?: Obstacle[];
 }
 
-export interface MazeAuthorityWormholeRunView {
+export interface MazeAuthorityDiceWormholeChallengeView {
+  version: 2;
+  boardSize: 4;
+  startPosition: Position;
+  endPosition: Position;
+  blockedCells: Position[];
+  initialOrientation: DiceOrientationId;
+  targetTop: DiceFace;
+}
+
+export type MazeAuthorityWormholeChallengeView =
+  | MazeAuthorityLegacyWormholeChallengeView
+  | MazeAuthorityDiceWormholeChallengeView;
+
+interface MazeAuthorityWormholeRunViewBase {
   mapOwnerId: string;
   itemIndex: number;
   position: Position;
-  challenge: MazeAuthorityWormholeChallengeView;
-  activatedSeals?: Record<number, boolean>;
-  discoveredWalls?: Obstacle[];
   enteredAtTurn: number;
 }
+
+export interface MazeAuthorityLegacyWormholeRunView extends MazeAuthorityWormholeRunViewBase {
+  challenge: MazeAuthorityLegacyWormholeChallengeView;
+  activatedSeals?: Record<number, boolean>;
+  discoveredWalls?: Obstacle[];
+}
+
+export interface MazeAuthorityDiceWormholeRunView extends MazeAuthorityWormholeRunViewBase {
+  challenge: MazeAuthorityDiceWormholeChallengeView;
+  orientation: DiceOrientationId;
+  actionsTaken: number;
+}
+
+export type MazeAuthorityWormholeRunView =
+  | MazeAuthorityLegacyWormholeRunView
+  | MazeAuthorityDiceWormholeRunView;
 
 /** Redacted poison status. The server's direction seed is never part of an Authority view. */
 export interface MazeAuthorityPoisonEffectView {
@@ -633,7 +672,7 @@ function parseObstacleList(value: unknown, maximum = MAX_MAP_OBSTACLES): Obstacl
   return parsed;
 }
 
-function parseWormholeChallenge(value: unknown): WormholeChallenge | null {
+function parseLegacyWormholeChallenge(value: unknown): LegacyWormholeChallenge | null {
   if (!isRecord(value) || !hasExactKeys(value, [
     'version', 'startPosition', 'endPosition', 'seals', 'obstacles',
   ]) || value.version !== 1) return null;
@@ -645,7 +684,7 @@ function parseWormholeChallenge(value: unknown): WormholeChallenge | null {
     || rawSeals.length !== WORMHOLE_CHALLENGE_SEAL_COUNT || !obstacles) return null;
   const seals = rawSeals.map((entry) => parsePosition(entry));
   if (seals.some((position) => !position)) return null;
-  const challenge: WormholeChallenge = {
+  const challenge: LegacyWormholeChallenge = {
     version: 1,
     startPosition,
     endPosition,
@@ -653,6 +692,46 @@ function parseWormholeChallenge(value: unknown): WormholeChallenge | null {
     obstacles,
   };
   return isValidWormholeChallenge(challenge) ? challenge : null;
+}
+
+function parseDiceWormholeChallenge(value: unknown): DiceWormholeChallenge | null {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'version', 'boardSize', 'startPosition', 'endPosition', 'blockedCells',
+    'initialOrientation', 'targetTop',
+  ]) || value.version !== 2 || value.boardSize !== DICE_WORMHOLE_BOARD_SIZE) return null;
+  const startPosition = parsePosition(value.startPosition, 0, DICE_WORMHOLE_BOARD_SIZE - 1);
+  const endPosition = parsePosition(value.endPosition, 0, DICE_WORMHOLE_BOARD_SIZE - 1);
+  const rawBlockedCells = canonicalRtdbList(
+    value.blockedCells,
+    DICE_WORMHOLE_MAX_BLOCKED_CELLS,
+  );
+  if (!startPosition || !endPosition || !rawBlockedCells
+    || rawBlockedCells.length < DICE_WORMHOLE_MIN_BLOCKED_CELLS
+    || !isDiceOrientationId(value.initialOrientation)
+    || !integerInRange(value.targetTop, 1, 6)) return null;
+  const blockedCells = rawBlockedCells.map((entry) => (
+    parsePosition(entry, 0, DICE_WORMHOLE_BOARD_SIZE - 1)
+  ));
+  if (blockedCells.some((position) => !position)) return null;
+  const challenge: DiceWormholeChallenge = {
+    version: 2,
+    boardSize: DICE_WORMHOLE_BOARD_SIZE,
+    startPosition,
+    endPosition,
+    blockedCells: blockedCells as Position[],
+    initialOrientation: value.initialOrientation,
+    targetTop: value.targetTop as DiceFace,
+  };
+  return isValidDiceWormholeChallenge(challenge) ? challenge : null;
+}
+
+function parseWormholeChallenge(
+  value: unknown,
+  allowLegacy = true,
+): WormholeChallenge | null {
+  if (!isRecord(value)) return null;
+  if (value.version === 2) return parseDiceWormholeChallenge(value);
+  return allowLegacy && value.version === 1 ? parseLegacyWormholeChallenge(value) : null;
 }
 
 function parseMapItem(value: unknown, allowLegacyCollapseWall = true): MapItem | null {
@@ -687,8 +766,10 @@ function parseMapItem(value: unknown, allowLegacyCollapseWall = true): MapItem |
       : ['type', 'entrance', 'exit'])) return null;
     const entrance = parsePosition(value.entrance);
     const exit = parsePosition(value.exit);
-    const challenge = hasChallenge ? parseWormholeChallenge(value.challenge) : null;
-    if (!allowLegacyCollapseWall && !challenge) return null;
+    const challenge = hasChallenge
+      ? parseWormholeChallenge(value.challenge, allowLegacyCollapseWall)
+      : null;
+    if (!allowLegacyCollapseWall && (!challenge || challenge.version !== 2)) return null;
     return entrance && exit && (!hasChallenge || challenge)
       ? { type, entrance, exit, ...(challenge ? { challenge } : {}) }
       : null;
@@ -743,7 +824,7 @@ function parseSubmittedGameMap(value: unknown): GameMap | null {
     }
   }
   if (Array.isArray(map.items) && map.item != null) return null;
-  return isValidMapForRuleSnapshot(map, canonicalRuleSnapshotForMapValidation()) ? map : null;
+  return isValidNewMapForRuleSnapshot(map, canonicalRuleSnapshotForMapValidation()) ? map : null;
 }
 
 function canonicalRuleSnapshotForMapValidation(): GameRuleSnapshot {
@@ -1733,17 +1814,21 @@ function parseVisionEffect(value: unknown, memberIds: ReadonlySet<string>): Visi
     };
   }
   if (value.type === 'fire') {
-    if (!hasExactKeys(value, [
-      'type', 'sourcePlayerId', 'appliedAtTurn', 'expiresAtTargetMove', 'phantomWalls',
-    ])) return null;
-    const phantomWalls = parseObstacleList(value.phantomWalls, 6);
-    if (!phantomWalls || phantomWalls.length !== 6) return null;
+    const commonKeys = ['type', 'sourcePlayerId', 'appliedAtTurn', 'expiresAtTargetMove'];
+    const hasLegacyPhantomWalls = Object.prototype.hasOwnProperty.call(value, 'phantomWalls');
+    if (!hasExactKeys(value, hasLegacyPhantomWalls
+      ? [...commonKeys, 'phantomWalls']
+      : commonKeys)) return null;
+    const phantomWalls = hasLegacyPhantomWalls
+      ? parseObstacleList(value.phantomWalls, 6)
+      : null;
+    if (hasLegacyPhantomWalls && (!phantomWalls || phantomWalls.length !== 6)) return null;
     return {
       type: 'fire',
       sourcePlayerId: value.sourcePlayerId,
       appliedAtTurn: value.appliedAtTurn,
       expiresAtTargetMove: value.expiresAtTargetMove,
-      phantomWalls,
+      ...(phantomWalls ? { phantomWalls } : {}),
     };
   }
   return null;
@@ -1771,10 +1856,11 @@ function parseProjectedWormholeChallenge(
   value: unknown,
   revealObstacles: boolean,
 ): MazeAuthorityWormholeChallengeView | null {
+  if (!isRecord(value)) return null;
+  if (value.version === 2) return parseDiceWormholeChallenge(value);
   const baseKeys = ['version', 'startPosition', 'endPosition', 'seals'];
   const exactKeys = revealObstacles ? [...baseKeys, 'obstacles'] : baseKeys;
-  if (!isRecord(value)
-    || !hasExactKeys(value, exactKeys)
+  if (!hasExactKeys(value, exactKeys)
     || value.version !== 1) return null;
   const startPosition = parsePosition(value.startPosition);
   const endPosition = parsePosition(value.endPosition);
@@ -1787,7 +1873,7 @@ function parseProjectedWormholeChallenge(
   if (new Set(positions.map(({ row, col }) => `${row},${col}`)).size !== positions.length) {
     return null;
   }
-  const challenge: MazeAuthorityWormholeChallengeView = {
+  const challenge: MazeAuthorityLegacyWormholeChallengeView = {
     version: 1,
     startPosition,
     endPosition,
@@ -1796,7 +1882,7 @@ function parseProjectedWormholeChallenge(
   if (!revealObstacles) return challenge;
   const obstacles = parseObstacleList(value.obstacles, WORMHOLE_CHALLENGE_MAX_WALLS);
   if (!obstacles) return null;
-  const fullChallenge: WormholeChallenge = { ...challenge, obstacles };
+  const fullChallenge: LegacyWormholeChallenge = { ...challenge, obstacles };
   return isValidWormholeChallenge(fullChallenge) ? fullChallenge : null;
 }
 
@@ -1806,19 +1892,40 @@ function parseWormholeRunView(
   phase: GamePhase,
 ): MazeAuthorityWormholeRunView | null {
   const required = ['mapOwnerId', 'itemIndex', 'position', 'challenge', 'enteredAtTurn'];
-  const allowed = [...required, 'activatedSeals', 'discoveredWalls'];
   if (!isRecord(value)
-    || !hasRequiredAllowedKeys(value, required, allowed)
+    || !required.every((key) => Object.prototype.hasOwnProperty.call(value, key))
     || !validUid(value.mapOwnerId)
     || !memberIds.has(value.mapOwnerId)
     || !integerInRange(value.itemIndex, 0, MAX_MAP_ITEMS - 1)
     || !integerInRange(value.enteredAtTurn, 1, MAX_SAFE_COUNTER)) return null;
+  if (!isRecord(value.challenge)) return null;
+
+  if (value.challenge.version === 2) {
+    if (!hasExactKeys(value, [...required, 'orientation', 'actionsTaken'])) return null;
+    const position = parsePosition(value.position, 0, DICE_WORMHOLE_BOARD_SIZE - 1);
+    const challenge = parseDiceWormholeChallenge(value.challenge);
+    if (!position || !challenge
+      || !isDiceOrientationId(value.orientation)
+      || !integerInRange(value.actionsTaken, 0, MAX_SAFE_COUNTER)) return null;
+    return {
+      mapOwnerId: value.mapOwnerId,
+      itemIndex: value.itemIndex,
+      position,
+      challenge,
+      enteredAtTurn: value.enteredAtTurn,
+      orientation: value.orientation,
+      actionsTaken: value.actionsTaken,
+    };
+  }
+
+  const allowed = [...required, 'activatedSeals', 'discoveredWalls'];
+  if (!hasRequiredAllowedKeys(value, required, allowed)) return null;
   const position = parsePosition(value.position);
   const challenge = parseProjectedWormholeChallenge(
     value.challenge,
     phase === ('end' as GamePhase),
   );
-  if (!position || !challenge) return null;
+  if (!position || !challenge || challenge.version !== 1) return null;
   const activatedSeals = Object.prototype.hasOwnProperty.call(value, 'activatedSeals')
     ? parseBooleanIndexRecord(value.activatedSeals, WORMHOLE_CHALLENGE_SEAL_COUNT)
     : null;

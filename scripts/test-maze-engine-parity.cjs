@@ -112,8 +112,12 @@ function loadTypeScript(relativePath, aliases = {}) {
 
 function loadCanonicalEngine() {
   const GameTypes = loadTypeScript('src/types/game.ts');
+  const DiceWormhole = loadTypeScript('src/lib/diceWormhole.ts', {
+    '@/types/game': GameTypes,
+  });
   const GameUtils = loadTypeScript('src/lib/gameUtils.ts', {
     '@/types/game': GameTypes,
+    '@/lib/diceWormhole': DiceWormhole,
   });
   const MazeSkills = loadTypeScript('src/lib/mazeSkills.ts');
   const GameRules = loadTypeScript('src/lib/gameRules.ts', {
@@ -124,9 +128,10 @@ function loadCanonicalEngine() {
   const GameTurn = loadTypeScript('src/lib/gameTurn.ts', {
     '@/types/game': GameTypes,
     '@/lib/gameUtils': GameUtils,
+    '@/lib/diceWormhole': DiceWormhole,
     '@/lib/mazeSkills': MazeSkills,
   });
-  return { GameTypes, GameUtils, MazeSkills, GameRules, GameTurn };
+  return { GameTypes, DiceWormhole, GameUtils, MazeSkills, GameRules, GameTurn };
 }
 
 function clone(value) {
@@ -149,6 +154,29 @@ function wallItem(type, row, col, direction = 'right', extra = {}) {
     ...extra,
   };
 }
+
+const DICE_WORMHOLE_CHALLENGE = {
+  version: 2,
+  boardSize: 4,
+  startPosition: position(0, 0),
+  endPosition: position(3, 3),
+  blockedCells: [position(1, 1), position(2, 2)],
+  initialOrientation: 0,
+  targetTop: 2,
+};
+
+const LEGACY_WORMHOLE_CHALLENGE = {
+  version: 1,
+  startPosition: position(0, 0),
+  endPosition: position(1, 0),
+  seals: [position(0, 5), position(5, 5), position(5, 0)],
+  obstacles: [
+    wall(0, 0, 'right'),
+    wall(2, 1, 'right'),
+    wall(3, 2, 'right'),
+    wall(4, 3, 'right'),
+  ],
+};
 
 function gameMap(overrides = {}) {
   return {
@@ -299,8 +327,13 @@ function deterministicFixtures() {
       verify(resolved) {
         assert.equal(resolved.outcome.effect, 'bump');
         assert.equal(resolved.outcome.moves, 1);
-        assert.equal(resolved.state.visionEffectsByPlayer.a.type, 'fire');
-        assert.equal(resolved.state.visionEffectsByPlayer.a.phantomWalls.length, 6);
+        assert.deepEqual(resolved.state.visionEffectsByPlayer.a, {
+          type: 'fire',
+          sourcePlayerId: 'b',
+          appliedAtTurn: 1,
+          expiresAtTargetMove: 5,
+        });
+        assert.equal(Object.keys(resolved.state.collisionWalls).length, 0);
       },
     },
     {
@@ -363,6 +396,198 @@ function deterministicFixtures() {
     });
   }
 
+  const fireKnowledgeState = runtimeState(gameMap({
+    obstacles: [wall(2, 2, 'left')],
+    items: [wallItem('fireWall', 2, 2, 'right')],
+  }), {
+    position: position(2, 2),
+  });
+  fireKnowledgeState.collisionWalls = {
+    actorOld: {
+      playerId: 'a',
+      position: position(1, 1),
+      direction: 'right',
+      timestamp: FIXED_NOW - 2,
+      mapOwnerId: 'b',
+    },
+    otherOld: {
+      playerId: 'other',
+      position: position(4, 4),
+      direction: 'right',
+      timestamp: FIXED_NOW - 1,
+      mapOwnerId: 'b',
+    },
+  };
+  fireKnowledgeState.revealedWallsByPlayer = {
+    a: [wall(1, 1, 'right')],
+    other: [wall(4, 4, 'right')],
+  };
+  fixtures.push({
+    name: 'fire four-action knowledge burn transcript',
+    state: fireKnowledgeState,
+    steps: [
+      { action: { type: 'move', direction: 'right' } },
+      ...Array.from({ length: 5 }, () => ({ action: { type: 'move', direction: 'left' } })),
+    ],
+    verify(run) {
+      const ignition = resolutionAt(run, 0);
+      assert.deepEqual(ignition.state.visionEffectsByPlayer.a, {
+        type: 'fire',
+        sourcePlayerId: 'b',
+        appliedAtTurn: 1,
+        expiresAtTargetMove: 5,
+      });
+      assert.deepEqual(Object.keys(ignition.state.collisionWalls), ['otherOld']);
+      assert.equal(ignition.state.revealedWallsByPlayer.a, undefined);
+      assert.deepEqual(ignition.state.revealedWallsByPlayer.other, [wall(4, 4, 'right')]);
+
+      for (let index = 1; index <= 4; index += 1) {
+        const actorCollisions = Object.values(resolutionAt(run, index).state.collisionWalls)
+          .filter((collision) => collision.playerId === 'a');
+        assert.equal(actorCollisions.length, 1, `affected fire action ${index} keeps only its new collision`);
+        assert.equal(actorCollisions[0].timestamp, FIXED_NOW + index);
+      }
+      const fifthAction = resolutionAt(run, 5);
+      assert.equal(fifthAction.state.visionEffectsByPlayer.a, undefined);
+      const permanentCollisions = Object.values(fifthAction.state.collisionWalls)
+        .filter((collision) => collision.playerId === 'a');
+      assert.equal(permanentCollisions.length, 1);
+      assert.equal(permanentCollisions[0].timestamp, FIXED_NOW + 5);
+    },
+  });
+
+  const fireSmokeState = runtimeState(gameMap({
+    obstacles: [wall(1, 0, 'right')],
+    items: [
+      wallItem('fireWall', 0, 0, 'right'),
+      { type: 'smoke', position: position(1, 0) },
+    ],
+  }));
+  fixtures.push({
+    name: 'active fire consumes smoke without truncation transcript',
+    state: fireSmokeState,
+    steps: [
+      { action: { type: 'move', direction: 'right' } },
+      { action: { type: 'move', direction: 'down' } },
+      { action: { type: 'move', direction: 'right' } },
+      { action: { type: 'move', direction: 'up' } },
+    ],
+    verify(run) {
+      const fireLedger = resolutionAt(run, 0).state.visionEffectsByPlayer.a;
+      const smokeLanding = resolutionAt(run, 1);
+      assert.equal(smokeLanding.outcome.effect, 'smoke');
+      assert.equal(smokeLanding.state.itemState.b.consumed[1], true);
+      assert.deepEqual(smokeLanding.state.visionEffectsByPlayer.a, fireLedger);
+      assert.match(smokeLanding.outcome.message, /연막.*불길.*화염 상태/u);
+      assert.equal(
+        Object.values(resolutionAt(run, 2).state.collisionWalls)
+          .filter((collision) => collision.playerId === 'a').length,
+        1
+      );
+      assert.equal(
+        Object.values(resolutionAt(run, 3).state.collisionWalls)
+          .filter((collision) => collision.playerId === 'a').length,
+        0
+      );
+      assert.deepEqual(resolutionAt(run, 3).state.visionEffectsByPlayer.a, fireLedger);
+    },
+  });
+
+  const burningLegacyWormholeState = runtimeState(gameMap({
+    items: [{
+      type: 'wormhole',
+      entrance: position(0, 1),
+      exit: position(4, 4),
+      challenge: LEGACY_WORMHOLE_CHALLENGE,
+    }],
+  }), {
+    position: position(0, 1),
+  });
+  const actorLegacyRun = {
+    mapOwnerId: 'b',
+    itemIndex: 0,
+    position: position(0, 0),
+    challenge: LEGACY_WORMHOLE_CHALLENGE,
+    enteredAtTurn: 1,
+    discoveredWalls: [wall(0, 0, 'right')],
+  };
+  const otherLegacyRun = {
+    ...clone(actorLegacyRun),
+    mapOwnerId: 'a',
+    discoveredWalls: [wall(2, 1, 'right')],
+  };
+  burningLegacyWormholeState.wormholeRunsByPlayer = {
+    a: actorLegacyRun,
+    other: otherLegacyRun,
+  };
+  burningLegacyWormholeState.visionEffectsByPlayer.a = {
+    type: 'fire',
+    sourcePlayerId: 'b',
+    appliedAtTurn: 1,
+    expiresAtTargetMove: 4,
+  };
+  fixtures.push({
+    name: 'active fire clears only actor V1 wormhole discoveries transcript',
+    state: burningLegacyWormholeState,
+    steps: [{ action: { type: 'move', direction: 'down' } }],
+    verify(run) {
+      const resolved = resolutionAt(run);
+      assert.equal(resolved.state.wormholeRunsByPlayer.a.discoveredWalls, undefined);
+      assert.deepEqual(resolved.state.wormholeRunsByPlayer.other, otherLegacyRun);
+    },
+  });
+
+  const poisonState = runtimeState(gameMap(), { position: position(2, 2) });
+  poisonState.poisonEffectsByPlayer = {
+    a: {
+      sourcePlayerId: 'b',
+      appliedAtTurn: 1,
+      expiresAtTargetMove: 4,
+      seed: 0,
+    },
+  };
+  fixtures.push({
+    name: 'poison deterministic four-direction transcript',
+    state: poisonState,
+    steps: Array.from({ length: 4 }, () => ({ action: { type: 'move', direction: 'up' } })),
+    verify(run) {
+      assert.deepEqual(
+        run.resolutions.map((resolution) => resolution?.outcome.direction),
+        ['left', 'down', 'up', 'right'],
+        'seed plus action number selects all four directions independently of the requested input'
+      );
+      run.resolutions.forEach((resolution, index) => {
+        assert.ok(resolution);
+        assert.equal(resolution.outcome.moves, index + 1);
+      });
+      assert.equal(resolutionAt(run, 3).state.poisonEffectsByPlayer.a, undefined);
+    },
+  });
+
+  const poisonBoundaryState = runtimeState(gameMap(), { position: position(0, 2) });
+  poisonBoundaryState.poisonEffectsByPlayer = {
+    a: {
+      sourcePlayerId: 'b',
+      appliedAtTurn: 1,
+      expiresAtTargetMove: 4,
+      seed: 2,
+    },
+  };
+  fixtures.push({
+    name: 'poison boundary consumes one action without collision knowledge',
+    state: poisonBoundaryState,
+    steps: [{ action: { type: 'move', direction: 'down' } }],
+    verify(run) {
+      const resolved = resolutionAt(run);
+      assert.equal(resolved.outcome.direction, 'up');
+      assert.equal(resolved.outcome.effect, 'bump');
+      assert.equal(resolved.outcome.moves, 1);
+      assert.deepEqual(resolved.outcome.position, position(0, 2));
+      assert.deepEqual(resolved.outcome.attempted, position(-1, 2));
+      assert.equal(Object.keys(resolved.state.collisionWalls).length, 0);
+    },
+  });
+
   fixtures.push(
     {
       name: 'phase wall close-open transcript',
@@ -412,6 +637,33 @@ function deterministicFixtures() {
         const resolved = resolutionAt(run);
         assert.equal(resolved.outcome.effect, 'wormhole');
         assert.deepEqual(resolved.outcome.position, position(3, 3));
+      },
+    },
+    {
+      name: 'V2 dice wormhole entry and internal roll',
+      state: runtimeState(gameMap({
+        items: [{
+          type: 'wormhole',
+          entrance: position(0, 1),
+          exit: position(4, 4),
+          challenge: DICE_WORMHOLE_CHALLENGE,
+        }],
+      })),
+      steps: [
+        { action: { type: 'move', direction: 'right' } },
+        { action: { type: 'move', direction: 'right' } },
+      ],
+      verify(run) {
+        const entered = resolutionAt(run, 0);
+        assert.equal(entered.outcome.wormholeTransition, 'entered');
+        assert.equal(entered.state.wormholeRunsByPlayer.a.challenge.version, 2);
+        assert.equal(entered.state.wormholeRunsByPlayer.a.orientation, 0);
+        assert.equal(entered.state.wormholeRunsByPlayer.a.actionsTaken, 0);
+        const rolled = resolutionAt(run, 1);
+        assert.equal(rolled.outcome.realm, 'wormhole');
+        assert.deepEqual(rolled.outcome.position, position(0, 1));
+        assert.equal(rolled.state.wormholeRunsByPlayer.a.actionsTaken, 1);
+        assert.notEqual(rolled.state.wormholeRunsByPlayer.a.orientation, 0);
       },
     },
     {
@@ -538,6 +790,24 @@ function assertCatalogParity(canonical, vendor) {
     canonical.MazeSkills.MAZE_SKILL_DEFINITIONS,
     'maze skill definitions differ between browser and Functions vendor engines'
   );
+  for (const key of [
+    'DICE_WORMHOLE_BOARD_SIZE',
+    'DICE_WORMHOLE_MIN_BLOCKED_CELLS',
+    'DICE_WORMHOLE_MAX_BLOCKED_CELLS',
+    'DICE_WORMHOLE_MIN_STEPS',
+    'DICE_WORMHOLE_MAX_STEPS',
+    'DICE_ORIENTATION_COUNT',
+    'DICE_WORMHOLE_DIRECTIONS',
+    'DICE_ORIENTATIONS',
+    'DICE_ORIENTATION_TRANSITIONS',
+    'DICE_WORMHOLE_FALLBACK_CHALLENGE',
+  ]) {
+    assert.deepEqual(
+      vendor.DiceWormhole[key],
+      canonical.DiceWormhole[key],
+      `DiceWormhole.${key} differs between browser and Functions vendor engines`
+    );
+  }
 }
 
 function assertSettlementParity(canonical, vendor) {

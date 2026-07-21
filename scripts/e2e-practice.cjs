@@ -10,6 +10,10 @@ const path = require('path');
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 const OUT = path.join(__dirname, '..', 'e2e-artifacts');
 const EXPECTED_MAZE_TOON_VERSION = 'inked-toy-v3';
+const EXPECTED_MAZE_ASSET_VERSION = 'blender-cartoon-v1';
+const EXPECTED_MAZE_ASSET_CATALOG_COUNT = 29;
+const EXPECTED_MAIN_ASSET_COUNT = 25;
+const EXPECTED_WORMHOLE_ASSET_COUNT = 7;
 fs.mkdirSync(OUT, { recursive: true });
 
 function ok(message) {
@@ -204,6 +208,9 @@ async function expectNearestWallPointerRouting(page) {
   if ((await board.getAttribute('data-wall-pointer-routing')) !== 'nearest') {
     throw new Error('설정 보드가 가장 가까운 벽선 클릭 판정을 사용하지 않음');
   }
+  if ((await board.getAttribute('data-wall-corner-routing')) !== 'four-way') {
+    throw new Error('설정 보드가 무사각 4방향 모서리 판정을 사용하지 않음');
+  }
 
   const cell = await page.locator('[data-cell="2,2"]').boundingBox();
   if (!cell) throw new Error('벽 클릭 판정 기준 셀을 찾지 못함');
@@ -260,7 +267,152 @@ async function expectNearestWallPointerRouting(page) {
     }
   }
 
-  ok('모바일 겹침 좌표도 가장 가까운 벽선에 정확히 1회 설치');
+  const intersection = await page.locator('[data-wall-intersection="5,5"]').boundingBox();
+  if (!intersection) throw new Error('4방향 모서리 판정 기준 교차점을 찾지 못함');
+  const center = {
+    x: intersection.x + intersection.width / 2,
+    y: intersection.y + intersection.height / 2,
+  };
+  const inset = Math.max(1, Math.min(2, intersection.width / 4));
+  const cornerCases = [
+    {
+      label: '모서리 위 영역',
+      point: { x: center.x, y: intersection.y + inset },
+      expected: '2,2:right',
+    },
+    {
+      label: '모서리 오른쪽 영역',
+      point: { x: intersection.x + intersection.width - inset, y: center.y },
+      expected: '2,3:down',
+    },
+    {
+      label: '모서리 아래 영역',
+      point: { x: center.x, y: intersection.y + intersection.height - inset },
+      expected: '3,2:right',
+    },
+    {
+      label: '모서리 왼쪽 영역',
+      point: { x: intersection.x + inset, y: center.y },
+      expected: '2,2:down',
+    },
+    {
+      label: '모서리 정확한 중심',
+      point: center,
+      expected: '2,2:right',
+    },
+  ];
+
+  for (const testCase of cornerCases) {
+    await page.mouse.move(0, 0);
+    const beforeBudget = await usedBudget();
+    const beforeOccupied = await page.locator('[data-wall-segment][data-wall-occupied=true]').count();
+    await page.mouse.move(testCase.point.x, testCase.point.y);
+    await page.mouse.down();
+    await page.locator(
+      `[data-wall-segment="${testCase.expected}"][data-wall-pointer-target=true]`
+    ).waitFor();
+    if (await usedBudget() !== beforeBudget) {
+      throw new Error(`${testCase.label} pointerdown만으로 벽 예산이 바뀜`);
+    }
+    await page.mouse.up();
+    await page.waitForFunction(
+      (segment) => document.querySelector(`[data-wall-segment="${segment}"]`)
+        ?.getAttribute('data-wall-occupied') === 'true',
+      testCase.expected
+    );
+    const afterOccupied = await page.locator('[data-wall-segment][data-wall-occupied=true]').count();
+    if (await usedBudget() !== beforeBudget + 1 || afterOccupied !== beforeOccupied + 1) {
+      throw new Error(`${testCase.label}에서 벽이 정확히 1회 설치되지 않음`);
+    }
+    await page.getByRole('button', { name: '실행 취소', exact: true }).click();
+    await page.waitForFunction(
+      (segment) => document.querySelector(`[data-wall-segment="${segment}"]`)
+        ?.getAttribute('data-wall-occupied') === 'false',
+      testCase.expected
+    );
+  }
+
+  await page.mouse.move(0, 0);
+  const lockedBeforeBudget = await usedBudget();
+  const lockedTarget = cornerCases[0];
+  const releasePoint = cornerCases[1].point;
+  await page.mouse.move(lockedTarget.point.x, lockedTarget.point.y);
+  await page.mouse.down();
+  await page.locator('[data-wall-segment="2,2:right"][data-wall-pointer-target=true]').waitFor();
+  await page.mouse.move(releasePoint.x, releasePoint.y);
+  if (await page.locator('[data-wall-segment="2,2:right"][data-wall-pointer-target=true]').count() !== 1) {
+    throw new Error('pointerdown 뒤 손가락 이동 중 대상 벽 고정이 풀림');
+  }
+  await page.mouse.up();
+  await page.waitForFunction(
+    () => document.querySelector('[data-wall-segment="2,2:right"]')
+      ?.getAttribute('data-wall-occupied') === 'true'
+  );
+  if (
+    await usedBudget() !== lockedBeforeBudget + 1 ||
+    await page.locator('[data-wall-segment="2,3:down"]').getAttribute('data-wall-occupied') !== 'false'
+  ) {
+    throw new Error('pointerdown 대상 대신 pointerup 위치의 벽이 설치됨');
+  }
+  await page.getByRole('button', { name: '실행 취소', exact: true }).click();
+
+  ok('모바일 겹침·모서리 4방향·정확한 중심도 pointerdown 대상에 정확히 1회 설치');
+}
+
+async function setupSparseMapTest(page) {
+  await page.locator('[data-cell="0,0"]').click();
+  await page.locator('[data-cell="0,2"]').click();
+  await page.setViewportSize({ width: 360, height: 640 });
+  await page.waitForTimeout(150);
+
+  const completeButton = page.getByRole('button', { name: '완료', exact: true });
+  if (!(await completeButton.isEnabled())) {
+    throw new Error('내 맵 테스트에서 유효한 0/24 맵의 완료 버튼이 비활성화됨');
+  }
+  if (await page.locator('[data-testid=full-budget-required]').count() !== 0) {
+    throw new Error('내 맵 테스트에 24/24 강제 안내가 노출됨');
+  }
+
+  for (const tab of ['함정', '특수벽']) {
+    await page.getByRole('tab', { name: tab }).click();
+    const compact = await page.locator('[data-testid=setup-palette-options]').evaluate((element) => ({
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      buttonCount: element.querySelectorAll('button').length,
+    }));
+    if (compact.buttonCount === 0 || compact.scrollWidth > compact.clientWidth + 1) {
+      throw new Error(`${tab} 선택기가 모바일 폭에서 다시 스크롤됨: ${JSON.stringify(compact)}`);
+    }
+  }
+
+  await page.getByRole('button', { name: /화염벽/ }).click();
+  await page.getByRole('button', { name: '1행 1열 right 벽', exact: true }).click();
+  const budget = page.locator('[data-testid=setup-budget]');
+  if (!(await budget.innerText()).includes('1/24')) {
+    throw new Error(`부분 예산 맵이 1/24로 유지되지 않음: ${await budget.innerText()}`);
+  }
+  if ((await budget.getAttribute('data-budget-complete')) !== 'false') {
+    throw new Error('부분 예산 맵이 전체 예산 완료로 잘못 표시됨');
+  }
+  if (!(await completeButton.isEnabled())) {
+    throw new Error('내 맵 테스트에서 유효한 1/24 맵의 완료 버튼이 비활성화됨');
+  }
+
+  const scrollContract = await page.locator('[data-testid=setup-controls]').evaluate((controls) => ({
+    controlsScrollHeight: controls.scrollHeight,
+    controlsClientHeight: controls.clientHeight,
+    pageScrollHeight: document.documentElement.scrollHeight,
+    pageClientHeight: document.documentElement.clientHeight,
+  }));
+  if (
+    scrollContract.controlsScrollHeight > scrollContract.controlsClientHeight + 1 ||
+    scrollContract.pageScrollHeight > scrollContract.pageClientHeight + 1
+  ) {
+    throw new Error(`압축 팔레트가 세로 스크롤을 만듦: ${JSON.stringify(scrollContract)}`);
+  }
+
+  await completeButton.click();
+  ok('1/24 부분 예산 맵 테스트 · 모바일 팔레트 무스크롤');
 }
 
 async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyHistory = false } = {}) {
@@ -295,8 +447,10 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
   await page.getByRole('button', { name: /화염벽/ }).click();
   const wallGuideStatus = page.locator('[data-testid=wall-placement-guide][data-selected-wall=fireWall]');
   const fireGuide = page.locator('[data-maze-board-grid] [data-wall-guide=fireWall]');
+  const fireActionPreview = page.locator('[data-testid=wall-action-preview][data-preview-wall=fireWall]');
   await wallGuideStatus.waitFor();
   await fireGuide.waitFor();
+  await fireActionPreview.waitFor();
   if (verifyPreview) {
     if (await page.locator('[data-testid=wall-effect-preview]').count() !== 0) {
       throw new Error('보드를 가리는 기존 벽 미리보기 팝업이 남아 있음');
@@ -328,8 +482,112 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
     if (await page.locator('[data-testid=setup-budget]').innerText() !== budgetBeforeGuide) {
       throw new Error('벽 가이드만 표시했는데 벽 예산이 변경됨');
     }
+    const actionContract = await fireActionPreview.evaluate((element) => {
+      const board = element.closest('[data-maze-board-grid]');
+      const segment = element.getAttribute('data-preview-segment');
+      const slot = segment
+        ? board?.querySelector(`[data-wall-segment="${segment}"]`)
+        : null;
+      const originCell = element.closest('[data-cell]');
+      const destination = element.getAttribute('data-preview-to');
+      const destinationCell = destination
+        ? board?.querySelector(`[data-cell="${destination}"]`)
+        : null;
+      const avatar = element.querySelector('[data-shadow-clone=origin]');
+      const rect = element.getBoundingClientRect();
+      const boardRect = board?.getBoundingClientRect();
+      return {
+        inBoard: !!board,
+        insideBoard: !!boardRect && rect.left >= boardRect.left && rect.top >= boardRect.top &&
+          rect.right <= boardRect.right && rect.bottom <= boardRect.bottom,
+        safe: element.getAttribute('data-preview-safe'),
+        interactive: element.getAttribute('data-preview-interactive'),
+        pointerEvents: getComputedStyle(element).pointerEvents,
+        ariaHidden: element.getAttribute('aria-hidden'),
+        segment,
+        guideSegment: board?.querySelector('[data-wall-guide=fireWall]')
+          ?.closest('[data-wall-segment]')?.getAttribute('data-wall-segment'),
+        occupied: slot?.getAttribute('data-wall-occupied'),
+        origin: originCell?.getAttribute('data-cell'),
+        destination: destinationCell?.getAttribute('data-cell'),
+        originHasMarker: !!originCell?.querySelector('[data-map-item]') ||
+          ['S', 'E'].includes(originCell?.textContent?.trim() || ''),
+        destinationHasMarker: !!destinationCell?.querySelector('[data-map-item]') ||
+          ['S', 'E'].includes(destinationCell?.textContent?.trim() || ''),
+        animation: avatar ? getComputedStyle(avatar).animationName : '',
+        ashWalls: element.querySelectorAll('[data-preview-ash-wall]').length,
+      };
+    });
+    if (
+      !actionContract.inBoard || !actionContract.insideBoard ||
+      actionContract.safe !== 'true' || actionContract.interactive !== 'false' ||
+      actionContract.pointerEvents !== 'none' || actionContract.ariaHidden !== 'true' ||
+      !actionContract.segment || actionContract.segment !== actionContract.guideSegment ||
+      actionContract.occupied !== 'false' || !actionContract.origin || !actionContract.destination ||
+      actionContract.originHasMarker || actionContract.destinationHasMarker ||
+      !actionContract.animation.includes('wall-shadow-fire-map') || actionContract.ashWalls !== 3
+    ) {
+      throw new Error(`화염벽 그림자 분신 계약 오류: ${JSON.stringify(actionContract)}`);
+    }
+    await page.waitForTimeout(250);
+    if (await page.locator('[data-testid=setup-budget]').innerText() !== budgetBeforeGuide) {
+      throw new Error('화염벽 그림자 분신 애니메이션이 벽 예산을 변경함');
+    }
+
+    await page.getByRole('button', { name: /독벽/ }).click();
+    const poisonPreview = page.locator('[data-testid=wall-action-preview][data-preview-wall=poisonWall]');
+    await poisonPreview.waitFor();
+    const poisonContract = await poisonPreview.evaluate((element) => ({
+      pointerEvents: getComputedStyle(element).pointerEvents,
+      input: element.querySelector('[data-preview-input-direction]')?.getAttribute('data-preview-input-direction'),
+      result: element.querySelector('[data-preview-result-direction]')?.getAttribute('data-preview-result-direction'),
+      effect: element.querySelector('[data-preview-effect=random-four-way]')?.getAttribute('data-preview-effect'),
+      destinationAnimation: element.closest('[data-maze-board-grid]')
+        ?.querySelector('[data-wall-action-preview-companion=poisonWall] [data-shadow-clone=destination]')
+        ? getComputedStyle(element.closest('[data-maze-board-grid]')
+          .querySelector('[data-wall-action-preview-companion=poisonWall] [data-shadow-clone=destination]')).animationName
+        : '',
+    }));
+    if (
+      poisonContract.pointerEvents !== 'none' || !poisonContract.input || !poisonContract.result ||
+      poisonContract.effect !== 'random-four-way' ||
+      !poisonContract.destinationAnimation.includes('wall-shadow-poison-random')
+    ) {
+      throw new Error(`독벽 100% 방향 전환 분신 계약 오류: ${JSON.stringify(poisonContract)}`);
+    }
+
+    await page.getByRole('tab', { name: '함정' }).click();
+    await page.getByRole('button', { name: /웜홀/ }).click();
+    const wormholePreview = page.locator('[data-testid=wall-action-preview][data-preview-wall=wormhole]');
+    await wormholePreview.waitFor();
+    const wormholeContract = await wormholePreview.evaluate((element) => ({
+      kind: element.getAttribute('data-preview-kind'),
+      segment: element.getAttribute('data-preview-segment'),
+      pointerEvents: getComputedStyle(element).pointerEvents,
+      portal: element.querySelector('[data-preview-effect=dice-wormhole]')?.getAttribute('data-preview-effect'),
+      dice: element.closest('[data-maze-board-grid]')
+        ?.querySelector('[data-wall-action-preview-companion=wormhole] [data-preview-effect=dice-roll]')
+        ?.getAttribute('data-preview-effect'),
+      from: element.getAttribute('data-preview-from'),
+      to: element.getAttribute('data-preview-to'),
+    }));
+    if (
+      wormholeContract.kind !== 'wormhole' || wormholeContract.segment !== null ||
+      wormholeContract.pointerEvents !== 'none' || wormholeContract.portal !== 'dice-wormhole' ||
+      wormholeContract.dice !== 'dice-roll' || !wormholeContract.from || !wormholeContract.to ||
+      wormholeContract.from === wormholeContract.to
+    ) {
+      throw new Error(`웜홀 주사위 그림자 분신 계약 오류: ${JSON.stringify(wormholeContract)}`);
+    }
+    if (await page.locator('[data-testid=setup-budget]').innerText() !== budgetBeforeGuide) {
+      throw new Error('독벽/웜홀 그림자 분신만 확인했는데 벽 예산이 변경됨');
+    }
+    await page.getByRole('tab', { name: '특수벽' }).click();
+    await page.getByRole('button', { name: /화염벽/ }).click();
+    await fireActionPreview.waitFor();
+
     await page.screenshot({ path: path.join(OUT, 'practice-wall-guide-galaxy-s21.png') });
-    ok('실제 보드 내 빈 선분 벽 고스트 · 예산 무변경');
+    ok('실제 보드 내 화염/독/웜홀 그림자 분신 · 안전한 빈 위치 · 예산 무변경');
   }
   await page.getByRole('button', { name: '1행 1열 right 벽', exact: true }).click();
 
@@ -419,7 +677,12 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
       windLayout.controls.left < 0 || windLayout.controls.right > 360 ||
       windLayout.description.scrollWidth > windLayout.description.clientWidth + 1 ||
       windLayout.description.scrollHeight > windLayout.description.clientHeight + 1 ||
-      windLayout.description.bottom > windLayout.controls.top
+      (
+        Math.min(windLayout.description.right, windLayout.controls.right) -
+          Math.max(windLayout.description.left, windLayout.controls.left) > 1 &&
+        Math.min(windLayout.description.bottom, windLayout.controls.bottom) -
+          Math.max(windLayout.description.top, windLayout.controls.top) > 1
+      )
     ) {
       throw new Error(`Galaxy S21 바람벽 설명/방향 배치 오류: ${JSON.stringify(windLayout)}`);
     }
@@ -643,19 +906,36 @@ async function expectNonBlankCanvases(page, expected) {
 }
 
 async function expectMobileToonCanvases(page, label, expected) {
-  await page.waitForFunction(({ expectedVersion, count }) => {
+  await page.waitForFunction(({
+    expectedVersion,
+    expectedAssetVersion,
+    expectedCatalogCount,
+    expectedMainAssetCount,
+    count,
+  }) => {
     const canvases = [...document.querySelectorAll('[data-player-board] canvas')];
     if (canvases.length !== count) return false;
     return canvases.every((canvas) => {
       const dpr = Number(canvas.getAttribute('data-maze-render-dpr'));
       const materialCount = Number(canvas.getAttribute('data-maze-toon-materials'));
       return canvas.getAttribute('data-maze-toon-version') === expectedVersion &&
+        canvas.getAttribute('data-maze-asset-state') === 'ready' &&
+        canvas.getAttribute('data-maze-asset-version') === expectedAssetVersion &&
+        Number(canvas.getAttribute('data-maze-asset-count')) === expectedMainAssetCount &&
+        Number(canvas.getAttribute('data-maze-asset-catalog-count')) === expectedCatalogCount &&
+        canvas.getAttribute('data-maze-asset-set') === 'main' &&
         canvas.getAttribute('data-maze-camera') === 'fixed-orthographic' &&
         canvas.getAttribute('data-maze-render-quality') === 'compact' &&
         Number.isFinite(materialCount) && materialCount > 0 &&
         Number.isFinite(dpr) && dpr >= 1 && dpr <= 1.5;
     });
-  }, { expectedVersion: EXPECTED_MAZE_TOON_VERSION, count: expected }, { timeout: 15000 });
+  }, {
+    expectedVersion: EXPECTED_MAZE_TOON_VERSION,
+    expectedAssetVersion: EXPECTED_MAZE_ASSET_VERSION,
+    expectedCatalogCount: EXPECTED_MAZE_ASSET_CATALOG_COUNT,
+    expectedMainAssetCount: EXPECTED_MAIN_ASSET_COUNT,
+    count: expected,
+  }, { timeout: 15000 });
 
   const contracts = await page.locator('[data-player-board] canvas').evaluateAll((canvases) => canvases.map((canvas) => ({
     version: canvas.getAttribute('data-maze-toon-version'),
@@ -663,9 +943,19 @@ async function expectMobileToonCanvases(page, label, expected) {
     quality: canvas.getAttribute('data-maze-render-quality'),
     materials: Number(canvas.getAttribute('data-maze-toon-materials')),
     camera: canvas.getAttribute('data-maze-camera'),
+    assetState: canvas.getAttribute('data-maze-asset-state'),
+    assetVersion: canvas.getAttribute('data-maze-asset-version'),
+    assetCount: Number(canvas.getAttribute('data-maze-asset-count')),
+    assetCatalogCount: Number(canvas.getAttribute('data-maze-asset-catalog-count')),
+    assetSet: canvas.getAttribute('data-maze-asset-set'),
   })));
   if (contracts.length !== expected || contracts.some((contract) =>
     contract.version !== EXPECTED_MAZE_TOON_VERSION ||
+    contract.assetState !== 'ready' ||
+    contract.assetVersion !== EXPECTED_MAZE_ASSET_VERSION ||
+    contract.assetCount !== EXPECTED_MAIN_ASSET_COUNT ||
+    contract.assetCatalogCount !== EXPECTED_MAZE_ASSET_CATALOG_COUNT ||
+    contract.assetSet !== 'main' ||
     contract.quality !== 'compact' ||
     contract.camera !== 'fixed-orthographic' ||
     !(contract.materials > 0) ||
@@ -841,10 +1131,10 @@ async function expectMobileToonCanvases(page, label, expected) {
     );
     ok('24/24 직접 만든 맵 + AI 2명');
 
-    console.log('STEP 6: 내 맵 단독 테스트와 연속 턴');
+    console.log('STEP 6: 부분 예산 내 맵 단독 테스트와 연속 턴');
     await page.getByRole('button', { name: '연습 설정' }).click();
     await page.getByRole('button', { name: '내 맵 테스트' }).click();
-    await setupFullBudgetPracticeMap(page);
+    await setupSparseMapTest(page);
     await expectBoardCount(page, 1);
     await expectAllMobileBoards(page, 1, '내 맵 단독 테스트');
     await expectGameplay3DOnly(page, '내 맵 단독 테스트', 1);
@@ -863,6 +1153,23 @@ async function expectMobileToonCanvases(page, label, expected) {
     ) {
       throw new Error('내 맵 테스트 제작자 시점에서 특수벽/장애물 공개 권한이 적용되지 않음');
     }
+    const perspectiveToggle = page.getByTestId('map-test-perspective-toggle');
+    await perspectiveToggle.getByRole('button', { name: '상대 시점' }).click();
+    if (
+      (await match.getAttribute('data-map-test-perspective')) !== 'opponent' ||
+      (await ownBoard.getAttribute('data-map-secrets-visible')) !== 'false' ||
+      (await ownBoard.getAttribute('data-obstacles-revealed')) !== 'false'
+    ) {
+      throw new Error('내 맵 테스트 상대 시점에서 숨은 특수벽/장애물이 가려지지 않음');
+    }
+    await perspectiveToggle.getByRole('button', { name: '제작자 시점' }).click();
+    if (
+      (await match.getAttribute('data-map-test-perspective')) !== 'creator' ||
+      (await ownBoard.getAttribute('data-map-secrets-visible')) !== 'true' ||
+      (await ownBoard.getAttribute('data-obstacles-revealed')) !== 'true'
+    ) {
+      throw new Error('내 맵 테스트 제작자 시점으로 다시 전환되지 않음');
+    }
     await expectCrossDpad(page, 'practice-mobile-direction-pad', '[data-player-board="practice-user"]');
     const dpad = page.locator('[data-testid=practice-mobile-direction-pad]');
     await dpad.getByRole('button', { name: '오른쪽으로 이동' }).click();
@@ -880,6 +1187,164 @@ async function expectMobileToonCanvases(page, label, expected) {
       return Number(text.match(/턴:\s*(\d+)/)?.[1] || 0) === 2;
     });
     ok('화염벽 추가 턴 페널티 없이 1행동 처리 · 제작자 시점 연속 테스트');
+
+    console.log('STEP 7: 웜홀 흡입 전환 · 목표칸 주사위 눈 · 6면 주사위 · 무힌트');
+    await page.getByRole('button', { name: '현재 맵 수정' }).click();
+    await page.locator('[data-testid=game-setup-layout]').waitFor();
+    await page.getByRole('button', { name: '화염벽 제거' }).click();
+    await page.getByRole('button', { name: '6행 5열 right 벽', exact: true }).click();
+    await page.getByRole('tab', { name: '함정' }).click();
+    await page.getByRole('button', { name: /웜홀 선택/ }).click();
+    await page.locator('[data-cell="1,0"]').click();
+    const oneOpenExit = page.locator('[data-cell="5,5"][data-valid-item-target="true"]');
+    await oneOpenExit.waitFor();
+    await oneOpenExit.click();
+    await page.waitForFunction(() =>
+      document.querySelector('[data-testid=setup-budget]')?.textContent?.includes('8/24')
+    );
+    await page.getByRole('button', { name: '완료', exact: true }).click();
+    await page.locator('[data-testid=practice-match]').waitFor();
+
+    await page.evaluate(() => {
+      const down = [...document.querySelectorAll('button')].find(
+        (button) => button.getAttribute('aria-label') === '아래로 이동'
+      );
+      down?.click();
+    });
+    const transition = page.locator('[data-testid=wormhole-realm-transition]');
+    await transition.waitFor({ state: 'attached' });
+    const realmStage = page.locator('[data-testid=live-board-realm-stage]');
+    if (
+      (await realmStage.getAttribute('data-displayed-realm')) !== 'main' ||
+      (await realmStage.getAttribute('data-realm-transition')) !== 'entering' ||
+      await realmStage.locator('canvas').count() !== 1 ||
+      await realmStage.locator('[data-testid=dice-wormhole-board]').count() !== 0
+    ) {
+      throw new Error('웜홀 흡입 전에 외부 보드가 유지되지 않음');
+    }
+    const diceRoom = page.locator('[data-testid=dice-wormhole-board]');
+    await diceRoom.waitFor();
+    await diceRoom.locator('canvas[data-maze-asset-state=ready]').waitFor({ timeout: 30000 });
+    await expectNonBlankCanvases(page, 1);
+    const diceContract = await diceRoom.evaluate((room) => {
+      const piece = room.querySelector('[data-dice-piece=true]');
+      const faces = [...room.querySelectorAll('[data-dice-face]')];
+      const canvas = room.querySelector('canvas');
+      return {
+        displayedRealm: room.closest('[data-testid=live-board-realm-stage]')
+          ?.getAttribute('data-displayed-realm'),
+        transitionElapsedMs: Number(room.closest('[data-testid=live-board-realm-stage]')
+          ?.getAttribute('data-realm-transition-elapsed-ms')),
+        faceCount: faces.length,
+        sides: faces.map((face) => face.getAttribute('data-dice-face')).sort(),
+        declaredFaceCount: piece?.querySelector('[data-dice-face-count]')
+          ?.getAttribute('data-dice-face-count'),
+        hint: room.getAttribute('data-dice-hint'),
+        hintElementCount: room.querySelectorAll('[data-dice-hint-direction]').length,
+        hintTextCount: [...room.querySelectorAll('span')]
+          .filter((span) => span.textContent?.trim().startsWith('힌트')).length,
+        canvasCount: room.querySelectorAll('canvas').length,
+        assetState: canvas?.getAttribute('data-maze-asset-state'),
+        assetVersion: canvas?.getAttribute('data-maze-asset-version'),
+        assetCount: Number(canvas?.getAttribute('data-maze-asset-count')),
+        assetCatalogCount: Number(canvas?.getAttribute('data-maze-asset-catalog-count')),
+        assetSet: canvas?.getAttribute('data-maze-asset-set'),
+        boardRealm: canvas?.getAttribute('data-board-realm'),
+        camera: canvas?.getAttribute('data-maze-camera'),
+        cameraElevation: canvas?.getAttribute('data-maze-camera-elevation'),
+        toonVersion: canvas?.getAttribute('data-maze-toon-version'),
+        toonMaterials: Number(canvas?.getAttribute('data-maze-toon-materials')),
+        faceCount3d: canvas?.getAttribute('data-dice-face-count'),
+        target: room.getAttribute('data-dice-target'),
+        targetFloorFace: canvas?.getAttribute('data-target-floor-face'),
+      };
+    });
+    if (
+      diceContract.displayedRealm !== 'wormhole' ||
+      diceContract.transitionElapsedMs < 850 ||
+      diceContract.faceCount !== 6 ||
+      diceContract.declaredFaceCount !== '6' ||
+      diceContract.sides.join(',') !== 'back,bottom,front,left,right,top' ||
+      diceContract.hint !== 'none' ||
+      diceContract.hintElementCount !== 0 ||
+      diceContract.hintTextCount !== 0 ||
+      diceContract.canvasCount !== 1 ||
+      diceContract.assetState !== 'ready' ||
+      diceContract.assetVersion !== EXPECTED_MAZE_ASSET_VERSION ||
+      diceContract.assetCount !== EXPECTED_WORMHOLE_ASSET_COUNT ||
+      diceContract.assetCatalogCount !== EXPECTED_MAZE_ASSET_CATALOG_COUNT ||
+      diceContract.assetSet !== 'wormhole' ||
+      diceContract.boardRealm !== 'wormhole' ||
+      diceContract.camera !== 'fixed-orthographic' ||
+      diceContract.cameraElevation !== '59' ||
+      diceContract.toonVersion !== EXPECTED_MAZE_TOON_VERSION ||
+      !(diceContract.toonMaterials > 0) ||
+      diceContract.faceCount3d !== '6' ||
+      !diceContract.target ||
+      diceContract.targetFloorFace !== diceContract.target
+    ) {
+      throw new Error(`웜홀 주사위/무힌트 계약 오류: ${JSON.stringify(diceContract)}`);
+    }
+
+    const requestedRoll = await page.evaluate(() => {
+      const room = document.querySelector('[data-testid=dice-wormhole-board]');
+      const piece = room?.querySelector('[data-dice-piece=true]');
+      const cell = piece?.closest('[data-dice-cell]');
+      if (!cell) return null;
+      const [row, col] = cell.getAttribute('data-dice-cell').split(',').map(Number);
+      const blocked = new Set(
+        [...room.querySelectorAll('[data-dice-blocked=true]')]
+          .map((node) => node.getAttribute('data-dice-cell'))
+      );
+      const candidates = [
+        { direction: 'up', label: '위로 이동', row: row - 1, col },
+        { direction: 'right', label: '오른쪽으로 이동', row, col: col + 1 },
+        { direction: 'down', label: '아래로 이동', row: row + 1, col },
+        { direction: 'left', label: '왼쪽으로 이동', row, col: col - 1 },
+      ];
+      const candidate = candidates.find((entry) =>
+        entry.row >= 0 && entry.row < 4 && entry.col >= 0 && entry.col < 4 &&
+        !blocked.has(`${entry.row},${entry.col}`)
+      );
+      const button = candidate
+        ? [...document.querySelectorAll('button')].find(
+            (node) => node.getAttribute('aria-label') === candidate.label
+          )
+        : null;
+      button?.click();
+      return candidate?.direction || null;
+    });
+    if (!requestedRoll) throw new Error('주사위 굴림용 이동 가능한 방향을 찾지 못함');
+    await page.waitForFunction(() =>
+      document.querySelector('[data-dice-piece=true]')?.getAttribute('data-roll-direction') !== 'idle'
+    );
+    await page.waitForFunction(() =>
+      document.querySelector('[data-testid=dice-wormhole-board] canvas')
+        ?.getAttribute('data-dice-animation') === 'roll'
+    );
+    const rollAnimation = await diceRoom.evaluate((room) => {
+      const piece = room.querySelector('[data-dice-piece=true]');
+      const canvas = room.querySelector('canvas');
+      return {
+        direction: piece?.getAttribute('data-roll-direction'),
+        piece: piece ? getComputedStyle(piece).animationName : '',
+        cube: piece ? getComputedStyle(piece.querySelector('.dice-wormhole-cube')).animationName : '',
+        canvasAnimation: canvas?.getAttribute('data-dice-animation'),
+        canvasDirection: canvas?.getAttribute('data-dice-roll-direction'),
+      };
+    });
+    if (
+      rollAnimation.direction !== requestedRoll ||
+      !rollAnimation.piece.includes('dice-wormhole-step') ||
+      !rollAnimation.cube.includes(`dice-wormhole-cube-roll-${requestedRoll}`) ||
+      rollAnimation.canvasAnimation !== 'roll' ||
+      rollAnimation.canvasDirection !== requestedRoll
+    ) {
+      throw new Error(`주사위 방향별 굴림 애니메이션 오류: ${JSON.stringify(rollAnimation)}`);
+    }
+    await page.waitForTimeout(700);
+    await page.screenshot({ path: path.join(OUT, 'practice-dice-wormhole-six-face.png') });
+    ok('외부 보드 흡입 후 내부 전환 · 목표칸 주사위 눈 · 닫힌 6면 굴림 · 힌트 없음');
 
     if (errors.length > 0) throw new Error(`브라우저 오류: ${errors.join(' | ')}`);
     console.log('PASS: AI 연습 대전 E2E');

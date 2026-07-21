@@ -276,12 +276,18 @@ export default function AuthorityGameRoom({ roomId, userId }: AuthorityGameRoomP
     };
   }, [offlineTurnCandidate]);
 
-  const visibleOfflineTurnNotice = offlineTurnCandidate
-    && offlineTurnNotice?.identity === offlineTurnCandidate.identity
-    ? offlineTurnNotice.message
-    : offlineTurnNotice?.persistent && activeView?.gameState.phase === 'play'
+  // 마지막 미완주자는 서버 호출 없이 현재 canonical/presence 상태만으로
+  // 결정된다. effect가 별도 notice state를 갱신할 때까지 기다리지 않고 바로
+  // 렌더해, 접속 종료 직후 안내가 한 프레임 누락되는 경합을 없앤다.
+  const finalActiveRunnerNotice = offlineTurnCandidate?.isFinalActiveRunner
+    ? `${offlineTurnCandidate.targetName}님이 마지막 미완주 플레이어예요. 턴을 넘기지 않고 재접속을 기다립니다.`
+    : null;
+  const visibleOfflineTurnNotice = finalActiveRunnerNotice
+    ?? (offlineTurnCandidate && offlineTurnNotice?.identity === offlineTurnCandidate.identity
       ? offlineTurnNotice.message
-      : null;
+      : offlineTurnNotice?.persistent && activeView?.gameState.phase === 'play'
+        ? offlineTurnNotice.message
+        : null);
 
   if (isLoading || (!publicView && !viewError)) {
     return (

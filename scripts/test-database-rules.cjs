@@ -35,7 +35,11 @@ function loadTypeScript(relativePath, aliases = {}) {
 
 const types = loadTypeScript('src/types/game.ts');
 const mazeSkills = loadTypeScript('src/lib/mazeSkills.ts');
-const utils = loadTypeScript('src/lib/gameUtils.ts', { '@/types/game': types });
+const diceWormhole = loadTypeScript('src/lib/diceWormhole.ts', { '@/types/game': types });
+const utils = loadTypeScript('src/lib/gameUtils.ts', {
+  '@/types/game': types,
+  '@/lib/diceWormhole': diceWormhole,
+});
 const gameRules = loadTypeScript('src/lib/gameRules.ts', {
   '@/types/game': types,
   '@/lib/gameUtils': utils,
@@ -140,26 +144,7 @@ function validMap(skillLoadout = 'scoutPulse') {
 }
 
 function validWormholeChallenge() {
-  return {
-    version: 1,
-    startPosition: { row: 0, col: 0 },
-    endPosition: { row: 2, col: 2 },
-    seals: [
-      { row: 0, col: 5 },
-      { row: 5, col: 5 },
-      { row: 5, col: 0 },
-    ],
-    obstacles: [
-      { position: { row: 0, col: 1 }, direction: 'down' },
-      { position: { row: 0, col: 2 }, direction: 'down' },
-      { position: { row: 1, col: 3 }, direction: 'right' },
-      { position: { row: 2, col: 3 }, direction: 'right' },
-      { position: { row: 3, col: 1 }, direction: 'right' },
-      { position: { row: 4, col: 1 }, direction: 'right' },
-      { position: { row: 4, col: 3 }, direction: 'down' },
-      { position: { row: 4, col: 4 }, direction: 'down' },
-    ],
-  };
+  return clone(diceWormhole.DICE_WORMHOLE_FALLBACK_CHALLENGE);
 }
 
 function validWormholeItem() {
@@ -179,6 +164,8 @@ function validWormholeRun(mapOwnerId, enteredAtTurn = 1) {
     position: { ...challenge.startPosition },
     challenge,
     enteredAtTurn,
+    orientation: challenge.initialOrientation,
+    actionsTaken: 0,
   };
 }
 
@@ -188,10 +175,6 @@ function validFireVisionEffect(sourcePlayerId, appliedAtTurn = 1) {
     sourcePlayerId,
     appliedAtTurn,
     expiresAtTargetMove: 2,
-    phantomWalls: [
-      { position: { row: 1, col: 1 }, direction: 'right' },
-      { position: { row: 2, col: 2 }, direction: 'down' },
-    ],
   };
 }
 
@@ -279,6 +262,11 @@ async function main() {
     userProfileRules.photoURL['.validate'],
     /https:\/\/lh3\.googleusercontent\.com/
   );
+  assert.match(
+    rulesDocument.rules.rooms.$roomId.ruleSnapshot.itemCosts.poisonWall['.validate'],
+    /newData\.val\(\) === 3/,
+    'database rules pin poison wall to cost 3'
+  );
 
   const [owner, outsider, drawTarget] = await Promise.all([
     signUp('rules-owner'),
@@ -306,6 +294,17 @@ async function main() {
     )
   );
   const canonical = gameRules.createCanonicalGameRuleSnapshot();
+  assert.equal(canonical.itemCosts.poisonWall, 3, 'canonical poison wall cost is 3');
+  assert.equal(
+    diceWormhole.isValidDiceWormholeChallenge(validWormholeChallenge()),
+    true,
+    'database fixture uses a solvable V2 dice challenge'
+  );
+  assert.deepEqual(
+    Object.keys(validFireVisionEffect(owner.uid)).sort(),
+    ['appliedAtTurn', 'expiresAtTargetMove', 'sourcePlayerId', 'type'],
+    'new fire state persists only the common vision-effect fields'
+  );
   const roomId = `rules-${Date.now()}`;
 
   await expectAllowed(
@@ -353,7 +352,7 @@ async function main() {
     items: [validWormholeItem()],
   };
   await expectAllowed(
-    'new wormhole map includes a bounded configured challenge',
+    'new wormhole map includes a bounded V2 dice challenge',
     databaseRequest(
       `rooms/${roomId}/maps/${owner.uid}`,
       owner.token,
@@ -372,15 +371,30 @@ async function main() {
       missingWormholeChallenge
     )
   );
-  const tooFewWormholeSeals = clone(mapWithWormholeChallenge);
-  tooFewWormholeSeals.items[0].challenge.seals.pop();
+  const retiredWormholeChallenge = clone(mapWithWormholeChallenge);
+  retiredWormholeChallenge.items[0].challenge = {
+    version: 1,
+    startPosition: { row: 0, col: 0 },
+    endPosition: { row: 2, col: 2 },
+    seals: [
+      { row: 0, col: 5 },
+      { row: 5, col: 5 },
+      { row: 5, col: 0 },
+    ],
+    obstacles: [
+      { position: { row: 0, col: 1 }, direction: 'down' },
+      { position: { row: 0, col: 2 }, direction: 'down' },
+      { position: { row: 1, col: 3 }, direction: 'right' },
+      { position: { row: 2, col: 3 }, direction: 'right' },
+    ],
+  };
   await expectDenied(
-    'wormhole challenge requires exactly three indexed seals',
+    'new setup rejects the retired hand-authored V1 wormhole challenge',
     databaseRequest(
       `rooms/${roomId}/maps/${owner.uid}`,
       owner.token,
       'PUT',
-      tooFewWormholeSeals
+      retiredWormholeChallenge
     )
   );
   const extraWormholeChallengeField = clone(mapWithWormholeChallenge);
@@ -394,55 +408,94 @@ async function main() {
       extraWormholeChallengeField
     )
   );
-  const tooFewWormholeWalls = clone(mapWithWormholeChallenge);
-  tooFewWormholeWalls.items[0].challenge.obstacles =
-    tooFewWormholeWalls.items[0].challenge.obstacles.slice(0, 3);
+  const missingBlockedCells = clone(mapWithWormholeChallenge);
+  missingBlockedCells.items[0].challenge.blockedCells = [];
   await expectDenied(
-    'wormhole challenge requires at least four persisted internal walls',
+    'V2 wormhole challenge requires at least one blocked cell',
     databaseRequest(
       `rooms/${roomId}/maps/${owner.uid}`,
       owner.token,
       'PUT',
-      tooFewWormholeWalls
+      missingBlockedCells
     )
   );
-  const tooManyWormholeWalls = clone(mapWithWormholeChallenge);
-  tooManyWormholeWalls.items[0].challenge.obstacles = Array.from(
-    { length: 13 },
-    () => ({ position: { row: 1, col: 1 }, direction: 'right' })
-  );
-  await expectDenied(
-    'wormhole challenge rejects more than twelve internal walls',
-    databaseRequest(
-      `rooms/${roomId}/maps/${owner.uid}`,
-      owner.token,
-      'PUT',
-      tooManyWormholeWalls
-    )
-  );
-  const invalidWormholeWall = clone(mapWithWormholeChallenge);
-  invalidWormholeWall.items[0].challenge.obstacles[0] = {
-    position: { row: 0, col: 1 },
-    direction: 'up',
+  const sparseBlockedCells = clone(mapWithWormholeChallenge);
+  const [firstBlockedCell, secondBlockedCell] = sparseBlockedCells.items[0].challenge.blockedCells;
+  sparseBlockedCells.items[0].challenge.blockedCells = {
+    0: firstBlockedCell,
+    2: secondBlockedCell,
   };
   await expectDenied(
-    'wormhole challenge rejects an outward-facing boundary wall',
+    'V2 wormhole challenge rejects a sparse blocked-cell ledger',
     databaseRequest(
       `rooms/${roomId}/maps/${owner.uid}`,
       owner.token,
       'PUT',
-      invalidWormholeWall
+      sparseBlockedCells
     )
   );
-  const invalidWormholeCoordinate = clone(mapWithWormholeChallenge);
-  invalidWormholeCoordinate.items[0].challenge.seals[1].row = 6;
+  const tooManyBlockedCells = clone(mapWithWormholeChallenge);
+  tooManyBlockedCells.items[0].challenge.blockedCells = [
+    { row: 0, col: 1 },
+    { row: 1, col: 0 },
+    { row: 2, col: 3 },
+    { row: 3, col: 2 },
+  ];
   await expectDenied(
-    'wormhole challenge positions stay inside the six-by-six board',
+    'V2 wormhole challenge rejects more than three blocked cells',
     databaseRequest(
       `rooms/${roomId}/maps/${owner.uid}`,
       owner.token,
       'PUT',
-      invalidWormholeCoordinate
+      tooManyBlockedCells
+    )
+  );
+  const duplicateBlockedCells = clone(mapWithWormholeChallenge);
+  duplicateBlockedCells.items[0].challenge.blockedCells[1] = {
+    ...duplicateBlockedCells.items[0].challenge.blockedCells[0],
+  };
+  await expectDenied(
+    'V2 wormhole challenge rejects duplicate blocked cells',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      duplicateBlockedCells
+    )
+  );
+  const blockedStart = clone(mapWithWormholeChallenge);
+  blockedStart.items[0].challenge.blockedCells[0] = {
+    ...blockedStart.items[0].challenge.startPosition,
+  };
+  await expectDenied(
+    'V2 wormhole challenge cannot block its start cell',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      blockedStart
+    )
+  );
+  const invalidDiceOrientation = clone(mapWithWormholeChallenge);
+  invalidDiceOrientation.items[0].challenge.initialOrientation = 24;
+  await expectDenied(
+    'V2 wormhole challenge rejects an out-of-contract dice orientation',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      invalidDiceOrientation
+    )
+  );
+  const invalidDiceTarget = clone(mapWithWormholeChallenge);
+  invalidDiceTarget.items[0].challenge.targetTop = 7;
+  await expectDenied(
+    'V2 wormhole challenge rejects an impossible target face',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      invalidDiceTarget
     )
   );
   await expectAllowed(
@@ -749,10 +802,43 @@ async function main() {
   invalidRunShape.currentTurn = outsider.uid;
   invalidRunShape.turnNumber = 2;
   invalidRunShape.wormholeRunsByPlayer[owner.uid] = validWormholeRun(outsider.uid);
-  invalidRunShape.wormholeRunsByPlayer[owner.uid].challenge.version = 2;
+  invalidRunShape.wormholeRunsByPlayer[owner.uid].orientation = 24;
   await expectDenied(
-    'atomic turn rejects a malformed own wormhole run',
+    'atomic turn rejects a V2 run with an invalid dice orientation',
     databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', invalidRunShape)
+  );
+
+  const missingRunActions = clone(privateStateRead.payload);
+  missingRunActions.players[owner.uid].moves = 1;
+  missingRunActions.currentTurn = outsider.uid;
+  missingRunActions.turnNumber = 2;
+  missingRunActions.wormholeRunsByPlayer[owner.uid] = validWormholeRun(outsider.uid);
+  delete missingRunActions.wormholeRunsByPlayer[owner.uid].actionsTaken;
+  await expectDenied(
+    'atomic turn rejects a V2 run without its action counter',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', missingRunActions)
+  );
+
+  const forgedLegacyLedger = clone(privateStateRead.payload);
+  forgedLegacyLedger.players[owner.uid].moves = 1;
+  forgedLegacyLedger.currentTurn = outsider.uid;
+  forgedLegacyLedger.turnNumber = 2;
+  forgedLegacyLedger.wormholeRunsByPlayer[owner.uid] = validWormholeRun(outsider.uid);
+  forgedLegacyLedger.wormholeRunsByPlayer[owner.uid].activatedSeals = { 0: true };
+  await expectDenied(
+    'atomic turn rejects V1 seal state smuggled into a V2 run',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', forgedLegacyLedger)
+  );
+
+  const excessiveRunActions = clone(privateStateRead.payload);
+  excessiveRunActions.players[owner.uid].moves = 1;
+  excessiveRunActions.currentTurn = outsider.uid;
+  excessiveRunActions.turnNumber = 2;
+  excessiveRunActions.wormholeRunsByPlayer[owner.uid] = validWormholeRun(outsider.uid);
+  excessiveRunActions.wormholeRunsByPlayer[owner.uid].actionsTaken = 2;
+  await expectDenied(
+    'atomic turn rejects a V2 action counter ahead of the player move ledger',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', excessiveRunActions)
   );
 
   const invalidFireVisionShape = clone(privateStateRead.payload);
@@ -794,6 +880,21 @@ async function main() {
 
   const afterOwnPrivateTurn = await databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'GET');
   assert.equal(afterOwnPrivateTurn.ok, true, 'private-state turn should persist');
+  assert.equal(
+    afterOwnPrivateTurn.payload.wormholeRunsByPlayer[owner.uid].challenge.version,
+    2,
+    'the validated private run persists the V2 challenge discriminator'
+  );
+  assert.equal(
+    afterOwnPrivateTurn.payload.wormholeRunsByPlayer[owner.uid].actionsTaken,
+    0,
+    'the validated private run persists its internal action counter'
+  );
+  assert.equal(
+    afterOwnPrivateTurn.payload.visionEffectsByPlayer[owner.uid].phantomWalls,
+    undefined,
+    'new fire state does not persist the retired phantom-wall payload'
+  );
   const forgedOwnerRunExpiry = clone(afterOwnPrivateTurn.payload);
   forgedOwnerRunExpiry.players[outsider.uid].moves = 1;
   forgedOwnerRunExpiry.currentTurn = owner.uid;
@@ -827,7 +928,12 @@ async function main() {
   ownPrivateStateExpiry.currentTurn = owner.uid;
   ownPrivateStateExpiry.turnNumber = 3;
   ownPrivateStateExpiry.wormholeRunsByPlayer[outsider.uid].position = { row: 0, col: 1 };
-  ownPrivateStateExpiry.wormholeRunsByPlayer[outsider.uid].activatedSeals = { 0: true };
+  ownPrivateStateExpiry.wormholeRunsByPlayer[outsider.uid].orientation =
+    diceWormhole.rollDiceOrientation(
+      ownPrivateStateExpiry.wormholeRunsByPlayer[outsider.uid].orientation,
+      'right'
+    );
+  ownPrivateStateExpiry.wormholeRunsByPlayer[outsider.uid].actionsTaken = 1;
   ownPrivateStateExpiry.visionEffectsByPlayer[outsider.uid] = validFireVisionEffect(owner.uid, 2);
   ownPrivateStateExpiry.poisonEffectsByPlayer[outsider.uid].expiresAtTargetMove = 3;
   ownPrivateStateExpiry.poisonEffectsByPlayer[outsider.uid].seed += 1;
@@ -1433,9 +1539,9 @@ async function main() {
   );
 
   const tampered = clone(canonical);
-  tampered.itemCosts.fireWall = 9;
+  tampered.itemCosts.poisonWall = 1;
   await expectDenied(
-    'tampered room snapshot',
+    'room snapshot cannot restore the retired poison-wall cost',
     databaseRequest(
       `rooms/tampered-${Date.now()}`,
       owner.token,

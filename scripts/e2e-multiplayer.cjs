@@ -404,8 +404,10 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     await page.locator('[data-cell="0,2"]').click();
 
     const cornerWall = page.getByRole('button', { name: '6행 5열 right 벽' });
+    const topWall = page.getByRole('button', { name: '5행 6열 down 벽' });
     const wormholeButton = page.getByRole('button', { name: /웜홀/ }).first();
     await cornerWall.click();
+    await topWall.click();
     await wormholeButton.click();
     await page.locator('[data-cell="3,3"]').click();
 
@@ -415,12 +417,12 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
       await dialog.accept();
     });
     await page.locator('[data-cell="5,5"]').click();
-    if (!safetyMessage.includes('즉시 열린 방향이 최소 2개')) {
+    if (!safetyMessage.includes('인접 칸이 최소 1개')) {
       throw new Error(`웜홀 출구 안전 검증 메시지 불일치: ${JSON.stringify(safetyMessage)}`);
     }
 
     await wormholeButton.click(); // 배치 취소
-    await cornerWall.click();
+    await topWall.click(); // 위쪽을 열어 출구에 인접한 이동 칸을 하나만 남김
     await wormholeButton.click();
     await page.locator('[data-cell="3,3"]').click();
     const safeExit = page.locator('[data-cell="5,5"][data-valid-item-target="true"]');
@@ -429,7 +431,7 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     if (!(await wormholeButton.isDisabled())) {
       throw new Error('웜홀 1개 배치 후 종류별 최대 수량 제한이 적용되지 않음');
     }
-    ok('item/goal overlap rejected; unsafe wormhole exit rejected; safe exit highlighted; cap enforced');
+    ok('item/goal overlap rejected; sealed wormhole exit rejected; one-open exit highlighted; cap enforced');
   }
   if (ownerSecrets) {
     await page.getByRole('button', { name: '4행 1열 right 벽' }).click();

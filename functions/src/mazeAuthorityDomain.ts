@@ -26,12 +26,18 @@ import {
 } from '../vendor/maze-engine/dist/lib/gameUtils';
 import {
   GamePhase,
+  type DiceFace,
+  type DiceOrientationId,
+  type DiceWormholeChallenge,
+  type DiceWormholeRunState,
   type Direction,
   type GameMap,
   type GameState,
   type ItemType,
   type MapItem,
   type MazeSkillId,
+  type LegacyWormholeChallenge,
+  type LegacyWormholeRunState,
   type Obstacle,
   type Player,
   type PoisonEffect,
@@ -53,6 +59,8 @@ const MAX_MAP_OBSTACLE_INPUTS = 64;
 const MAX_MAP_ITEM_INPUTS = 16;
 const MAX_FIRE_PHANTOM_WALLS = 6;
 const MAX_POISON_EFFECT_SEED = 0xFFFF_FFFF;
+const DICE_WORMHOLE_BOARD_SIZE = 4;
+const DICE_ORIENTATION_COUNT = 24;
 const INVALID_FIREBASE_KEY = /[.#$\[\]\/\u0000-\u001F\u007F-\u009F]/u;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9_-]+$/u;
 const SHA256_HEX = /^[a-f0-9]{64}$/u;
@@ -463,9 +471,12 @@ function parseObstacle(value: unknown, label: string): Obstacle {
 
 function parseVisionEffect(value: unknown, label: string): VisionEffect {
   const commonKeys = ['type', 'sourcePlayerId', 'appliedAtTurn', 'expiresAtTargetMove'];
+  const hasLegacyPhantomWalls = isPlainRecord(value)
+    && value.type === 'fire'
+    && Object.prototype.hasOwnProperty.call(value, 'phantomWalls');
   if (!isPlainRecord(value)
     || (value.type !== 'smoke' && value.type !== 'fire')
-    || !hasExactKeys(value, value.type === 'fire' ? [...commonKeys, 'phantomWalls'] : commonKeys)
+    || !hasExactKeys(value, hasLegacyPhantomWalls ? [...commonKeys, 'phantomWalls'] : commonKeys)
     || !validUid(value.sourcePlayerId)
     || !isSafeIntegerInRange(value.appliedAtTurn, 0, Number.MAX_SAFE_INTEGER)
     || !isSafeIntegerInRange(value.expiresAtTargetMove, 0, Number.MAX_SAFE_INTEGER)) {
@@ -479,6 +490,13 @@ function parseVisionEffect(value: unknown, label: string): VisionEffect {
       expiresAtTargetMove: value.expiresAtTargetMove,
     };
   }
+  const fireEffect = {
+    type: 'fire' as const,
+    sourcePlayerId: value.sourcePlayerId,
+    appliedAtTurn: value.appliedAtTurn,
+    expiresAtTargetMove: value.expiresAtTargetMove,
+  };
+  if (!hasLegacyPhantomWalls) return fireEffect;
   if (!isDenseArray(value.phantomWalls, MAX_FIRE_PHANTOM_WALLS)
     || value.phantomWalls.length !== MAX_FIRE_PHANTOM_WALLS) {
     fail(
@@ -488,14 +506,21 @@ function parseVisionEffect(value: unknown, label: string): VisionEffect {
     );
   }
   return {
-    type: 'fire',
-    sourcePlayerId: value.sourcePlayerId,
-    appliedAtTurn: value.appliedAtTurn,
-    expiresAtTargetMove: value.expiresAtTargetMove,
+    ...fireEffect,
     phantomWalls: value.phantomWalls.map((obstacle, index) => (
       parseObstacle(obstacle, `${label}-phantom-wall-${index}`)
     )),
   };
+}
+
+function parseDiceWormholePosition(value: unknown, label: string): Position {
+  if (!isPlainRecord(value)
+    || !hasExactKeys(value, ['row', 'col'])
+    || !isSafeIntegerInRange(value.row, 0, DICE_WORMHOLE_BOARD_SIZE - 1)
+    || !isSafeIntegerInRange(value.col, 0, DICE_WORMHOLE_BOARD_SIZE - 1)) {
+    fail('invalid-argument', `${label}-invalid`, `The ${label} position is malformed.`);
+  }
+  return { row: value.row, col: value.col };
 }
 
 function parsePoisonEffect(value: unknown, label: string): PoisonEffect {
@@ -588,6 +613,38 @@ function parseStoredPoisonEffects(
 }
 
 function parseWormholeChallenge(value: unknown, label: string): WormholeChallenge {
+  if (isPlainRecord(value) && value.version === 2) {
+    if (!hasExactKeys(value, [
+      'version',
+      'boardSize',
+      'startPosition',
+      'endPosition',
+      'blockedCells',
+      'initialOrientation',
+      'targetTop',
+    ])
+      || value.boardSize !== DICE_WORMHOLE_BOARD_SIZE
+      || !isDenseArray(value.blockedCells, DICE_WORMHOLE_BOARD_SIZE ** 2)
+      || !isSafeIntegerInRange(value.initialOrientation, 0, DICE_ORIENTATION_COUNT - 1)
+      || !isSafeIntegerInRange(value.targetTop, 1, 6)) {
+      fail(
+        'invalid-argument',
+        `${label}-invalid`,
+        `The ${label} dice wormhole challenge is malformed.`,
+      );
+    }
+    return {
+      version: 2,
+      boardSize: DICE_WORMHOLE_BOARD_SIZE,
+      startPosition: parseDiceWormholePosition(value.startPosition, `${label}-start`),
+      endPosition: parseDiceWormholePosition(value.endPosition, `${label}-end`),
+      blockedCells: value.blockedCells.map((position, index) => (
+        parseDiceWormholePosition(position, `${label}-blocked-cell-${index}`)
+      )),
+      initialOrientation: value.initialOrientation as DiceOrientationId,
+      targetTop: value.targetTop as DiceFace,
+    } satisfies DiceWormholeChallenge;
+  }
   if (!isPlainRecord(value)
     || !hasExactKeys(value, ['version', 'startPosition', 'endPosition', 'seals', 'obstacles'])
     || value.version !== 1
@@ -600,7 +657,7 @@ function parseWormholeChallenge(value: unknown, label: string): WormholeChalleng
       `The ${label} wormhole challenge is malformed.`,
     );
   }
-  const challenge: WormholeChallenge = {
+  const challenge: LegacyWormholeChallenge = {
     version: 1,
     startPosition: parsePosition(value.startPosition, `${label}-start`),
     endPosition: parsePosition(value.endPosition, `${label}-end`),
@@ -661,19 +718,38 @@ function parseBooleanIndexRecord(
 
 function parseWormholeRunState(value: unknown, label: string): WormholeRunState {
   const required = ['mapOwnerId', 'itemIndex', 'position', 'challenge', 'enteredAtTurn'];
-  const allowed = [...required, 'activatedSeals', 'discoveredWalls'];
   if (!isPlainRecord(value)
-    || !hasRequiredAndAllowedKeys(value, required, allowed)
     || !validUid(value.mapOwnerId)
     || !isSafeIntegerInRange(value.itemIndex, 0, MAX_MAP_ITEM_INPUTS - 1)
     || !isSafeIntegerInRange(value.enteredAtTurn, 1, Number.MAX_SAFE_INTEGER)) {
     fail('invalid-argument', `${label}-invalid`, `The ${label} wormhole run is malformed.`);
   }
-  const run: WormholeRunState = {
+  const challenge = parseWormholeChallenge(value.challenge, `${label}-challenge`);
+  if (challenge.version === 2) {
+    if (!hasExactKeys(value, [...required, 'orientation', 'actionsTaken'])
+      || !isSafeIntegerInRange(value.orientation, 0, DICE_ORIENTATION_COUNT - 1)
+      || !isSafeIntegerInRange(value.actionsTaken, 0, Number.MAX_SAFE_INTEGER)) {
+      fail('invalid-argument', `${label}-invalid`, `The ${label} dice wormhole run is malformed.`);
+    }
+    return {
+      mapOwnerId: value.mapOwnerId,
+      itemIndex: value.itemIndex,
+      position: parseDiceWormholePosition(value.position, `${label}-position`),
+      challenge,
+      enteredAtTurn: value.enteredAtTurn,
+      orientation: value.orientation as DiceOrientationId,
+      actionsTaken: value.actionsTaken,
+    } satisfies DiceWormholeRunState;
+  }
+  const allowed = [...required, 'activatedSeals', 'discoveredWalls'];
+  if (!hasRequiredAndAllowedKeys(value, required, allowed)) {
+    fail('invalid-argument', `${label}-invalid`, `The ${label} wormhole run is malformed.`);
+  }
+  const run: LegacyWormholeRunState = {
     mapOwnerId: value.mapOwnerId,
     itemIndex: value.itemIndex,
     position: parsePosition(value.position, `${label}-position`),
-    challenge: parseWormholeChallenge(value.challenge, `${label}-challenge`),
+    challenge,
     enteredAtTurn: value.enteredAtTurn,
   };
   if (Object.prototype.hasOwnProperty.call(value, 'activatedSeals')) {
@@ -1054,8 +1130,20 @@ function sameWormholeChallenge(
   left: WormholeChallenge,
   right: WormholeChallenge,
 ): boolean {
-  return left.version === right.version
-    && isSamePosition(left.startPosition, right.startPosition)
+  if (left.version !== right.version) return false;
+  if (left.version === 2 && right.version === 2) {
+    return left.boardSize === right.boardSize
+      && isSamePosition(left.startPosition, right.startPosition)
+      && isSamePosition(left.endPosition, right.endPosition)
+      && left.blockedCells.length === right.blockedCells.length
+      && left.blockedCells.every((position, index) => (
+        isSamePosition(position, right.blockedCells[index])
+      ))
+      && left.initialOrientation === right.initialOrientation
+      && left.targetTop === right.targetTop;
+  }
+  if (left.version !== 1 || right.version !== 1) return false;
+  return isSamePosition(left.startPosition, right.startPosition)
     && isSamePosition(left.endPosition, right.endPosition)
     && left.seals.length === right.seals.length
     && left.seals.every((seal, index) => isSamePosition(seal, right.seals[index]))
@@ -1209,14 +1297,18 @@ function assertValidPrivateEffects(
   const assertCommonEffect = (
     playerId: string,
     effect: { sourcePlayerId: string; appliedAtTurn: number; expiresAtTargetMove: number },
+    allowExpiryEquality = false,
   ): void => {
     const player = state.gameState.players[playerId];
+    const playerMoves = player?.moves ?? 0;
     if (!playerIds.includes(playerId)
       || !playerIds.includes(effect.sourcePlayerId)
       || !player
       || state.gameState.assignments?.[playerId] !== effect.sourcePlayerId
       || effect.appliedAtTurn > (state.gameState.turnNumber as number)
-      || effect.expiresAtTargetMove <= (player.moves ?? 0)) {
+      || (allowExpiryEquality
+        ? effect.expiresAtTargetMove < playerMoves
+        : effect.expiresAtTargetMove <= playerMoves)) {
       fail(
         'data-loss',
         'authority-private-effect-reference',
@@ -1226,12 +1318,13 @@ function assertValidPrivateEffects(
   };
 
   for (const [playerId, effect] of Object.entries(visionEffects)) {
-    assertCommonEffect(playerId, effect);
+    assertCommonEffect(playerId, effect, effect.type === 'fire');
     if (effect.type !== 'fire') continue;
-    for (let index = 0; index < effect.phantomWalls.length; index += 1) {
-      const wall = effect.phantomWalls[index];
+    const phantomWalls = effect.phantomWalls ?? [];
+    for (let index = 0; index < phantomWalls.length; index += 1) {
+      const wall = phantomWalls[index];
       if (!isPositionInBoard(getNewPosition(wall.position, wall.direction))
-        || effect.phantomWalls.slice(0, index).some((existing) => isSameWallSegment(
+        || phantomWalls.slice(0, index).some((existing) => isSameWallSegment(
           wall.position,
           wall.direction,
           existing.position,
@@ -1290,6 +1383,7 @@ function assertValidWormholeRuns(
       || item.type !== 'wormhole'
       || !item.entrance
       || !item.challenge
+      || !isValidWormholeChallenge(run.challenge)
       || !sameWormholeChallenge(run.challenge, item.challenge)
       || !isSamePosition(player.position, item.entrance)
       || !storedItemWasConsumed(state, run.mapOwnerId, run.itemIndex)
@@ -1301,10 +1395,24 @@ function assertValidWormholeRuns(
       );
     }
 
-    const discoveredWalls = run.discoveredWalls ?? [];
+    if (run.challenge.version === 2) {
+      if (run.challenge.blockedCells.some((blockedCell) => (
+        isSamePosition(blockedCell, run.position)
+      ))) {
+        fail(
+          'data-loss',
+          'authority-wormhole-run-progress',
+          'A stored dice wormhole run has invalid progress.',
+        );
+      }
+      continue;
+    }
+
+    const legacyRun = run as LegacyWormholeRunState;
+    const discoveredWalls = legacyRun.discoveredWalls ?? [];
     for (let index = 0; index < discoveredWalls.length; index += 1) {
       const discovered = discoveredWalls[index];
-      if (!run.challenge.obstacles.some((obstacle) => isSameWallSegment(
+      if (!legacyRun.challenge.obstacles.some((obstacle) => isSameWallSegment(
         discovered.position,
         discovered.direction,
         obstacle.position,
@@ -1593,18 +1701,6 @@ function materializeWormholeChallenge(value: unknown): void {
   if (isPlainRecord(value) && wormholeChallengeNeedsMaterialization(value)) value.obstacles = [];
 }
 
-function fireVisionEffectNeedsMaterialization(value: unknown): boolean {
-  return isPlainRecord(value)
-    && value.type === 'fire'
-    && !Object.prototype.hasOwnProperty.call(value, 'phantomWalls');
-}
-
-function materializeFireVisionEffect(value: unknown): void {
-  if (isPlainRecord(value) && fireVisionEffectNeedsMaterialization(value)) {
-    value.phantomWalls = [];
-  }
-}
-
 function needsRealtimeDatabaseMaterialization(value: unknown): boolean {
   if (!isPlainRecord(value) || !isPlainRecord(value.gameState)) return false;
   const gameState = value.gameState;
@@ -1642,10 +1738,6 @@ function needsRealtimeDatabaseMaterialization(value: unknown): boolean {
     && Object.values(gameState.wormholeRunsByPlayer).some((run) => (
       isPlainRecord(run) && wormholeChallengeNeedsMaterialization(run.challenge)
     ))) return true;
-  if (isPlainRecord(gameState.visionEffectsByPlayer)
-    && Object.values(gameState.visionEffectsByPlayer).some(
-      fireVisionEffectNeedsMaterialization,
-    )) return true;
   if (!isPlainRecord(value.receipts) || !isPlainRecord(value.receipts.byId)) return false;
   for (const receipt of Object.values(value.receipts.byId)) {
     if (!isPlainRecord(receipt) || !isPlainRecord(receipt.result)) continue;
@@ -1754,11 +1846,6 @@ export function parseMazeAuthorityState(value: unknown): MazeAuthorityState {
       );
     }
     if (Object.prototype.hasOwnProperty.call(state.gameState, 'visionEffectsByPlayer')) {
-      if (isPlainRecord(state.gameState.visionEffectsByPlayer)) {
-        for (const effect of Object.values(state.gameState.visionEffectsByPlayer)) {
-          materializeFireVisionEffect(effect);
-        }
-      }
       state.gameState.visionEffectsByPlayer = parseStoredVisionEffects(
         state.gameState.visionEffectsByPlayer,
       );

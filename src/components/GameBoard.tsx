@@ -5,6 +5,14 @@ import Image from 'next/image';
 import { CellType, CollisionWall, Direction, GamePhase, ItemType, MapItem, Obstacle, Position, SpecialWallType, WallItemType } from '@/types/game';
 import { BOARD_SIZE, ITEM_LABELS, isSamePosition, isSameWallSegment, isWallItemType } from '@/lib/gameUtils';
 import { findNearestWallPointerTarget } from '@/lib/wallPointer';
+import {
+  createWallActionPreviewPlanAtTarget,
+  findSafeWallActionPreviewPlan,
+  type WallActionPreviewPlan,
+  type WallActionPreviewType,
+  type WallPreviewContext,
+} from '@/lib/wallPreview';
+import WallActionPreview from './WallActionPreview';
 
 const ITEM_WALL_STYLES: Record<SpecialWallType, string> = {
   steelWall: 'bg-zinc-600 ring-zinc-100',
@@ -305,6 +313,8 @@ const GameBoard: React.FC<GameBoardProps> = ({
   const hoverTimerRef = useRef<NodeJS.Timeout | null>(null);
   // 마우스 동작 중인지 추적하는 상태
   const isMouseDownRef = useRef<boolean>(false);
+  // 확대된 터치 영역 위에서 pointerdown으로 고른 벽을 click까지 고정한다.
+  const pressedWallTargetRef = useRef<WallTarget | null>(null);
   
   // 디바운스된 호버 상태 설정 함수
   const setHoveredCellWithDebounce = useCallback((position: Position | null) => {
@@ -354,79 +364,33 @@ const GameBoard: React.FC<GameBoardProps> = ({
     hasObstacle(position, direction) || findItemWallIndex(position, direction) >= 0;
 
   const selectedWallType = placeMode !== 'wall' && isWallItemType(placeMode) ? placeMode : null;
-  const suggestedGuideWall = useMemo<WallTarget | null>(() => {
-    if (!selectedWallType) return null;
-
-    const center = (BOARD_SIZE - 1) / 2;
-    const reservedCells = [
-      startPosition,
-      endPosition,
-      pendingCell,
-      ...(items || []).flatMap((item) => [item.position, item.entrance, item.exit]),
-    ].filter((position): position is Position => !!position);
-    const candidates: Array<WallTarget & { distance: number; markerPenalty: number }> = [];
-    for (let row = 0; row < BOARD_SIZE; row += 1) {
-      for (let col = 0; col < BOARD_SIZE; col += 1) {
-        if (col < BOARD_SIZE - 1) {
-          const adjacent = { row, col: col + 1 };
-          candidates.push({
-            position: { row, col },
-            direction: 'right',
-            distance: Math.abs(row - center) + Math.abs(col + 0.5 - center),
-            markerPenalty: reservedCells.some((cell) =>
-              isSamePosition(cell, { row, col }) || isSamePosition(cell, adjacent)
-            ) ? 10 : 0,
-          });
-        }
-        if (row < BOARD_SIZE - 1) {
-          const adjacent = { row: row + 1, col };
-          candidates.push({
-            position: { row, col },
-            direction: 'down',
-            distance: Math.abs(row + 0.5 - center) + Math.abs(col - center),
-            markerPenalty: reservedCells.some((cell) =>
-              isSamePosition(cell, { row, col }) || isSamePosition(cell, adjacent)
-            ) ? 10 : 0,
-          });
-        }
-      }
-    }
-
-    candidates.sort((left, right) =>
-      left.markerPenalty - right.markerPenalty ||
-      left.distance - right.distance ||
-      left.position.row - right.position.row ||
-      left.position.col - right.position.col ||
-      left.direction.localeCompare(right.direction)
+  const selectedPreviewType: WallActionPreviewType | null = selectedWallType ||
+    (placeMode === 'wormhole' && !pendingCell ? 'wormhole' : null);
+  const wallPreviewContext = useMemo<WallPreviewContext>(() => ({
+    boardSize: BOARD_SIZE,
+    obstacles: obstacles || [],
+    items: items || [],
+    reservedPositions: [startPosition, endPosition, pendingCell],
+  }), [endPosition, items, obstacles, pendingCell, startPosition]);
+  const suggestedActionPreview = useMemo<WallActionPreviewPlan | null>(() =>
+    selectedPreviewType
+      ? findSafeWallActionPreviewPlan(selectedPreviewType, wallPreviewContext)
+      : null,
+  [selectedPreviewType, wallPreviewContext]);
+  const pointerActionPreview = useMemo<WallActionPreviewPlan | null>(() => {
+    if (!selectedWallType || !hoveredWall) return null;
+    return createWallActionPreviewPlanAtTarget(
+      selectedWallType,
+      hoveredWall,
+      wallPreviewContext
     );
-
-    const available = candidates.find((candidate) => {
-      const blockedByObstacle = (obstacles || []).some((obstacle) =>
-        isSameWallSegment(
-          candidate.position,
-          candidate.direction,
-          obstacle.position,
-          obstacle.direction
-        )
-      );
-      const blockedByItem = (items || []).some((item) =>
-        isWallItemType(item.type) &&
-        !!item.wallPosition &&
-        !!item.wallDirection &&
-        isSameWallSegment(
-          candidate.position,
-          candidate.direction,
-          item.wallPosition,
-          item.wallDirection
-        )
-      );
-      return !blockedByObstacle && !blockedByItem;
-    });
-
-    return available
-      ? { position: available.position, direction: available.direction }
-      : null;
-  }, [endPosition, items, obstacles, pendingCell, selectedWallType, startPosition]);
+  }, [hoveredWall, selectedWallType, wallPreviewContext]);
+  const activeActionPreview = hoveredWall && selectedWallType
+    ? pointerActionPreview
+    : suggestedActionPreview;
+  const suggestedGuideWall = selectedWallType && suggestedActionPreview?.wall
+    ? suggestedActionPreview.wall
+    : null;
 
   const activeGuideWall = selectedWallType
     ? hoveredWall || suggestedGuideWall
@@ -468,15 +432,22 @@ const GameBoard: React.FC<GameBoardProps> = ({
         aria-hidden="true"
       >
         <ItemWallVisual type={selectedWallType} orientation={orientation} preview />
-        <span
-          className={`wall-guide-badge absolute rounded-full border border-cyan-100/80 bg-slate-950/90 px-1 py-px text-[7px] font-black leading-none text-cyan-100 shadow-sm ${
-            orientation === 'horizontal'
-              ? '-top-[9px] left-1/2 -translate-x-1/2'
-              : '-right-[16px] top-1/2 -translate-y-1/2'
-          }`}
-        >
-          예시
-        </span>
+        {(!activeActionPreview?.wall || !isSameWallSegment(
+          position,
+          direction,
+          activeActionPreview.wall.position,
+          activeActionPreview.wall.direction
+        )) && (
+          <span
+            className={`wall-guide-badge absolute rounded-full border border-cyan-100/80 bg-slate-950/90 px-1 py-px text-[7px] font-black leading-none text-cyan-100 shadow-sm ${
+              orientation === 'horizontal'
+                ? '-top-[9px] left-1/2 -translate-x-1/2'
+                : '-right-[16px] top-1/2 -translate-y-1/2'
+            }`}
+          >
+            예시
+          </span>
+        )}
       </div>
     );
   };
@@ -601,6 +572,11 @@ const GameBoard: React.FC<GameBoardProps> = ({
         
         {/* 아이템 마커 (지뢰/웜홀) */}
         {renderItemCellMarker(position)}
+
+        {/* 선택한 벽/웜홀의 효과를 실제 맵 상태와 분리된 그림자 분신으로 재현 */}
+        {gamePhase === GamePhase.SETUP && activeActionPreview && (
+          <WallActionPreview plan={activeActionPreview} position={position} />
+        )}
       </div>
     );
   };
@@ -666,6 +642,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         className={containerClasses}
         data-wall-segment={`${position.row},${position.col}:${direction}`}
         data-wall-occupied={isOccupied ? 'true' : 'false'}
+        data-wall-pointer-target={isHovered ? 'true' : undefined}
         role={isInteractive ? 'button' : undefined}
         tabIndex={isInteractive ? 0 : undefined}
         aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽${hasPlacementConflict ? ' · 이미 점유됨' : ''}` : undefined}
@@ -789,6 +766,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
         className={containerClasses}
         data-wall-segment={`${position.row},${position.col}:${direction}`}
         data-wall-occupied={isOccupied ? 'true' : 'false'}
+        data-wall-pointer-target={isHovered ? 'true' : undefined}
         role={isInteractive ? 'button' : undefined}
         tabIndex={isInteractive ? 0 : undefined}
         aria-label={isInteractive ? `${position.row + 1}행 ${position.col + 1}열 ${direction} 벽${hasPlacementConflict ? ' · 이미 점유됨' : ''}` : undefined}
@@ -857,7 +835,9 @@ const GameBoard: React.FC<GameBoardProps> = ({
     return (
       <div 
         key={`intersection-${row}-${col}`} 
-        className="w-2 h-2 bg-transparent" 
+        className="w-2 h-2 bg-transparent"
+        data-wall-intersection={`${row},${col}`}
+        aria-hidden="true"
       />
     );
   };
@@ -893,43 +873,59 @@ const GameBoard: React.FC<GameBoardProps> = ({
         setHoveredCell(null);
         setHoveredWall(null);
         isMouseDownRef.current = false;
+        pressedWallTargetRef.current = null;
       }}
     >
       <div
         data-maze-board-grid
         data-maze-floor-tone="cream-sage"
         data-wall-pointer-routing="nearest"
+        data-wall-corner-routing="four-way"
         className={`mx-auto grid gap-0 overflow-auto rounded-xl border-4 border-slate-950 ${BOARD_FLOOR_STYLE} p-1 shadow-[0_5px_0_#0f172a,0_14px_28px_rgb(0_0_0/0.38)] touch-action-none ${compact ? '' : 'sm:p-2'}`}
         style={{
           gridTemplateColumns: `repeat(${BOARD_SIZE * 2 - 1}, auto)`,
           gridTemplateRows: `repeat(${BOARD_SIZE * 2 - 1}, auto)`
         }}
         onPointerMove={(event) => {
-          if (!canRouteWallPointer || event.pointerType !== 'mouse' || isMouseDownRef.current) return;
+          if (
+            !canRouteWallPointer || event.pointerType !== 'mouse' ||
+            isMouseDownRef.current || pressedWallTargetRef.current
+          ) return;
           setHoveredWallTarget(findNearestWallPointerTarget(
             event.currentTarget,
             event.clientX,
             event.clientY,
-            'data-wall-segment'
+            'data-wall-segment',
+            hoveredWall
           ));
         }}
         onPointerDownCapture={(event) => {
           // tabIndex가 있는 벽/칸을 포인터로 누르면 브라우저가 포커스 대상을
           // 스크롤 컨테이너 안으로 끌어당겨 보드가 튀었다. 포인터 조작에서는
           // 포커스 기본 동작을 막는다 (키보드 탐색은 그대로 동작한다).
-          const target = event.target as HTMLElement | null;
-          if (target?.closest?.('[data-wall-segment], [data-cell]')) {
+          const pressedElement = event.target as HTMLElement | null;
+          if (pressedElement?.closest?.('[data-wall-segment], [data-cell]')) {
             event.preventDefault();
           }
-          if (!canRouteWallPointer || event.pointerType === 'mouse') return;
-          setHoveredWallTarget(findNearestWallPointerTarget(
+          if (!canRouteWallPointer) return;
+          const target = findNearestWallPointerTarget(
             event.currentTarget,
             event.clientX,
             event.clientY,
-            'data-wall-segment'
-          ));
+            'data-wall-segment',
+            hoveredWall
+          );
+          pressedWallTargetRef.current = target;
+          setHoveredWallTarget(target);
         }}
         onPointerLeave={() => {
+          if (canRouteWallPointer) {
+            pressedWallTargetRef.current = null;
+            setHoveredWallTarget(null);
+          }
+        }}
+        onPointerCancel={() => {
+          pressedWallTargetRef.current = null;
           if (canRouteWallPointer) setHoveredWallTarget(null);
         }}
         onClickCapture={(event) => {
@@ -939,12 +935,14 @@ const GameBoard: React.FC<GameBoardProps> = ({
 
           event.preventDefault();
           event.stopPropagation();
-          const target = findNearestWallPointerTarget(
+          const target = pressedWallTargetRef.current || findNearestWallPointerTarget(
             event.currentTarget,
             event.clientX,
             event.clientY,
-            'data-wall-segment'
+            'data-wall-segment',
+            hoveredWall
           );
+          pressedWallTargetRef.current = null;
           if (!target) return;
 
           setHoveredWallTarget(target);

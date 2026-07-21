@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
+import React, { Suspense, useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { Canvas, useFrame, useThree, ThreeEvent } from '@react-three/fiber';
 import { RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
@@ -20,6 +20,15 @@ import {
   MAZE_TOON_RENDER_CONTRACT,
   uninstallMazeToonRendering,
 } from '@/lib/mazeToonRendering';
+import {
+  MAZE_CARTOON_ASSET_VERSION,
+  MazeCartoonAsset,
+  MazeCartoonAssetLoadingState,
+  MazeCartoonAssetProvider,
+  preloadMazeCartoonAssets,
+  useMazeCartoonAssetInstance,
+  type MazeCartoonAssetId,
+} from '@/components/three/MazeCartoonAssets';
 
 // ===== 보드 배치 상수 =====
 const TILE = 1; // 타일 한 변 크기
@@ -33,8 +42,8 @@ const CENTER = ((BOARD_SIZE - 1) * SPACING) / 2;
 // 가로 화면은 디오라마 앙각, 세로 화면(모바일)은 사선 왜곡이 덜한 부감 앙각을 쓴다.
 const SPAN = BOARD_SIZE * SPACING;
 const CAMERA_DISTANCE = SPAN * 2;
-const CAMERA_ELEVATION_WIDE_DEG = 43;
-const CAMERA_ELEVATION_PORTRAIT_DEG = 57;
+const CAMERA_ELEVATION_WIDE_DEG = 53;
+const CAMERA_ELEVATION_PORTRAIT_DEG = 60;
 const CAMERA_CONTENT_HEIGHT = 1.2; // 벽/말/깃발이 차지하는 수직 여유
 
 function cameraPositionForElevation(elevationRad: number): [number, number, number] {
@@ -59,7 +68,6 @@ const COLORS = {
   wall: '#6b1111', // 2D 보드와 같은 짙은 적색 일반 벽
   wallPreview: '#b91c1c',
   collision: '#ff334f', // 충돌한 벽 (일반벽보다 밝은 빨강)
-  reveal: '#991b1b', // 게임 종료 후 공개된 일반벽
   start: '#12a66a',
   end: '#d9365f',
   player: '#2674d9',
@@ -87,6 +95,7 @@ export interface BoardFx {
   to?: Position;
   dir?: Direction;
   delay?: number; // 발동 연출 지연 (말이 해당 칸에 도착하는 시점과 동기화)
+  wormholeTransition?: 'entered' | 'returned';
 }
 
 // 셀 좌표 -> 3D 위치
@@ -161,24 +170,48 @@ function segmentToObstacle(seg: WallSegment): { position: Position; direction: D
 function WallBox({ seg, color, opacity = 1, height = WALL_HEIGHT }: { seg: WallSegment; color: string; opacity?: number; height?: number }) {
   const [x, , z] = segmentToWorld(seg);
   const size = segmentSize(seg);
+  const preview = color === COLORS.wallPreview && opacity < 1;
+  const variant = preview
+    ? 'preview'
+    : opacity < 1
+      ? 'revealed'
+      : color === COLORS.collision
+        ? 'collision'
+        : 'normal';
   return (
-    <RoundedBox
-      args={[size[0], height, size[2]]}
-      radius={Math.min(0.055, height * 0.16)}
-      smoothness={3}
-      position={[x, height / 2, z]}
-      castShadow
-      receiveShadow
+    <group
+      position={[x, 0, z]}
+      rotation={[0, seg.type === 'H' ? 0 : Math.PI / 2, 0]}
+      scale={[1, height / WALL_HEIGHT, 1]}
     >
-      <meshStandardMaterial
-        color={color}
-        emissive={color}
-        emissiveIntensity={opacity < 1 ? 0.04 : 0.1}
-        transparent={opacity < 1}
+      <MazeCartoonAsset
+        assetId="wallNormal"
+        variant={`ordinary-${variant}`}
         opacity={opacity}
-        roughness={0.74}
+        tintMaterialName={variant === 'collision' ? 'mat_wall_normal_body' : undefined}
+        tintColor={variant === 'collision' ? COLORS.collision : undefined}
       />
-    </RoundedBox>
+      {preview && (
+        <RoundedBox
+          args={[
+            Math.max(size[0], size[2]) + 0.08,
+            WALL_HEIGHT + 0.08,
+            WALL_THICKNESS + 0.08,
+          ]}
+          radius={0.075}
+          smoothness={2}
+          position={[0, WALL_HEIGHT / 2, 0]}
+          userData={{ mazeToonNoOutline: true }}
+        >
+          <meshBasicMaterial
+            color={COLORS.tileHover}
+            transparent
+            opacity={0.18}
+            depthWrite={false}
+          />
+        </RoundedBox>
+      )}
+    </group>
   );
 }
 
@@ -236,21 +269,107 @@ const SPECIAL_WALL_STYLES: Record<SpecialWallType, SpecialWallStyle> = {
   },
 };
 
-function SpecialWallBox({
-  seg,
-  type,
-  consumed = false,
-  active = false,
-  phaseOpen = false,
-  reducedMotion = false,
-}: {
+const SPECIAL_WALL_ASSETS: Record<SpecialWallType, MazeCartoonAssetId> = {
+  steelWall: 'wallSteel',
+  fireWall: 'wallFire',
+  poisonWall: 'wallPoison',
+  iceWall: 'wallIce',
+  windWall: 'wallWind',
+  phaseWall: 'wallPhase',
+  thornWall: 'wallThorn',
+  crystalWall: 'wallCrystal',
+  collapseWall: 'wallCollapse',
+  mirrorWall: 'wallMirror',
+};
+
+interface SpecialWallBoxProps {
   seg: WallSegment;
   type: SpecialWallType;
   consumed?: boolean;
   active?: boolean;
   phaseOpen?: boolean;
   reducedMotion?: boolean;
-}) {
+}
+
+function BlenderSpecialWallBox({
+  seg,
+  type,
+  consumed = false,
+  active = false,
+  phaseOpen = false,
+  reducedMotion = false,
+  assetId,
+}: SpecialWallBoxProps & { assetId: MazeCartoonAssetId }) {
+  const inactiveCollapse = type === 'collapseWall' && !active && !consumed;
+  const openedPhase = type === 'phaseWall' && phaseOpen && !consumed;
+  const heightScale = consumed ? 0.34 : inactiveCollapse ? 0.24 : 1;
+  const opacity = consumed ? 0.3 : openedPhase ? 0.16 : inactiveCollapse ? 0.58 : 1;
+  const stateName = consumed
+    ? 'consumed'
+    : inactiveCollapse
+      ? 'armed'
+      : openedPhase
+        ? 'open'
+        : 'closed';
+  const { object, materials } = useMazeCartoonAssetInstance(assetId, {
+    profile: 'environment',
+    variant: `${type}-${stateName}`,
+    opacity,
+    emissiveScale: consumed ? 0 : 1,
+  });
+  const [x, , z] = segmentToWorld(seg);
+
+  useFrame((state) => {
+    const speed = type === 'fireWall'
+      ? 7
+      : type === 'windWall'
+        ? 4.5
+        : type === 'crystalWall'
+          ? 3.8
+          : type === 'phaseWall'
+            ? 2.6
+            : 2.1;
+    const wave = reducedMotion || consumed
+      ? 0.5
+      : (Math.sin(state.clock.elapsedTime * speed) + 1) / 2;
+    const strength = type === 'fireWall' || type === 'crystalWall' ? 0.85 : 0.42;
+    for (const material of materials) {
+      const base = Number(material.userData.mazeAssetBaseEmissiveIntensity) || 0;
+      material.emissiveIntensity = base * (0.72 + wave * strength);
+    }
+    if (!reducedMotion && !consumed && type === 'windWall') {
+      object.rotation.z = Math.sin(state.clock.elapsedTime * 4.5) * 0.035;
+    } else {
+      object.rotation.z = 0;
+    }
+  });
+
+  return (
+    <group
+      name={`${type}:${stateName}:blender`}
+      position={[x, 0, z]}
+      rotation={[0, seg.type === 'H' ? 0 : Math.PI / 2, 0]}
+      scale={[1, heightScale, 1]}
+    >
+      <primitive object={object} dispose={null} />
+    </group>
+  );
+}
+
+function SpecialWallBox(props: SpecialWallBoxProps) {
+  const assetId = SPECIAL_WALL_ASSETS[props.type];
+  if (assetId) return <BlenderSpecialWallBox {...props} assetId={assetId} />;
+  return <LegacySpecialWallBox {...props} />;
+}
+
+function LegacySpecialWallBox({
+  seg,
+  type,
+  consumed = false,
+  active = false,
+  phaseOpen = false,
+  reducedMotion = false,
+}: SpecialWallBoxProps) {
   const style = SPECIAL_WALL_STYLES[type];
   const bodyMaterialRef = useRef<THREE.MeshPhysicalMaterial>(null);
   const accentMaterialRef = useRef<THREE.MeshStandardMaterial>(null);
@@ -479,9 +598,7 @@ function Tile({
 }) {
   const [hovered, setHovered] = useState(false);
   const checker = (position.row + position.col) % 2 === 0;
-
-  let color = checker ? COLORS.tileA : COLORS.tileB;
-  if (hovered && selectable) color = COLORS.tileHover;
+  const tileAsset = checker ? 'tileCream' : 'tileSage';
 
   const handleClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
@@ -494,12 +611,18 @@ function Tile({
 
   return (
     <group position={cellToWorld(position)}>
-      <RoundedBox
-        args={[TILE, 0.16, TILE]}
-        radius={0.065}
-        smoothness={3}
-        receiveShadow
-        userData={{ mazeToonNoOutline: true }}
+      <group position={[0, -0.08, 0]}>
+        <MazeCartoonAsset
+          assetId={tileAsset}
+          variant={tileAsset}
+          noOutline
+        />
+      </group>
+
+      {/* Blender 타일과 입력을 분리해 모델 세부 메시가 클릭을 가로채지 않게 한다. */}
+      <mesh
+        visible={false}
+        position={[0, 0, 0]}
         onClick={handleClick}
         onPointerOver={(e) => {
           if (!selectable) return;
@@ -512,8 +635,28 @@ function Tile({
           if (selectable) document.body.style.cursor = 'auto';
         }}
       >
-        <meshStandardMaterial color={color} roughness={0.88} />
-      </RoundedBox>
+        <boxGeometry args={[TILE, 0.2, TILE]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+
+      {hovered && selectable && (
+        <RoundedBox
+          args={[TILE * 0.94, 0.025, TILE * 0.94]}
+          radius={0.055}
+          smoothness={2}
+          position={[0, 0.095, 0]}
+          userData={{ mazeToonNoOutline: true }}
+        >
+          <meshStandardMaterial
+            color={COLORS.tileHover}
+            emissive={COLORS.tileHover}
+            emissiveIntensity={0.3}
+            transparent
+            opacity={0.22}
+            depthWrite={false}
+          />
+        </RoundedBox>
+      )}
 
       {/* 시작점 패드 (은은한 펄스) */}
       {isStart && <StartPad reducedMotion={reducedMotion} />}
@@ -562,135 +705,65 @@ function Tile({
 
 // 시작점 패드 - 은은한 펄스
 function StartPad({ reducedMotion = false }: { reducedMotion?: boolean }) {
-  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  const groupRef = useRef<THREE.Group>(null);
   useFrame((state) => {
-    if (matRef.current) {
-      matRef.current.emissiveIntensity = reducedMotion
-        ? 0.25
-        : 0.2 + Math.abs(Math.sin(state.clock.elapsedTime * 1.6)) * 0.25;
+    if (groupRef.current) {
+      const scale = reducedMotion ? 1 : 1 + Math.abs(Math.sin(state.clock.elapsedTime * 1.6)) * 0.035;
+      groupRef.current.scale.setScalar(scale);
     }
   });
   return (
-    <mesh position={[0, 0.09, 0]} receiveShadow>
-      <cylinderGeometry args={[0.36, 0.36, 0.05, 32]} />
-      <meshStandardMaterial ref={matRef} color={COLORS.start} emissive={COLORS.start} emissiveIntensity={0.25} />
-    </mesh>
+    <group ref={groupRef} position={[0, 0.08, 0]}>
+      <MazeCartoonAsset assetId="markerStart" variant="start" />
+    </group>
   );
 }
 
 // 도착점 깃발 - 좌우로 살랑이는 애니메이션
 function GoalFlag({ reducedMotion = false, locked = false }: { reducedMotion?: boolean; locked?: boolean }) {
-  const flagRef = useRef<THREE.Mesh>(null);
+  const flagRef = useRef<THREE.Group>(null);
   useFrame((state) => {
     if (flagRef.current) {
       flagRef.current.rotation.y = reducedMotion ? 0 : Math.sin(state.clock.elapsedTime * 2.4) * 0.35;
     }
   });
   return (
-    <group position={[0, 0.09, 0]}>
-      <mesh receiveShadow>
-        <cylinderGeometry args={[0.36, 0.36, 0.05, 32]} />
-        <meshStandardMaterial
-          color={locked ? '#6b4b7a' : COLORS.end}
-          emissive={locked ? '#7e22ce' : COLORS.end}
-          emissiveIntensity={locked ? 0.12 : 0.2}
+    <group>
+      <group position={[0, 0.08, 0]}>
+        <MazeCartoonAsset
+          assetId="markerGoal"
+          variant={locked ? 'goal-locked' : 'goal'}
+          opacity={locked ? 0.58 : 1}
         />
-      </mesh>
-      <mesh position={[0, 0.4, 0]} castShadow>
-        <cylinderGeometry args={[0.03, 0.03, 0.8, 8]} />
-        <meshStandardMaterial color="#78716c" />
-      </mesh>
-      <group position={[0, 0.66, 0]}>
-        <mesh ref={flagRef} position={[0.16, 0, 0]} castShadow>
-          <boxGeometry args={[0.32, 0.2, 0.02]} />
-          <meshStandardMaterial color={locked ? '#a78bfa' : COLORS.end} side={THREE.DoubleSide} />
-        </mesh>
+      </group>
+      <group ref={flagRef} position={[0, 0.08, 0]}>
+        <MazeCartoonAsset
+          assetId="goalFlag"
+          variant={locked ? 'goal-flag-locked' : 'goal-flag'}
+          tintMaterialName={locked ? 'mat_goal_flag_cloth' : undefined}
+          tintColor={locked ? '#a78bfa' : undefined}
+        />
       </group>
       {locked && (
-        <mesh position={[0, 0.23, 0]} rotation={[Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[0.17, 0.045, 10, 22]} />
-          <meshStandardMaterial color="#c4b5fd" emissive="#7c3aed" emissiveIntensity={0.45} />
-        </mesh>
+        <group position={[0, 0.08, 0]}>
+          <MazeCartoonAsset assetId="goalLock" variant="goal-lock" />
+        </group>
       )}
     </group>
   );
 }
 
-// 봉인 주사위: 마주보는 면의 합이 7인 실제 주사위 규격으로 눈을 그린다.
-const DIE_SIZE = 0.3;
-const DIE_HALF = DIE_SIZE / 2;
-const DIE_PIP_SPREAD = DIE_SIZE * 0.26;
-const DIE_PIP_RADIUS = DIE_SIZE * 0.105;
-
-const DIE_PIP_LAYOUTS: Record<number, Array<[number, number]>> = {
-  1: [[0, 0]],
-  2: [[-1, -1], [1, 1]],
-  3: [[-1, -1], [0, 0], [1, 1]],
-  4: [[-1, -1], [-1, 1], [1, -1], [1, 1]],
-  5: [[-1, -1], [-1, 1], [0, 0], [1, -1], [1, 1]],
-  6: [[-1, -1], [-1, 0], [-1, 1], [1, -1], [1, 0], [1, 1]],
-};
-
-interface DieFaceSpec {
-  value: number;
-  normal: [number, number, number];
-  // 납작하게 누른 눈(로컬 z축)을 면 법선 방향으로 돌리는 회전
-  rotation: [number, number, number];
-  // 면 위에서 눈을 배치할 두 축
-  axisU: [number, number, number];
-  axisV: [number, number, number];
-}
-
-const DIE_FACES: DieFaceSpec[] = [
-  { value: 1, normal: [0, 1, 0], rotation: [-Math.PI / 2, 0, 0], axisU: [1, 0, 0], axisV: [0, 0, 1] },
-  { value: 6, normal: [0, -1, 0], rotation: [Math.PI / 2, 0, 0], axisU: [1, 0, 0], axisV: [0, 0, 1] },
-  { value: 2, normal: [0, 0, 1], rotation: [0, 0, 0], axisU: [1, 0, 0], axisV: [0, 1, 0] },
-  { value: 5, normal: [0, 0, -1], rotation: [0, Math.PI, 0], axisU: [1, 0, 0], axisV: [0, 1, 0] },
-  { value: 3, normal: [1, 0, 0], rotation: [0, Math.PI / 2, 0], axisU: [0, 0, 1], axisV: [0, 1, 0] },
-  { value: 4, normal: [-1, 0, 0], rotation: [0, -Math.PI / 2, 0], axisU: [0, 0, 1], axisV: [0, 1, 0] },
-];
-
 function SealDie({ activated }: { activated: boolean }) {
-  const bodyColor = activated ? '#bfe8d2' : '#fdf6e3';
-  const pipColor = activated ? '#1f6b4c' : '#33281f';
   return (
     <group rotation={[0, Math.PI / 5, 0]}>
-      <RoundedBox
-        args={[DIE_SIZE, DIE_SIZE, DIE_SIZE]}
-        radius={DIE_SIZE * 0.2}
-        smoothness={3}
-        castShadow={!activated}
-        receiveShadow
-      >
-        <meshStandardMaterial
-          color={bodyColor}
-          emissive={activated ? '#10b981' : '#d946ef'}
-          emissiveIntensity={activated ? 0.16 : 0.1}
-          roughness={0.62}
-        />
-      </RoundedBox>
-      {DIE_FACES.map((face) => (
-        <group key={`face-${face.value}`}>
-          {DIE_PIP_LAYOUTS[face.value].map(([u, v], pipIndex) => {
-            const pipPosition: [number, number, number] = [
-              face.normal[0] * DIE_HALF + face.axisU[0] * u * DIE_PIP_SPREAD + face.axisV[0] * v * DIE_PIP_SPREAD,
-              face.normal[1] * DIE_HALF + face.axisU[1] * u * DIE_PIP_SPREAD + face.axisV[1] * v * DIE_PIP_SPREAD,
-              face.normal[2] * DIE_HALF + face.axisU[2] * u * DIE_PIP_SPREAD + face.axisV[2] * v * DIE_PIP_SPREAD,
-            ];
-            return (
-              <mesh
-                key={`pip-${face.value}-${pipIndex}`}
-                position={pipPosition}
-                rotation={face.rotation}
-                scale={[1, 1, 0.42]}
-              >
-                <sphereGeometry args={[DIE_PIP_RADIUS, 10, 8]} />
-                <meshStandardMaterial color={pipColor} roughness={0.8} />
-              </mesh>
-            );
-          })}
-        </group>
-      ))}
+      <MazeCartoonAsset
+        assetId="legacySealDie"
+        variant={activated ? 'legacy-seal-activated' : 'legacy-seal-closed'}
+        opacity={activated ? 0.58 : 1}
+        emissiveScale={activated ? 0.45 : 1}
+        tintMaterialName={activated ? 'mat_legacy_seal_die_accent' : undefined}
+        tintColor={activated ? '#34d399' : undefined}
+      />
     </group>
   );
 }
@@ -698,20 +771,8 @@ function SealDie({ activated }: { activated: boolean }) {
 function WormholeSealMarker({ position, activated }: { position: Position; activated: boolean }) {
   const [x, , z] = cellToWorld(position);
   return (
-    <group position={[x, 0.26, z]} name={`wormhole-seal-die:${activated ? 'activated' : 'sealed'}`}>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-        <torusGeometry args={[0.24, 0.045, 10, 28]} />
-        <meshStandardMaterial
-          color={activated ? '#34d399' : '#e879f9'}
-          emissive={activated ? '#059669' : '#a21caf'}
-          emissiveIntensity={activated ? 0.35 : 0.7}
-          transparent
-          opacity={activated ? 0.52 : 0.94}
-        />
-      </mesh>
-      <group position={[0, 0.09, 0]}>
-        <SealDie activated={activated} />
-      </group>
+    <group position={[x, 0.08, z]} name={`wormhole-seal-die:${activated ? 'activated' : 'sealed'}`}>
+      <SealDie activated={activated} />
     </group>
   );
 }
@@ -878,7 +939,12 @@ function Pawn({
   const lastFxKeyRef = useRef(0);
   // 웜홀 트랜싯: 다음 원거리 점프를 스파게티화 흡입/방출로 연출
   const wormholePendingRef = useRef(false);
-  const transitRef = useRef<{ phase: 'suck' | 'emerge'; progress: number } | null>(null);
+  const wormholeEntryOnlyRef = useRef(false);
+  const transitRef = useRef<{
+    phase: 'suck' | 'emerge' | 'hidden';
+    progress: number;
+    entryOnly?: boolean;
+  } | null>(null);
 
   // 이동 경로: 경유지(via)를 거쳐 최종 칸까지 한 칸씩 폴짝폴짝
   const viaKey = (via ?? []).map((point) => `${point.row},${point.col}`).join('|');
@@ -917,6 +983,7 @@ function Pawn({
     if (reducedMotion && transitRef.current) {
       transitRef.current = null;
       wormholePendingRef.current = false;
+      wormholeEntryOnlyRef.current = false;
       inner.position.set(0, 0, 0);
       inner.rotation.set(0, yawRef.current, 0);
       inner.scale.set(1, 1, 1);
@@ -926,7 +993,16 @@ function Pawn({
     if (fx && fx.key !== lastFxKeyRef.current) {
       lastFxKeyRef.current = fx.key;
       if (fx.type === 'bump') bumpUntilRef.current = now + 0.5;
-      if (fx.type === 'wormhole' && !reducedMotion) wormholePendingRef.current = true;
+      if (fx.type === 'wormhole' && !reducedMotion) {
+        if (fx.wormholeTransition === 'returned') {
+          wormholePendingRef.current = false;
+          wormholeEntryOnlyRef.current = false;
+          transitRef.current = { phase: 'emerge', progress: 0 };
+        } else {
+          wormholePendingRef.current = true;
+          wormholeEntryOnlyRef.current = fx.wormholeTransition === 'entered';
+        }
+      }
     }
 
     // 다음 웨이포인트 (도착하면 큐에서 꺼내 다음 칸으로)
@@ -939,9 +1015,22 @@ function Pawn({
       dist = outer.position.distanceTo(target);
     }
 
+    // V2 웜홀은 외부 말 위치를 입구에 고정한 채 내부 상태를 만든다.
+    // 입구 칸에 도착한 뒤 흡입만 재생하고, 내부 보드가 열릴 때까지 숨긴다.
+    if (
+      wormholePendingRef.current &&
+      wormholeEntryOnlyRef.current &&
+      dist < 0.07
+    ) {
+      wormholePendingRef.current = false;
+      wormholeEntryOnlyRef.current = false;
+      transitRef.current = { phase: 'suck', progress: 0, entryOnly: true };
+    }
+
     // ---- 웜홀 트랜싯 (스파게티화) ----
     const transit = reducedMotion ? null : transitRef.current;
     if (transit) {
+      if (transit.phase === 'hidden') return;
       transit.progress = Math.min(1, transit.progress + delta / 0.5);
       const p = transit.progress;
       if (transit.phase === 'suck') {
@@ -952,8 +1041,13 @@ function Pawn({
         inner.position.set(0, -2.3 * Math.pow(p, 1.6), 0);
         inner.rotation.y += delta * (6 + 20 * p);
         if (p >= 1) {
-          outer.position.copy(target); // 출구로 순간 이동 (화면상으론 이미 사라진 상태)
-          transitRef.current = { phase: 'emerge', progress: 0 };
+          if (transit.entryOnly) {
+            inner.scale.setScalar(0.001);
+            transitRef.current = { phase: 'hidden', progress: 1, entryOnly: true };
+          } else {
+            outer.position.copy(target); // 출구로 순간 이동 (화면상으론 이미 사라진 상태)
+            transitRef.current = { phase: 'emerge', progress: 0 };
+          }
         }
       } else {
         // 출구에서 늘어난 채 솟아나와 원래 모습으로
@@ -978,7 +1072,9 @@ function Pawn({
     } else if (dist > SPACING * 1.6) {
       if (wormholePendingRef.current) {
         wormholePendingRef.current = false;
-        transitRef.current = { phase: 'suck', progress: 0 };
+        const entryOnly = wormholeEntryOnlyRef.current;
+        wormholeEntryOnlyRef.current = false;
+        transitRef.current = { phase: 'suck', progress: 0, entryOnly };
         return;
       }
       outer.position.copy(target);
@@ -1057,68 +1153,16 @@ function Pawn({
   return (
     <group name="maze-toon-actor-pawn" ref={outerRef} position={initialPosRef.current}>
       <group ref={innerRef}>
-        {/* 둥근 귀와 팔다리를 더한 작은 원목 동물 말 */}
-        <mesh position={[0.115, 0.79, 0]} scale={[0.72, 1.05, 0.72]} castShadow>
-          <sphereGeometry args={[0.09, 16, 12]} />
-          <meshStandardMaterial color={color} roughness={0.78} />
-        </mesh>
-        <mesh position={[-0.115, 0.79, 0]} scale={[0.72, 1.05, 0.72]} castShadow>
-          <sphereGeometry args={[0.09, 16, 12]} />
-          <meshStandardMaterial color={color} roughness={0.78} />
-        </mesh>
-        {/* 몸통 */}
-        <mesh position={[0, 0.33, 0]} castShadow>
-          <cylinderGeometry args={[0.14, 0.24, 0.42, 24]} />
-          <meshStandardMaterial color={color} roughness={0.35} />
-        </mesh>
-        {/* 머리 */}
-        <mesh position={[0, 0.64, 0]} castShadow>
-          <sphereGeometry args={[0.17, 24, 24]} />
-          <meshStandardMaterial color={color} roughness={0.3} />
-        </mesh>
-        {/* 주둥이와 코 */}
-        <mesh position={[0, 0.61, 0.155]} scale={[1.25, 0.78, 0.58]}>
-          <sphereGeometry args={[0.085, 14, 10]} />
-          <meshStandardMaterial color="#ffe8cf" roughness={0.9} />
-        </mesh>
-        <mesh position={[0, 0.645, 0.204]}>
-          <sphereGeometry args={[0.025, 10, 8]} />
-          <meshStandardMaterial color="#59443e" roughness={0.85} />
-        </mesh>
-        {/* 짧은 팔과 발 */}
-        <mesh position={[0.2, 0.38, 0.025]} scale={[0.65, 1.25, 0.65]} rotation={[0, 0, -0.35]} castShadow>
-          <sphereGeometry args={[0.075, 12, 10]} />
-          <meshStandardMaterial color={color} roughness={0.8} />
-        </mesh>
-        <mesh position={[-0.2, 0.38, 0.025]} scale={[0.65, 1.25, 0.65]} rotation={[0, 0, 0.35]} castShadow>
-          <sphereGeometry args={[0.075, 12, 10]} />
-          <meshStandardMaterial color={color} roughness={0.8} />
-        </mesh>
-        <mesh position={[0.105, 0.115, 0.08]} scale={[1.1, 0.55, 1.35]} castShadow>
-          <sphereGeometry args={[0.09, 12, 10]} />
-          <meshStandardMaterial color="#ffe8cf" roughness={0.9} />
-        </mesh>
-        <mesh position={[-0.105, 0.115, 0.08]} scale={[1.1, 0.55, 1.35]} castShadow>
-          <sphereGeometry args={[0.09, 12, 10]} />
-          <meshStandardMaterial color="#ffe8cf" roughness={0.9} />
-        </mesh>
-        {/* 눈 (이동 방향을 바라보는 캐릭터 느낌) */}
-        <mesh position={[0.06, 0.68, 0.13]}>
-          <sphereGeometry args={[0.045, 12, 12]} />
-          <meshStandardMaterial color="#ffffff" />
-        </mesh>
-        <mesh position={[-0.06, 0.68, 0.13]}>
-          <sphereGeometry args={[0.045, 12, 12]} />
-          <meshStandardMaterial color="#ffffff" />
-        </mesh>
-        <mesh position={[0.06, 0.68, 0.165]}>
-          <sphereGeometry args={[0.02, 8, 8]} />
-          <meshStandardMaterial color="#1e293b" />
-        </mesh>
-        <mesh position={[-0.06, 0.68, 0.165]}>
-          <sphereGeometry args={[0.02, 8, 8]} />
-          <meshStandardMaterial color="#1e293b" />
-        </mesh>
+        {/* 타일 윗면(Y=0.086)에 발이 닿도록 Blender의 ground anchor를 올린다. */}
+        <group position={[0, 0.08, 0]}>
+          <MazeCartoonAsset
+            assetId="rabbitPawn"
+            profile="actor"
+            variant={`rabbit-${color}`}
+            tintMaterialName="mat_rabbit_player_accent"
+            tintColor={color}
+          />
+        </group>
         {fireAffected && <PawnFireAura reducedMotion={reducedMotion} />}
         {poisonAffected && <PawnPoisonAura reducedMotion={reducedMotion} />}
       </group>
@@ -1533,7 +1577,7 @@ function ItemVisuals({
     if (consumed || collided || (!setup && !revealObstacles)) return null;
     return setup
       ? <WallBox seg={seg} color={COLORS.wall} />
-      : <WallBox seg={seg} color={COLORS.reveal} opacity={0.75} />;
+      : <WallBox seg={seg} color={COLORS.wall} />;
   }
 
   if (
@@ -1571,62 +1615,39 @@ function ItemVisuals({
 }
 
 function MineVisual({ position, consumed, reducedMotion = false }: { position: Position; consumed: boolean; reducedMotion?: boolean }) {
-  const lampRef = useRef<THREE.MeshStandardMaterial>(null);
   const [x, , z] = cellToWorld(position);
+  const assetId: MazeCartoonAssetId = consumed ? 'itemMineUsed' : 'itemMine';
+  const { object, materials } = useMazeCartoonAssetInstance(assetId, {
+    profile: 'environment',
+    variant: consumed ? 'mine-used' : 'mine-active',
+    emissiveScale: consumed ? 0 : 1,
+  });
 
   useFrame((state) => {
-    if (lampRef.current) {
-      lampRef.current.emissiveIntensity = reducedMotion
-        ? 0.72
-        : 0.4 + Math.abs(Math.sin(state.clock.elapsedTime * 3)) * 1.2;
+    for (const material of materials) {
+      const base = Number(material.userData.mazeAssetBaseEmissiveIntensity) || 0;
+      material.emissiveIntensity = consumed
+        ? 0
+        : base * (reducedMotion ? 1 : 0.7 + Math.abs(Math.sin(state.clock.elapsedTime * 3)) * 1.3);
     }
   });
 
-  if (consumed) {
-    return (
-      <mesh position={[x, 0.09, z]}>
-        <cylinderGeometry args={[0.3, 0.3, 0.03, 24]} />
-        <meshStandardMaterial color="#1c1917" roughness={1} />
-      </mesh>
-    );
-  }
-
   return (
-    <group position={[x, 0.2, z]}>
-      <mesh castShadow>
-        <sphereGeometry args={[0.15, 20, 20]} />
-        <meshStandardMaterial color="#374151" roughness={0.3} metalness={0.5} />
-      </mesh>
-      <mesh position={[0, 0.13, 0]}>
-        <cylinderGeometry args={[0.02, 0.02, 0.1, 8]} />
-        <meshStandardMaterial ref={lampRef} color="#ef4444" emissive="#ef4444" emissiveIntensity={0.6} />
-      </mesh>
+    <group position={[x, 0.08, z]} name={`mine:${consumed ? 'used' : 'active'}:blender`}>
+      <primitive object={object} dispose={null} />
     </group>
   );
 }
 
 function SmokeVisual({ position, consumed }: { position: Position; consumed: boolean }) {
   const [x, , z] = cellToWorld(position);
-
-  if (consumed) {
-    return (
-      <mesh position={[x, 0.06, z]}>
-        <cylinderGeometry args={[0.24, 0.3, 0.04, 16]} />
-        <meshStandardMaterial color="#475569" roughness={1} />
-      </mesh>
-    );
-  }
-
   return (
-    <group position={[x, 0.2, z]}>
-      <mesh castShadow>
-        <cylinderGeometry args={[0.13, 0.16, 0.3, 16]} />
-        <meshStandardMaterial color="#64748b" roughness={0.45} metalness={0.35} />
-      </mesh>
-      <mesh position={[0, 0.17, 0]}>
-        <cylinderGeometry args={[0.07, 0.09, 0.05, 12]} />
-        <meshStandardMaterial color="#cbd5e1" roughness={0.3} metalness={0.5} />
-      </mesh>
+    <group position={[x, 0.08, z]} name={`smoke:${consumed ? 'used' : 'active'}:blender`}>
+      <MazeCartoonAsset
+        assetId={consumed ? 'itemSmokeUsed' : 'itemSmoke'}
+        variant={consumed ? 'smoke-used' : 'smoke-active'}
+        emissiveScale={consumed ? 0 : 1}
+      />
     </group>
   );
 }
@@ -1636,7 +1657,7 @@ function WormholeVisual({ entrance, exit, consumed, reducedMotion = false }: { e
   const exitRef = useRef<THREE.Group>(null);
   const [ex, , ez] = cellToWorld(entrance);
   const [xx, , xz] = cellToWorld(exit);
-  const opacity = consumed ? 0.35 : 0.9;
+  const opacity = consumed ? 0.35 : 0.94;
 
   useFrame((_, delta) => {
     if (reducedMotion) return;
@@ -1647,25 +1668,33 @@ function WormholeVisual({ entrance, exit, consumed, reducedMotion = false }: { e
 
   return (
     <group>
-      <group ref={entranceRef} position={[ex, 0.1, ez]}>
-        <mesh rotation={[-Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[0.3, 0.06, 12, 32]} />
-          <meshStandardMaterial color="#a855f7" emissive="#a855f7" emissiveIntensity={consumed ? 0.1 : 0.7} transparent opacity={opacity} />
-        </mesh>
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.06, 0]}>
-          <torusGeometry args={[0.18, 0.035, 10, 28]} />
-          <meshStandardMaterial color="#c084fc" emissive="#c084fc" emissiveIntensity={consumed ? 0.1 : 0.5} transparent opacity={opacity} />
-        </mesh>
-        <mesh position={[0, -0.02, 0]}>
-          <cylinderGeometry args={[0.24, 0.24, 0.03, 24]} />
-          <meshStandardMaterial color="#581c87" transparent opacity={opacity} />
-        </mesh>
+      <group
+        ref={entranceRef}
+        position={[ex, 0.08, ez]}
+        name={`wormhole:entrance:${consumed ? 'used' : 'active'}:blender`}
+      >
+        <MazeCartoonAsset
+          assetId="wormholePortal"
+          variant={consumed ? 'portal-entrance-used' : 'portal-entrance'}
+          opacity={opacity}
+          tintMaterialName="mat_wormhole_portal_accent"
+          tintColor="#a855f7"
+          emissiveScale={consumed ? 0.15 : 1}
+        />
       </group>
-      <group ref={exitRef} position={[xx, 0.1, xz]}>
-        <mesh rotation={[-Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[0.3, 0.05, 12, 32]} />
-          <meshStandardMaterial color="#d8b4fe" emissive="#d8b4fe" emissiveIntensity={consumed ? 0.1 : 0.5} transparent opacity={opacity} />
-        </mesh>
+      <group
+        ref={exitRef}
+        position={[xx, 0.08, xz]}
+        name={`wormhole:exit:${consumed ? 'used' : 'active'}:blender`}
+      >
+        <MazeCartoonAsset
+          assetId="wormholePortal"
+          variant={consumed ? 'portal-exit-used' : 'portal-exit'}
+          opacity={opacity}
+          tintMaterialName="mat_wormhole_portal_accent"
+          tintColor="#d8b4fe"
+          emissiveScale={consumed ? 0.15 : 0.82}
+        />
       </group>
     </group>
   );
@@ -1888,30 +1917,12 @@ const BoardContents: React.FC<GameBoard3DProps & { reducedMotion?: boolean }> = 
     }
   }
 
-  const boardSpan = BOARD_SIZE * SPACING - GAP;
-
   return (
     <group name="maze-toon-environment-board">
-      {/* 보드 받침대 */}
-      <RoundedBox
-        args={[boardSpan + 0.7, 0.28, boardSpan + 0.7]}
-        radius={0.12}
-        smoothness={4}
-        position={[CENTER, -0.22, CENTER]}
-        receiveShadow
-        castShadow
-      >
-        <meshStandardMaterial color={COLORS.base} roughness={0.9} />
-      </RoundedBox>
-      <RoundedBox
-        args={[boardSpan + 1.0, 0.12, boardSpan + 1.0]}
-        radius={0.05}
-        smoothness={3}
-        position={[CENTER, -0.4, CENTER]}
-        receiveShadow
-      >
-        <meshStandardMaterial color={COLORS.baseSide} roughness={1} />
-      </RoundedBox>
+      {/* Blender 원목 받침대. 좌표는 기존 -0.46..-0.08 계약으로 베이크되어 있다. */}
+      <group position={[CENTER, 0, CENTER]}>
+        <MazeCartoonAsset assetId="boardBase" variant="board-base" />
+      </group>
 
       {/* 타일 */}
       {tiles}
@@ -1948,12 +1959,12 @@ const BoardContents: React.FC<GameBoard3DProps & { reducedMotion?: boolean }> = 
           <WallBox key={`col-${segmentKey(seg)}`} seg={seg} color={COLORS.collision} />
         ))}
 
-      {/* 게임 종료: 공개된 벽 (반투명 주황) - 충돌한 벽은 빨간색 유지 */}
+      {/* 게임 종료: 공개된 일반벽/가짜벽 모두 같은 불투명 빨간 블록 */}
       {gamePhase === GamePhase.PLAY && revealObstacles &&
         obstacleSegments
           .filter((seg) => !collisionKeys.has(segmentKey(seg)))
           .map((seg) => (
-            <WallBox key={`rev-${segmentKey(seg)}`} seg={seg} color={COLORS.reveal} opacity={0.75} />
+            <WallBox key={`rev-${segmentKey(seg)}`} seg={seg} color={COLORS.wall} />
           ))}
 
       {/* 탐지기로 밝혀낸 벽 (게임 종료 공개 전까지만) */}
@@ -2014,6 +2025,7 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
   const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
+    preloadMazeCartoonAssets();
     return () => {
       document.body.style.cursor = 'auto';
     };
@@ -2023,6 +2035,7 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
     <div
       data-testid="game-board-3d"
       data-maze-render-style="inked-toy"
+      data-maze-asset-version={MAZE_CARTOON_ASSET_VERSION}
       data-maze-floor-tone="cream-sage"
       data-reduced-motion={reducedMotion ? 'true' : 'false'}
       data-board-realm={props.wormholeChallenge ? 'wormhole' : 'main'}
@@ -2072,7 +2085,11 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
         <directionalLight position={[CENTER - 5, 5, CENTER + 6]} color="#76bcc2" intensity={0.24} />
         <hemisphereLight args={['#dff6ef', '#557568', 0.26]} />
 
-        <BoardContents {...props} reducedMotion={reducedMotion} />
+        <Suspense fallback={<MazeCartoonAssetLoadingState />}>
+          <MazeCartoonAssetProvider>
+            <BoardContents {...props} reducedMotion={reducedMotion} />
+          </MazeCartoonAssetProvider>
+        </Suspense>
       </Canvas>
     </div>
   );

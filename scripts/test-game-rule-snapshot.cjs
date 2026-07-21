@@ -42,7 +42,11 @@ function loadTypeScript(relativePath, aliases = {}) {
 
 const types = loadTypeScript('src/types/game.ts');
 const mazeSkills = loadTypeScript('src/lib/mazeSkills.ts');
-const utils = loadTypeScript('src/lib/gameUtils.ts', { '@/types/game': types });
+const diceWormhole = loadTypeScript('src/lib/diceWormhole.ts', { '@/types/game': types });
+const utils = loadTypeScript('src/lib/gameUtils.ts', {
+  '@/types/game': types,
+  '@/lib/diceWormhole': diceWormhole,
+});
 const rules = loadTypeScript('src/lib/gameRules.ts', {
   '@/types/game': types,
   '@/lib/gameUtils': utils,
@@ -90,7 +94,7 @@ const EXPECTED_COSTS = {
   smoke: 1,
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 1,
+  poisonWall: 3,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,
@@ -279,6 +283,33 @@ assert.equal(
   rules.normalizeNewMapForRuleSnapshot(baseMap({ items: 'malformed' }), second),
   null,
   'normalization never launders an invalid item container into an empty list'
+);
+
+const diceWormholeMap = baseMap({
+  items: [{
+    type: 'wormhole',
+    entrance: pos(1, 1),
+    exit: pos(4, 4),
+    challenge: clone(diceWormhole.DICE_WORMHOLE_FALLBACK_CHALLENGE),
+  }],
+});
+assert.equal(
+  rules.isValidMapForRuleSnapshot(diceWormholeMap, second),
+  true,
+  'V2 dice wormhole remains readable through the snapshot validator'
+);
+assert.equal(
+  rules.isValidNewMapForRuleSnapshot(diceWormholeMap, second),
+  true,
+  'new-map boundary accepts the canonical V2 dice wormhole challenge'
+);
+const malformedDiceWormholeMap = clone(diceWormholeMap);
+malformedDiceWormholeMap.items[0].challenge.endPosition =
+  clone(malformedDiceWormholeMap.items[0].challenge.startPosition);
+assert.equal(
+  rules.isValidNewMapForRuleSnapshot(malformedDiceWormholeMap, second),
+  false,
+  'new-map boundary rejects malformed V2 dice wormhole geometry'
 );
 assert.equal(
   rules.isValidMapForRuleSnapshot(baseMap({ rulesVersion: undefined }), second),

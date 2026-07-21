@@ -200,6 +200,16 @@ const PRIVATE_WORMHOLE_CHALLENGE = {
   ],
 };
 
+const DICE_WORMHOLE_CHALLENGE = {
+  version: 2 as const,
+  boardSize: 4 as const,
+  startPosition: { row: 0, col: 0 },
+  endPosition: { row: 3, col: 3 },
+  blockedCells: [{ row: 1, col: 1 }, { row: 2, col: 2 }],
+  initialOrientation: 0,
+  targetTop: 2 as const,
+};
+
 test('setup public and member projections expose no receipts, foreign maps, or presence history', () => {
   const canonical = readyRoom(OWNER_DETAILED_MAP, GUEST_DETAILED_MAP);
   const state = taintNestedPrivateFields(canonical);
@@ -327,36 +337,98 @@ test('poison projections expose status to the affected member but never serializ
   assertNoPrivateAuthorityFields(memberEnd);
 });
 
-test('play wormhole projection exposes progress but never the hidden internal wall layout', () => {
-  const ownerMap: GameMap = {
-    rulesVersion: 3,
-    startPosition: { row: 5, col: 5 },
-    endPosition: { row: 5, col: 3 },
-    obstacles: [],
-    items: [],
-    skillLoadout: 'scoutPulse',
+test('fire projection is own-only, preserves legacy phantoms, and hides cleanup-only expiry', () => {
+  const state = startMatch(readyRoom(OWNER_DETAILED_MAP, GUEST_DETAILED_MAP));
+  state.gameState.players[OWNER].moves = 2;
+  state.gameState.players[GUEST].moves = 1;
+  const legacyPhantomWalls = [
+    { position: { row: 0, col: 0 }, direction: 'right' as const },
+    { position: { row: 0, col: 1 }, direction: 'right' as const },
+    { position: { row: 0, col: 2 }, direction: 'right' as const },
+    { position: { row: 0, col: 3 }, direction: 'right' as const },
+    { position: { row: 0, col: 4 }, direction: 'right' as const },
+    { position: { row: 1, col: 0 }, direction: 'right' as const },
+  ];
+  state.gameState.visionEffectsByPlayer = {
+    [OWNER]: {
+      type: 'fire',
+      sourcePlayerId: GUEST,
+      appliedAtTurn: 1,
+      expiresAtTargetMove: 6,
+    },
+    [GUEST]: {
+      type: 'fire',
+      sourcePlayerId: OWNER,
+      appliedAtTurn: 1,
+      expiresAtTargetMove: 5,
+      phantomWalls: legacyPhantomWalls,
+    },
   };
-  const guestMap: GameMap = {
+
+  const publicView = projectMazeAuthorityPublicView(state);
+  const ownerView = projectMazeAuthorityMemberView(state, OWNER);
+  const guestView = projectMazeAuthorityMemberView(state, GUEST);
+  assert.deepEqual(publicView.gameState.visionEffectsByPlayer, {});
+  assert.deepEqual(ownerView.gameState.visionEffectsByPlayer, {
+    [OWNER]: {
+      type: 'fire',
+      sourcePlayerId: GUEST,
+      appliedAtTurn: 1,
+      expiresAtTargetMove: 6,
+    },
+  });
+  assert.deepEqual(guestView.gameState.visionEffectsByPlayer, {
+    [GUEST]: {
+      type: 'fire',
+      sourcePlayerId: OWNER,
+      appliedAtTurn: 1,
+      expiresAtTargetMove: 5,
+      phantomWalls: legacyPhantomWalls,
+    },
+  });
+
+  const cleanupOnly = cloneJson(state);
+  cleanupOnly.gameState.players[OWNER].moves = 6;
+  assert.deepEqual(
+    projectMazeAuthorityMemberView(cleanupOnly, OWNER).gameState.visionEffectsByPlayer,
+    {},
+    'an equality ledger remains stored for cleanup but is no longer an active view effect',
+  );
+});
+
+test('play wormhole projection exposes progress but never the hidden internal wall layout', () => {
+  const state = startMatch(readyRoom(OWNER_DETAILED_MAP, GUEST_DETAILED_MAP));
+  const entrance = { row: 0, col: 1 };
+  state.gameState.maps![GUEST] = {
     rulesVersion: 3,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 0, col: 3 },
     obstacles: [],
     items: [{
       type: 'wormhole',
-      entrance: { row: 0, col: 1 },
+      entrance,
       exit: { row: 4, col: 4 },
       challenge: PRIVATE_WORMHOLE_CHALLENGE,
     }],
     skillLoadout: 'scoutPulse',
   };
-  let state = startMatch(readyRoom(ownerMap, guestMap));
-  state = applyMove(state, OWNER, 'right', 'view-wormhole-enter', 1_500);
-  state = applyMove(state, GUEST, 'left', 'view-wormhole-relay', 1_600);
-  state = applyMove(state, OWNER, 'right', 'view-wormhole-wall', 1_700);
+  state.gameState.players[OWNER].position = entrance;
+  state.gameState.players[OWNER].positionHistory = [entrance];
+  state.gameState.itemState = { [GUEST]: { consumed: { 0: true } } };
+  state.gameState.wormholeRunsByPlayer = {
+    [OWNER]: {
+      mapOwnerId: GUEST,
+      itemIndex: 0,
+      position: PRIVATE_WORMHOLE_CHALLENGE.startPosition,
+      challenge: PRIVATE_WORMHOLE_CHALLENGE,
+      discoveredWalls: [PRIVATE_WORMHOLE_CHALLENGE.obstacles[0]],
+      enteredAtTurn: 1,
+    },
+  };
 
-  assert.deepEqual(state.gameState.wormholeRunsByPlayer?.[OWNER]?.discoveredWalls, [
-    PRIVATE_WORMHOLE_CHALLENGE.obstacles[0],
-  ]);
+  const canonicalLegacyRun = state.gameState.wormholeRunsByPlayer?.[OWNER];
+  assert.ok(canonicalLegacyRun && 'discoveredWalls' in canonicalLegacyRun);
+  assert.deepEqual(canonicalLegacyRun.discoveredWalls, [PRIVATE_WORMHOLE_CHALLENGE.obstacles[0]]);
   const publicView = projectMazeAuthorityPublicView(state);
   const ownerView = projectMazeAuthorityMemberView(state, OWNER);
   const memberRun = ownerView.gameState.wormholeRunsByPlayer[OWNER];
@@ -368,6 +440,7 @@ test('play wormhole projection exposes progress but never the hidden internal wa
     endPosition: PRIVATE_WORMHOLE_CHALLENGE.endPosition,
     seals: PRIVATE_WORMHOLE_CHALLENGE.seals,
   });
+  assert.ok('discoveredWalls' in memberRun);
   assert.deepEqual(memberRun.discoveredWalls, [PRIVATE_WORMHOLE_CHALLENGE.obstacles[0]]);
   assert.equal(Object.prototype.hasOwnProperty.call(memberRun.challenge, 'obstacles'), false);
 
@@ -376,15 +449,69 @@ test('play wormhole projection exposes progress but never the hidden internal wa
   assert.equal(JSON.stringify(publicView).includes(undiscoveredWall), false);
 
   memberRun.challenge.startPosition.row = 5;
+  assert.ok('discoveredWalls' in memberRun);
   memberRun.discoveredWalls![0].position.row = 5;
   assert.deepEqual(
     state.gameState.wormholeRunsByPlayer?.[OWNER]?.challenge.startPosition,
     PRIVATE_WORMHOLE_CHALLENGE.startPosition,
   );
-  assert.deepEqual(
-    state.gameState.wormholeRunsByPlayer?.[OWNER]?.discoveredWalls,
-    [PRIVATE_WORMHOLE_CHALLENGE.obstacles[0]],
-  );
+  const unchangedCanonicalRun = state.gameState.wormholeRunsByPlayer?.[OWNER];
+  assert.ok(unchangedCanonicalRun && 'discoveredWalls' in unchangedCanonicalRun);
+  assert.deepEqual(unchangedCanonicalRun.discoveredWalls, [PRIVATE_WORMHOLE_CHALLENGE.obstacles[0]]);
+});
+
+test('V2 wormhole projection exposes the complete dice puzzle only to its affected runner', () => {
+  const state = startMatch(readyRoom(OWNER_DETAILED_MAP, GUEST_DETAILED_MAP));
+  const entrance = { row: 5, col: 5 };
+  state.gameState.maps![GUEST] = {
+    rulesVersion: 3,
+    startPosition: entrance,
+    endPosition: { row: 5, col: 3 },
+    obstacles: [],
+    items: [{
+      type: 'wormhole',
+      entrance,
+      exit: { row: 4, col: 4 },
+      challenge: DICE_WORMHOLE_CHALLENGE,
+    }],
+    skillLoadout: 'scoutPulse',
+  };
+  state.gameState.players[OWNER].position = entrance;
+  state.gameState.players[OWNER].positionHistory = [entrance];
+  state.gameState.itemState = { [GUEST]: { consumed: { 0: true } } };
+  state.gameState.wormholeRunsByPlayer = {
+    [OWNER]: {
+      mapOwnerId: GUEST,
+      itemIndex: 0,
+      position: { row: 0, col: 1 },
+      challenge: DICE_WORMHOLE_CHALLENGE,
+      orientation: 7,
+      actionsTaken: 3,
+      enteredAtTurn: 1,
+    },
+  };
+
+  const publicView = projectMazeAuthorityPublicView(state);
+  const ownerView = projectMazeAuthorityMemberView(state, OWNER);
+  const guestView = projectMazeAuthorityMemberView(state, GUEST);
+  assert.deepEqual(publicView.gameState.wormholeRunsByPlayer, {});
+  assert.deepEqual(guestView.gameState.wormholeRunsByPlayer, {});
+  assert.deepEqual(ownerView.gameState.wormholeRunsByPlayer[OWNER], {
+    mapOwnerId: GUEST,
+    itemIndex: 0,
+    position: { row: 0, col: 1 },
+    challenge: DICE_WORMHOLE_CHALLENGE,
+    orientation: 7,
+    actionsTaken: 3,
+    enteredAtTurn: 1,
+  });
+
+  const projectedRun = ownerView.gameState.wormholeRunsByPlayer[OWNER];
+  assert.ok('orientation' in projectedRun);
+  projectedRun.challenge.blockedCells[0].row = 3;
+  const canonicalRun = state.gameState.wormholeRunsByPlayer?.[OWNER];
+  assert.ok(canonicalRun && 'orientation' in canonicalRun);
+  assert.deepEqual(canonicalRun.challenge.blockedCells, DICE_WORMHOLE_CHALLENGE.blockedCells);
 });
 
 test('collision projection keeps a consumed fake wall disguised as a discovered normal wall', () => {

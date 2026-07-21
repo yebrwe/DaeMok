@@ -40,6 +40,25 @@ function materializeAuthorityWormholeRun(
   run: MazeAuthorityWormholeRunView,
   revealObstacles: boolean,
 ): WormholeRunState {
+  if ('orientation' in run) {
+    return {
+      mapOwnerId: run.mapOwnerId,
+      itemIndex: run.itemIndex,
+      position: { ...run.position },
+      challenge: {
+        version: 2,
+        boardSize: 4,
+        startPosition: { ...run.challenge.startPosition },
+        endPosition: { ...run.challenge.endPosition },
+        blockedCells: run.challenge.blockedCells.map((position) => ({ ...position })),
+        initialOrientation: run.challenge.initialOrientation,
+        targetTop: run.challenge.targetTop,
+      },
+      enteredAtTurn: run.enteredAtTurn,
+      orientation: run.orientation,
+      actionsTaken: run.actionsTaken,
+    };
+  }
   return {
     mapOwnerId: run.mapOwnerId,
     itemIndex: run.itemIndex,
@@ -114,7 +133,9 @@ export function buildMazeAuthorityLiveBoards(input: {
       smokeAffected: privateVisionEffect?.type === 'smoke',
       visionObscured: privateVisionEffect?.type === 'smoke',
       fireAffected: privateVisionEffect?.type === 'fire',
-      heatWalls: privateVisionEffect?.type === 'fire' ? privateVisionEffect.phantomWalls : [],
+      heatWalls: privateVisionEffect?.type === 'fire'
+        ? (privateVisionEffect.phantomWalls ?? [])
+        : [],
       poisonAffected: !!privatePoisonEffect,
       pawnColor: runnerId === viewerUid ? '#4e9ad8' : '#f08b78',
       wormholeRun: wormholeRun

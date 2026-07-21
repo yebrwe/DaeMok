@@ -40,6 +40,8 @@ interface RacerVisualState {
   via: MoveTurnOutcome['attempted'][] | null;
 }
 
+type MapTestPerspective = 'creator' | 'opponent';
+
 export interface PracticeBattleResult {
   standings: PracticeStanding[];
   winnerId: string | null;
@@ -82,7 +84,16 @@ function outcomeVisual(outcome: MoveTurnOutcome, key: number): RacerVisualState 
   }
   if (outcome.effect === 'wormhole') {
     return {
-      fx: { key, type: 'wormhole', at: outcome.itemPosition, to: outcome.wormholeExit, delay: 0.35 },
+      fx: {
+        key,
+        type: 'wormhole',
+        at: outcome.itemPosition,
+        to: outcome.wormholeExit,
+        delay: 0.35,
+        ...(outcome.wormholeTransition === 'entered' || outcome.wormholeTransition === 'returned'
+          ? { wormholeTransition: outcome.wormholeTransition }
+          : {}),
+      },
       via: [outcome.attempted],
     };
   }
@@ -113,6 +124,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
     mode === 'mapTest' ? createMapTestGameState(playerMap) : createPracticeGameState(playerMap, aiCount)
   );
   const [visuals, setVisuals] = useState<Record<string, RacerVisualState>>({});
+  const [mapTestPerspective, setMapTestPerspective] = useState<MapTestPerspective>('creator');
   const stateRef = useRef(gameState);
   const visualKeyRef = useRef(0);
   const completedRef = useRef(false);
@@ -201,6 +213,8 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
 
   const isHumanTurn = gameState.phase === GamePhase.PLAY && currentTurnId === PRACTICE_USER_ID;
   const humanFinished = !!gameState.players[PRACTICE_USER_ID]?.finished;
+  const showMapTestSecrets = mode === 'mapTest' && mapTestPerspective === 'creator';
+  const simulateOpponentVision = mode === 'mapTest' && mapTestPerspective === 'opponent';
 
   const boardStageRef = React.useRef<HTMLDivElement>(null);
 
@@ -268,25 +282,25 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
         itemActiveWalls: normalizeConsumed(mapItemState?.activeWalls),
         itemPhaseOpen: normalizeConsumed(mapItemState?.phaseOpen),
         revealedWalls: gameState.revealedWallsByPlayer?.[runnerId] || [],
-        heatWalls: fireEffect?.phantomWalls || [],
+        heatWalls: fireEffect?.phantomWalls ?? [],
         fireAffected: !!fireEffect,
         poisonAffected: !!poisonEffect,
         fx: visuals[runnerId]?.fx || null,
         via: visuals[runnerId]?.via || null,
         celebrating: !!player.finished,
-        revealObstacles: mode === 'mapTest' || !!player.finished,
-        revealMapSecrets: mode === 'mapTest',
+        revealObstacles: showMapTestSecrets || !!player.finished,
+        revealMapSecrets: showMapTestSecrets,
         pawnColor: PRACTICE_PAWN_COLORS[runnerId],
         smokeAffected: isVisionObscuredForPlayer(gameState, runnerId),
         visionObscured:
-          mode === 'race' &&
+          (mode === 'race' || simulateOpponentVision) &&
           runnerId === PRACTICE_USER_ID &&
           gameState.currentTurn === runnerId &&
           isVisionObscuredForPlayer(gameState, runnerId),
         wormholeRun: gameState.wormholeRunsByPlayer?.[runnerId] || null,
       }];
     });
-  }, [gameState, mode, visuals]);
+  }, [gameState, mode, showMapTestSecrets, simulateOpponentVision, visuals]);
 
   const currentTurnName = currentTurnId
     ? gameState.players[currentTurnId]?.displayName || '플레이어'
@@ -318,6 +332,7 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
       className="absolute inset-0 overflow-hidden bg-transparent text-[#3d352d]"
       data-testid="practice-match"
       data-practice-mode={mode}
+      data-map-test-perspective={mode === 'mapTest' ? mapTestPerspective : undefined}
       data-ai-count={mode === 'mapTest' ? 0 : aiCount}
       data-ai-thinking={aiThinking ? 'true' : 'false'}
     >
@@ -339,6 +354,38 @@ const PracticeBattle: React.FC<PracticeBattleProps> = ({
             </span>
           </div>
 
+          {mode === 'mapTest' && (
+            <div
+              className="flex shrink-0 items-center rounded-md border border-[#cfa87a] bg-[#fffaf0] p-0.5"
+              role="group"
+              aria-label="내 맵 테스트 시점"
+              data-testid="map-test-perspective-toggle"
+            >
+              {([
+                ['creator', '제작자'],
+                ['opponent', '상대'],
+              ] as const).map(([perspective, label]) => {
+                const selected = mapTestPerspective === perspective;
+                return (
+                  <button
+                    key={perspective}
+                    type="button"
+                    className={`h-7 rounded px-2 text-[10px] font-black transition-colors ${
+                      selected
+                        ? 'bg-[#69cdb7] text-[#244a43] shadow-sm'
+                        : 'text-[#74685c] hover:bg-[#f2e4cf]'
+                    }`}
+                    onClick={() => setMapTestPerspective(perspective)}
+                    aria-label={`${label} 시점`}
+                    aria-pressed={selected}
+                    data-testid={`map-test-perspective-${perspective}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

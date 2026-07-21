@@ -127,6 +127,628 @@ body {
 }
 
 /* Map-editor wall effects live on the real board instead of in a covering preview dialog. */
+.wall-action-preview-layer {
+  overflow: visible;
+  pointer-events: none !important;
+  user-select: none;
+}
+
+.wall-shadow-clone {
+  --wall-preview-x: 1;
+  --wall-preview-y: 0;
+  --wall-preview-result-x: 1;
+  --wall-preview-result-y: 0;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 4;
+  width: 16px;
+  height: 23px;
+  margin: -12px 0 0 -8px;
+  opacity: 0.78;
+  filter: drop-shadow(0 0 4px rgba(103, 232, 249, 0.9));
+  transform-origin: 50% 80%;
+  pointer-events: none;
+}
+
+.wall-shadow-head {
+  position: absolute;
+  left: 4px;
+  top: 0;
+  width: 8px;
+  height: 8px;
+  border: 1px solid rgba(207, 250, 254, 0.82);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.84);
+  box-shadow: inset 0 0 4px rgba(103, 232, 249, 0.42);
+}
+
+.wall-shadow-body {
+  position: absolute;
+  left: 2px;
+  top: 8px;
+  width: 12px;
+  height: 14px;
+  border: 1px solid rgba(207, 250, 254, 0.72);
+  border-radius: 6px 6px 3px 3px;
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.82), rgba(15, 23, 42, 0.38));
+}
+
+.wall-shadow-bump {
+  animation: wall-shadow-bump 2.4s ease-in-out infinite;
+}
+
+.wall-shadow-pass-out {
+  animation: wall-shadow-pass-out 2.4s ease-in-out infinite;
+}
+
+.wall-shadow-pass-in {
+  opacity: 0;
+  animation: wall-shadow-pass-in 2.4s ease-in-out infinite;
+}
+
+.wall-shadow-fire-map {
+  animation: wall-shadow-fire-map 2.8s ease-in-out infinite;
+}
+
+.wall-shadow-poison-random {
+  opacity: 0;
+  animation: wall-shadow-poison-random 2.4s ease-in-out infinite;
+}
+
+.wall-shadow-ice-slide {
+  opacity: 0;
+  animation: wall-shadow-ice-slide 2.4s ease-in-out infinite;
+}
+
+.wall-shadow-wind-push {
+  opacity: 0;
+  animation: wall-shadow-wind-push 2.4s ease-in-out infinite;
+}
+
+.wall-shadow-phase-origin {
+  animation: wall-shadow-phase-origin 3s ease-in-out infinite;
+}
+
+.wall-shadow-phase-destination {
+  opacity: 0;
+  animation: wall-shadow-phase-destination 3s ease-in-out infinite;
+}
+
+.wall-shadow-wormhole-enter {
+  animation: wall-shadow-wormhole-enter 2.8s ease-in-out infinite;
+}
+
+.wall-preview-direction-cue {
+  position: absolute;
+  inset: 1px 1px auto;
+  z-index: 6;
+  display: flex;
+  justify-content: space-between;
+  gap: 1px;
+  color: #365314;
+  font-size: 6px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 0 3px #d9f99d;
+  animation: wall-preview-poison-cue 2.4s steps(1, end) infinite;
+}
+
+.wall-preview-direction-cue span {
+  border: 1px solid rgba(101, 163, 13, 0.7);
+  border-radius: 3px;
+  background: rgba(236, 252, 203, 0.9);
+  padding: 1px 2px;
+  white-space: nowrap;
+}
+
+.wall-preview-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 1px;
+  z-index: 6;
+  max-width: calc(100% - 2px);
+  padding: 1px 2px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(103, 232, 249, 0.55);
+  border-radius: 3px;
+  background: rgba(15, 23, 42, 0.86);
+  color: #cffafe;
+  font-size: 6px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.wall-preview-fire-cue {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.wall-preview-fire-cue::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 15px;
+  height: 20px;
+  border-radius: 50% 50% 45% 45%;
+  background: radial-gradient(circle at 50% 72%, #fde047 0 18%, #f97316 38%, rgba(185, 28, 28, 0.2) 72%);
+  opacity: 0;
+  transform: translate(-50%, -45%) scale(0.35);
+  animation: wall-preview-flame 2.8s ease-in-out infinite;
+}
+
+.wall-preview-fire-cue [data-preview-ash-wall] {
+  position: absolute;
+  width: 17px;
+  height: 3px;
+  border-radius: 2px;
+  background: #6b1111;
+  box-shadow: 0 0 4px #fb923c;
+  opacity: 0;
+  animation: wall-preview-ash 2.8s ease-in-out infinite;
+}
+
+.wall-preview-fire-cue [data-preview-ash-wall='one'] {
+  left: -3px;
+  top: 4px;
+}
+
+.wall-preview-fire-cue [data-preview-ash-wall='two'] {
+  right: -3px;
+  top: 16px;
+  animation-delay: 80ms;
+}
+
+.wall-preview-fire-cue [data-preview-ash-wall='three'] {
+  left: 13px;
+  bottom: 3px;
+  transform: rotate(90deg);
+  animation-delay: 160ms;
+}
+
+.wall-preview-portal {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  width: 27px;
+  height: 27px;
+  margin: -13.5px 0 0 -13.5px;
+  border: 3px solid rgba(216, 180, 254, 0.88);
+  border-radius: 999px;
+  background: radial-gradient(circle, #020617 18%, #6d28d9 48%, rgba(168, 85, 247, 0.1) 68%);
+  box-shadow: 0 0 9px #a855f7;
+  animation: wall-preview-portal-spin 2.8s linear infinite;
+}
+
+.wall-preview-caption-wormhole {
+  color: #f5d0fe;
+  border-color: rgba(216, 180, 254, 0.65);
+}
+
+.wall-preview-dice {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  display: grid;
+  width: 23px;
+  height: 23px;
+  margin: -12px 0 0 -12px;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  place-items: center;
+  border: 2px solid #ede9fe;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #7c3aed, #312e81);
+  color: white;
+  font-size: 5px;
+  line-height: 1;
+  box-shadow: 3px 3px 0 #1e1b4b, 0 0 8px #c084fc;
+  animation: wall-preview-dice-roll 2.8s ease-in-out infinite;
+}
+
+.wall-preview-dice span:last-child {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+@keyframes wall-shadow-bump {
+  0%, 12%, 100% { opacity: 0.35; transform: translate(0, 0) scale(0.94); }
+  36% { opacity: 0.82; transform: translate(calc(var(--wall-preview-x) * 13px), calc(var(--wall-preview-y) * 13px)) scale(1); }
+  43% { transform: translate(calc(var(--wall-preview-x) * 10px), calc(var(--wall-preview-y) * 10px)) scale(1.12, 0.9); filter: drop-shadow(0 0 7px #fca5a5); }
+  68% { opacity: 0.72; transform: translate(0, 0) scale(1); }
+}
+
+@keyframes wall-shadow-pass-out {
+  0%, 12% { opacity: 0.35; transform: translate(0, 0); }
+  45% { opacity: 0.85; transform: translate(calc(var(--wall-preview-x) * 16px), calc(var(--wall-preview-y) * 16px)); }
+  56%, 100% { opacity: 0; transform: translate(calc(var(--wall-preview-x) * 20px), calc(var(--wall-preview-y) * 20px)); }
+}
+
+@keyframes wall-shadow-pass-in {
+  0%, 45% { opacity: 0; transform: translate(calc(var(--wall-preview-x) * -19px), calc(var(--wall-preview-y) * -19px)); }
+  61% { opacity: 0.82; }
+  76% { opacity: 0.72; transform: translate(0, 0); }
+  100% { opacity: 0.28; transform: translate(0, 0); }
+}
+
+@keyframes wall-shadow-fire-map {
+  0%, 12%, 100% { opacity: 0.34; transform: translate(0, 0); filter: drop-shadow(0 0 4px #67e8f9); }
+  34% { opacity: 0.86; transform: translate(calc(var(--wall-preview-x) * 13px), calc(var(--wall-preview-y) * 13px)); }
+  44%, 70% { opacity: 0.96; transform: translate(calc(var(--wall-preview-x) * 9px), calc(var(--wall-preview-y) * 9px)); filter: drop-shadow(0 0 9px #f97316) sepia(1) saturate(3); }
+  86% { opacity: 0.55; transform: translate(0, 0); filter: drop-shadow(0 0 6px #facc15); }
+}
+
+@keyframes wall-preview-flame {
+  0%, 32%, 100% { opacity: 0; transform: translate(-50%, -45%) scale(0.35); }
+  45%, 74% { opacity: 0.88; transform: translate(-50%, -54%) scale(0.82); }
+  62% { transform: translate(-50%, -61%) scale(1.02, 1.2); }
+}
+
+@keyframes wall-preview-ash {
+  0%, 40%, 100% { opacity: 0; filter: none; }
+  48% { opacity: 0.92; filter: brightness(1.5); }
+  70% { opacity: 0.25; background: #57534e; filter: blur(0.5px); }
+  82% { opacity: 0; transform: translateY(3px) scaleX(0.5); }
+}
+
+@keyframes wall-preview-poison-cue {
+  0%, 32%, 100% { opacity: 0.28; }
+  42%, 78% { opacity: 1; }
+}
+
+@keyframes wall-shadow-poison-random {
+  0%, 44% { opacity: 0; transform: translate(calc(var(--wall-preview-x) * -18px), calc(var(--wall-preview-y) * -18px)); }
+  58% { opacity: 0.85; transform: translate(0, 0); filter: drop-shadow(0 0 7px #a3e635); }
+  76% { opacity: 0.9; transform: translate(calc(var(--wall-preview-result-x) * 13px), calc(var(--wall-preview-result-y) * 13px)); }
+  100% { opacity: 0; transform: translate(calc(var(--wall-preview-result-x) * 15px), calc(var(--wall-preview-result-y) * 15px)); }
+}
+
+@keyframes wall-shadow-ice-slide {
+  0%, 44% { opacity: 0; transform: translate(calc(var(--wall-preview-x) * -18px), calc(var(--wall-preview-y) * -18px)); }
+  58% { opacity: 0.88; transform: translate(0, 0); filter: drop-shadow(0 0 7px #e0f2fe); }
+  82% { opacity: 0.78; transform: translate(calc(var(--wall-preview-x) * 16px), calc(var(--wall-preview-y) * 16px)); }
+  100% { opacity: 0; transform: translate(calc(var(--wall-preview-x) * 18px), calc(var(--wall-preview-y) * 18px)); }
+}
+
+@keyframes wall-shadow-wind-push {
+  0%, 44% { opacity: 0; transform: translate(calc(var(--wall-preview-x) * -18px), calc(var(--wall-preview-y) * -18px)); }
+  58% { opacity: 0.88; transform: translate(0, 0); }
+  72% { opacity: 0.92; transform: translate(calc(var(--wall-preview-x) * 12px), calc(var(--wall-preview-y) * 12px)) rotate(8deg); filter: drop-shadow(0 0 8px #22d3ee); }
+  100% { opacity: 0; transform: translate(calc(var(--wall-preview-x) * 16px), calc(var(--wall-preview-y) * 16px)); }
+}
+
+@keyframes wall-shadow-phase-origin {
+  0%, 12%, 100% { opacity: 0.34; transform: translate(0, 0); }
+  28% { opacity: 0.86; transform: translate(calc(var(--wall-preview-x) * 13px), calc(var(--wall-preview-y) * 13px)); }
+  37% { transform: translate(calc(var(--wall-preview-x) * 9px), calc(var(--wall-preview-y) * 9px)) scale(1.08, 0.92); }
+  56% { opacity: 0.28; transform: translate(0, 0); }
+  72% { opacity: 0.75; transform: translate(calc(var(--wall-preview-x) * 16px), calc(var(--wall-preview-y) * 16px)); }
+  82% { opacity: 0; }
+}
+
+@keyframes wall-shadow-phase-destination {
+  0%, 68% { opacity: 0; transform: translate(calc(var(--wall-preview-x) * -18px), calc(var(--wall-preview-y) * -18px)); }
+  78% { opacity: 0.82; }
+  92% { opacity: 0.66; transform: translate(0, 0); }
+  100% { opacity: 0; }
+}
+
+@keyframes wall-shadow-wormhole-enter {
+  0%, 12%, 100% { opacity: 0.45; transform: translate(-12px, 7px) scale(0.92); }
+  42% { opacity: 0.9; transform: translate(0, 0) scale(1); }
+  68% { opacity: 0.15; transform: translate(0, 0) scale(0.08) rotate(160deg); filter: drop-shadow(0 0 11px #d8b4fe); }
+  78% { opacity: 0; transform: scale(0); }
+}
+
+@keyframes wall-preview-portal-spin {
+  0% { transform: rotate(0deg) scale(0.88); filter: hue-rotate(0deg); }
+  50% { transform: rotate(180deg) scale(1.06); filter: hue-rotate(35deg); }
+  100% { transform: rotate(360deg) scale(0.88); filter: hue-rotate(0deg); }
+}
+
+@keyframes wall-preview-dice-roll {
+  0%, 62% { opacity: 0; transform: translate(-18px, 10px) rotate(-120deg) scale(0.35); }
+  76% { opacity: 1; transform: translate(2px, -2px) rotate(24deg) scale(1.08); }
+  88% { opacity: 0.94; transform: translate(0, 0) rotate(0deg) scale(1); }
+  100% { opacity: 0.3; transform: translate(0, 0) rotate(0deg) scale(0.92); }
+}
+
+/* Public 4x4 V2 wormhole board. The die itself carries the runner state. */
+.wormhole-realm-transition {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 54%, transparent 0 9%, rgba(88, 28, 135, 0.28) 28%, rgba(15, 23, 42, 0.92) 100%);
+  animation: wormhole-realm-dim 0.92s ease-in both;
+}
+
+.wormhole-realm-transition-vortex,
+.wormhole-realm-transition-core {
+  position: absolute;
+  left: 50%;
+  top: 54%;
+  display: block;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+}
+
+.wormhole-realm-transition-vortex {
+  width: min(72%, 17rem);
+  aspect-ratio: 1;
+  background: repeating-conic-gradient(
+    from 0deg,
+    rgba(216, 180, 254, 0.92) 0deg 12deg,
+    rgba(109, 40, 217, 0.18) 12deg 28deg,
+    rgba(30, 27, 75, 0.82) 28deg 43deg
+  );
+  -webkit-mask: radial-gradient(circle, transparent 0 17%, #000 20% 58%, transparent 72%);
+  mask: radial-gradient(circle, transparent 0 17%, #000 20% 58%, transparent 72%);
+  filter: blur(0.6px) drop-shadow(0 0 12px rgba(168, 85, 247, 0.9));
+  animation: wormhole-realm-vortex 0.92s cubic-bezier(0.3, 0.02, 0.25, 1) both;
+}
+
+.wormhole-realm-transition-core {
+  width: min(16%, 3.5rem);
+  aspect-ratio: 1;
+  background: radial-gradient(circle, #020617 0 36%, #6d28d9 58%, rgba(216, 180, 254, 0.72) 72%, transparent 75%);
+  box-shadow: 0 0 18px rgba(168, 85, 247, 0.95);
+  animation: wormhole-realm-core 0.92s ease-in both;
+}
+
+.dice-wormhole-board {
+  background:
+    radial-gradient(circle at 50% 46%, rgba(196, 181, 253, 0.28), transparent 46%),
+    linear-gradient(180deg, #f7f1ff 0%, #e8f2df 100%);
+  animation: dice-wormhole-realm-enter 0.34s ease-out both;
+}
+
+.dice-wormhole-grid {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.72),
+    inset 0 0 18px rgba(76, 29, 149, 0.18),
+    0 5px 12px rgba(49, 46, 129, 0.2);
+}
+
+.dice-wormhole-cell {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.dice-wormhole-block {
+  display: flex;
+  width: 72%;
+  height: 72%;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #94a3b8;
+  border-radius: 7px 11px 6px 10px;
+  background: linear-gradient(145deg, #64748b, #1e293b 68%);
+  color: #c4b5fd;
+  font-size: clamp(9px, 2.2vw, 16px);
+  text-shadow: 0 0 5px #a78bfa;
+  transform: rotate(-4deg);
+  box-shadow: inset 2px 2px 2px rgba(255, 255, 255, 0.18), 2px 3px 0 rgba(15, 23, 42, 0.55);
+}
+
+.dice-wormhole-exit {
+  position: absolute;
+  inset: 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(109, 40, 217, 0.72);
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(233, 213, 255, 0.88), rgba(139, 92, 246, 0.18) 68%, transparent 72%);
+  color: #581c87;
+  font-size: clamp(5px, 1.2vw, 8px);
+  font-weight: 900;
+  line-height: 1;
+  animation: dice-wormhole-exit-pulse 1.6s ease-in-out infinite;
+}
+
+.dice-wormhole-exit strong {
+  margin-top: 1px;
+  font-size: clamp(10px, 2.6vw, 17px);
+}
+
+.dice-wormhole-piece {
+  --dice-roll-enter-x: 0;
+  --dice-roll-enter-y: 0;
+  --dice-cube-size: clamp(22px, 9vw, 34px);
+  --dice-face-depth: calc(var(--dice-cube-size) / 2);
+  position: relative;
+  z-index: 4;
+  width: var(--dice-cube-size);
+  aspect-ratio: 1;
+  perspective: 220px;
+  filter: drop-shadow(0 5px 3px rgba(30, 27, 75, 0.42));
+}
+
+.dice-wormhole-camera {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--dice-cube-size);
+  height: var(--dice-cube-size);
+  transform: translate(-50%, -50%) rotateX(-36deg) rotateY(-35deg);
+  transform-style: preserve-3d;
+}
+
+.dice-wormhole-cube {
+  position: absolute;
+  inset: 0;
+  display: block;
+  transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg);
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.dice-wormhole-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  place-items: center;
+  padding: 10%;
+  border: 1px solid rgba(49, 46, 129, 0.88);
+  border-radius: 4px;
+  backface-visibility: hidden;
+  background: linear-gradient(145deg, #ffffff, #ddd6fe);
+  box-shadow: inset -2px -2px 3px rgba(91, 33, 182, 0.24);
+}
+
+.dice-wormhole-face-top {
+  transform: rotateX(90deg) translateZ(var(--dice-face-depth));
+  background: linear-gradient(145deg, #fff, #f5f3ff);
+}
+
+.dice-wormhole-face-bottom {
+  transform: rotateX(-90deg) translateZ(var(--dice-face-depth));
+  background: linear-gradient(145deg, #c4b5fd, #8b5cf6);
+}
+
+.dice-wormhole-face-front {
+  transform: translateZ(var(--dice-face-depth));
+  background: linear-gradient(145deg, #ede9fe, #c4b5fd);
+}
+
+.dice-wormhole-face-back {
+  transform: rotateY(180deg) translateZ(var(--dice-face-depth));
+  background: linear-gradient(145deg, #ddd6fe, #a78bfa);
+}
+
+.dice-wormhole-face-right {
+  transform: rotateY(90deg) translateZ(var(--dice-face-depth));
+  background: linear-gradient(145deg, #ddd6fe, #a78bfa);
+}
+
+.dice-wormhole-face-left {
+  transform: rotateY(-90deg) translateZ(var(--dice-face-depth));
+  background: linear-gradient(145deg, #ede9fe, #c4b5fd);
+}
+
+.dice-wormhole-pip {
+  width: 55%;
+  height: 55%;
+  min-width: 1.5px;
+  min-height: 1.5px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.dice-wormhole-pip[data-pip-active='true'] {
+  background: #312e81;
+  box-shadow: inset 0 0 1px #020617, 0 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.dice-wormhole-piece-roll {
+  animation: dice-wormhole-step 0.62s cubic-bezier(0.22, 0.8, 0.3, 1);
+}
+
+.dice-wormhole-piece-roll .dice-wormhole-cube {
+  animation-duration: 0.62s;
+  animation-timing-function: cubic-bezier(0.22, 0.8, 0.3, 1);
+  animation-fill-mode: both;
+}
+
+.dice-wormhole-piece-roll[data-roll-direction='up'] .dice-wormhole-cube {
+  animation-name: dice-wormhole-cube-roll-up;
+}
+
+.dice-wormhole-piece-roll[data-roll-direction='right'] .dice-wormhole-cube {
+  animation-name: dice-wormhole-cube-roll-right;
+}
+
+.dice-wormhole-piece-roll[data-roll-direction='down'] .dice-wormhole-cube {
+  animation-name: dice-wormhole-cube-roll-down;
+}
+
+.dice-wormhole-piece-roll[data-roll-direction='left'] .dice-wormhole-cube {
+  animation-name: dice-wormhole-cube-roll-left;
+}
+
+.dice-wormhole-piece-bump {
+  animation: dice-wormhole-bump 0.42s ease-out;
+}
+
+@keyframes dice-wormhole-step {
+  from {
+    opacity: 0.35;
+    transform: translate(
+      calc(var(--dice-roll-enter-x) * 24px),
+      calc(var(--dice-roll-enter-y) * 24px)
+    ) scale(0.82);
+  }
+  72% { opacity: 1; transform: translate(0, 0) scale(1.08); }
+  to { opacity: 1; transform: translate(0, 0) scale(1); }
+}
+
+@keyframes dice-wormhole-cube-roll-up {
+  from { transform: rotateX(-90deg); }
+  to { transform: rotateX(0deg); }
+}
+
+@keyframes dice-wormhole-cube-roll-right {
+  from { transform: rotateZ(-90deg); }
+  to { transform: rotateZ(0deg); }
+}
+
+@keyframes dice-wormhole-cube-roll-down {
+  from { transform: rotateX(90deg); }
+  to { transform: rotateX(0deg); }
+}
+
+@keyframes dice-wormhole-cube-roll-left {
+  from { transform: rotateZ(90deg); }
+  to { transform: rotateZ(0deg); }
+}
+
+@keyframes dice-wormhole-bump {
+  0%, 100% { transform: translate(0, 0); filter: drop-shadow(0 5px 3px rgba(30, 27, 75, 0.42)); }
+  32% { transform: translate(-3px, 0) scale(1.06); filter: drop-shadow(0 0 7px #fb7185); }
+  65% { transform: translate(3px, 0) scale(0.96); }
+}
+
+@keyframes dice-wormhole-exit-pulse {
+  0%, 100% { opacity: 0.72; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1); box-shadow: 0 0 7px rgba(139, 92, 246, 0.62); }
+}
+
+@keyframes wormhole-realm-dim {
+  0% { opacity: 0; }
+  28% { opacity: 0.32; }
+  76% { opacity: 0.86; }
+  100% { opacity: 1; background-color: #120826; }
+}
+
+@keyframes wormhole-realm-vortex {
+  0% { opacity: 0; transform: translate(-50%, -50%) rotate(0deg) scale(0.34); }
+  22% { opacity: 0.72; }
+  72% { opacity: 1; transform: translate(-50%, -50%) rotate(520deg) scale(1.08); }
+  100% { opacity: 0.12; transform: translate(-50%, -50%) rotate(760deg) scale(0.08); }
+}
+
+@keyframes wormhole-realm-core {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.25); }
+  55% { opacity: 1; transform: translate(-50%, -50%) scale(1.12); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(0.08); }
+}
+
+@keyframes dice-wormhole-realm-enter {
+  from { opacity: 0; transform: scale(1.035); filter: saturate(1.4) blur(2px); }
+  to { opacity: 1; transform: scale(1); filter: saturate(1) blur(0); }
+}
+
 .wall-effect-visual {
   --wall-effect-glow: #67e8f9;
   position: relative;
@@ -314,6 +936,34 @@ body {
   .wall-guide-badge,
   .wall-guide-conflict,
   .wall-collision-impact {
+    animation: none !important;
+  }
+
+  .wall-action-preview-layer *,
+  .wall-action-preview-layer *::before,
+  .wall-action-preview-layer *::after {
+    animation: none !important;
+  }
+
+  .wall-action-preview-layer [data-shadow-clone='origin'] {
+    opacity: 0.76 !important;
+    transform: translate(-6px, 0) !important;
+  }
+
+  .wall-action-preview-layer [data-shadow-clone='destination'],
+  .wall-action-preview-layer .wall-preview-dice {
+    opacity: 0.55 !important;
+    transform: translate(5px, 0) !important;
+  }
+
+  .dice-wormhole-piece,
+  .dice-wormhole-camera,
+  .dice-wormhole-cube,
+  .dice-wormhole-exit,
+  .dice-wormhole-board,
+  .wormhole-realm-transition,
+  .wormhole-realm-transition-vortex,
+  .wormhole-realm-transition-core {
     animation: none !important;
   }
 }

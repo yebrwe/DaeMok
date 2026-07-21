@@ -28,7 +28,11 @@ function loadTypeScript(relativePath, aliases = {}) {
 }
 
 const types = loadTypeScript('src/types/game.ts');
-const utils = loadTypeScript('src/lib/gameUtils.ts', { '@/types/game': types });
+const diceWormhole = loadTypeScript('src/lib/diceWormhole.ts', { '@/types/game': types });
+const utils = loadTypeScript('src/lib/gameUtils.ts', {
+  '@/types/game': types,
+  '@/lib/diceWormhole': diceWormhole,
+});
 const visuals = loadTypeScript('src/lib/liveBoardVisuals.ts', {
   '@/lib/gameUtils': utils,
 });
@@ -160,6 +164,31 @@ function advance(previous, position, moves = 1) {
   assert.equal(visual.action, 'wormhole');
   assert.deepEqual(visual.fx.to, pos(4, 4));
   assert.deepEqual(visual.via, [pos(0, 1)]);
+}
+
+{
+  const previous = stateWithPlayedItems([{
+    type: 'wormhole',
+    entrance: pos(0, 1),
+    exit: pos(4, 4),
+  }]);
+  const next = advance(previous, pos(0, 1));
+  next.itemState['runner-b'].consumed[0] = true;
+  next.wormholeRunsByPlayer = {
+    'runner-a': {
+      mapOwnerId: 'runner-b',
+      itemIndex: 0,
+      position: pos(0, 0),
+      challenge: { version: 2 },
+    },
+  };
+  const visual = visuals.deriveLiveBoardVisualTransition(previous, next, 'runner-a', 41);
+  assert.equal(visual.action, 'wormhole');
+  assert.equal(
+    visual.fx.wormholeTransition,
+    'entered',
+    'entering an internal wormhole room preserves a suction-transition signal'
+  );
 }
 
 {

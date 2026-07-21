@@ -1,11 +1,13 @@
 import {
   CollisionWall,
+  DiceWormholeRunState,
   Direction,
   GameMap,
   GamePhase,
   GameState,
   MapItem,
   MazeSkillId,
+  LegacyWormholeRunState,
   Obstacle,
   PoisonEffect,
   Position,
@@ -16,6 +18,7 @@ import {
 import {
   BOARD_SIZE,
   canMove,
+  cloneWormholeChallenge,
   findShortestPath,
   getMapItems,
   getNewPosition,
@@ -27,6 +30,20 @@ import {
   isValidWormholeChallenge,
   isWormholeExitSafe,
 } from '@/lib/gameUtils';
+import {
+  getDiceOrientationFaces,
+  isDiceWormholePosition,
+  isValidDiceWormholeChallenge,
+  rollDiceOrientation,
+} from '@/lib/diceWormhole';
+
+function isLegacyWormholeRun(run: WormholeRunState): run is LegacyWormholeRunState {
+  return run.challenge.version === 1 && isValidWormholeChallenge(run.challenge);
+}
+
+function isDiceWormholeRun(run: WormholeRunState): run is DiceWormholeRunState {
+  return run.challenge.version === 2 && isValidDiceWormholeChallenge(run.challenge);
+}
 
 export type TurnMoveEffect = 'move' | 'bump' | 'mine' | 'wormhole' | 'smoke';
 
@@ -208,7 +225,7 @@ function normalizeItemFlags(value: unknown): Record<number, boolean> {
   return value && typeof value === 'object' ? { ...(value as Record<number, boolean>) } : {};
 }
 
-const FIRE_HALLUCINATION_WALL_COUNT = 6;
+const FIRE_ACTION_DURATION = 4;
 const POISON_ACTION_DURATION = 4;
 const CARDINAL_DIRECTIONS: Direction[] = ['up', 'down', 'left', 'right'];
 const DIRECTION_LABELS: Record<Direction, string> = {
@@ -227,124 +244,42 @@ function stableEffectHash(value: string): number {
   return hash >>> 0;
 }
 
-function canonicalInnerWallSlots(): Obstacle[] {
-  const slots: Obstacle[] = [];
-  for (let row = 0; row < BOARD_SIZE; row += 1) {
-    for (let col = 0; col < BOARD_SIZE; col += 1) {
-      if (col < BOARD_SIZE - 1) slots.push({ position: { row, col }, direction: 'right' });
-      if (row < BOARD_SIZE - 1) slots.push({ position: { row, col }, direction: 'down' });
-    }
-  }
-  return slots;
-}
-
-function wallDistanceFrom(position: Position, wall: Obstacle): number {
-  const adjacent = getNewPosition(wall.position, wall.direction);
-  return Math.min(
-    Math.abs(position.row - wall.position.row) + Math.abs(position.col - wall.position.col),
-    Math.abs(position.row - adjacent.row) + Math.abs(position.col - adjacent.col)
-  );
-}
-
-function createFireHallucinationWalls(
-  state: GameState,
-  actorId: string,
-  mapOwnerId: string,
-  playedMap: GameMap,
-  mapItems: MapItem[],
-  consumed: Record<number, boolean>,
-  origin: Position
-): Obstacle[] {
-  const activePhysicalWalls: Obstacle[] = [
-    ...(playedMap.obstacles || []),
-    ...mapItems.flatMap((item, index) =>
-      isWallItemType(item.type) && item.wallPosition && item.wallDirection &&
-      (item.type === 'steelWall' || !consumed[index])
-        ? [{ position: item.wallPosition, direction: item.wallDirection }]
-        : []
-    ),
-  ];
-  const alreadyKnown = Object.values(collisionRecord(state.collisionWalls)).filter(
-    (wall) => wall.playerId === actorId && wall.mapOwnerId === mapOwnerId
-  );
-  const seed = `${actorId}:${mapOwnerId}:${state.turnNumber || 1}`;
-  const rank = (wall: Obstacle) =>
-    wallDistanceFrom(origin, wall) * 0x1_0000 +
-    stableEffectHash(`${seed}:${wall.position.row},${wall.position.col}:${wall.direction}`) % 0x1_0000;
-  const slots = canonicalInnerWallSlots().filter((slot) => !alreadyKnown.some((wall) =>
-    isSameWallSegment(slot.position, slot.direction, wall.position, wall.direction)
-  ));
-  const real = slots
-    .filter((slot) => activePhysicalWalls.some((wall) =>
-      isSameWallSegment(slot.position, slot.direction, wall.position, wall.direction)
-    ))
-    .sort((left, right) => rank(left) - rank(right));
-  const empty = slots
-    .filter((slot) => !activePhysicalWalls.some((wall) =>
-      isSameWallSegment(slot.position, slot.direction, wall.position, wall.direction)
-    ))
-    .sort((left, right) => rank(left) - rank(right));
-  const selected = [
-    ...real.slice(0, Math.min(3, real.length)),
-    ...empty.slice(0, FIRE_HALLUCINATION_WALL_COUNT - Math.min(3, real.length)),
-  ];
-  if (selected.length < FIRE_HALLUCINATION_WALL_COUNT) {
-    selected.push(...real.slice(selected.filter((wall) => real.includes(wall)).length)
-      .slice(0, FIRE_HALLUCINATION_WALL_COUNT - selected.length));
-  }
-  return selected
-    .sort((left, right) => stableEffectHash(`${seed}:mix:${left.position.row},${left.position.col}:${left.direction}`) -
-      stableEffectHash(`${seed}:mix:${right.position.row},${right.position.col}:${right.direction}`))
-    .map((wall) => ({ position: { ...wall.position }, direction: wall.direction }));
-}
-
 function poisonDirectionForAction(
   state: GameState,
   actorId: string,
-  requestedDirection: Direction,
-  currentPosition: Position,
-  playedMap: GameMap,
-  mapOwnerId: string
+  requestedDirection: Direction
 ): Direction {
   const effect = getActivePoisonEffect(state, actorId);
   if (!effect) return requestedDirection;
   const actionNumber = state.players[actorId]?.moves || 0;
-  const roll = stableEffectHash(`${effect.seed}:roll:${actionNumber}`) % 4;
-  if (roll !== 0) return requestedDirection;
-  const wormholeRun = state.wormholeRunsByPlayer?.[actorId];
-  const mapItems = getMapItems(playedMap);
-  const consumed = normalizeConsumed(state.itemState?.[mapOwnerId]?.consumed);
-  const activeWalls = normalizeItemFlags(state.itemState?.[mapOwnerId]?.activeWalls);
-  const alternatives = CARDINAL_DIRECTIONS.filter((direction) => {
-    if (direction === requestedDirection) return false;
-    const target = getNewPosition(currentPosition, direction);
-    if (!isPositionInBoard(target)) return false;
+  return CARDINAL_DIRECTIONS[
+    stableEffectHash(`${effect.seed}:direction:${actionNumber}`) % CARDINAL_DIRECTIONS.length
+  ];
+}
 
-    if (wormholeRun) {
-      return isValidWormholeChallenge(wormholeRun.challenge) &&
-        canMove(currentPosition, direction, wormholeRun.challenge.obstacles);
-    }
-
-    if (!canMove(currentPosition, direction, playedMap.obstacles || [])) return false;
-    if (matchingWallItemIndex(
-      currentPosition,
-      direction,
-      mapItems,
-      consumed,
-      activeWalls
-    ) >= 0) return false;
-
-    // Poison should redirect into a guaranteed one-cell move. Avoid consuming a
-    // landing trap or turning the redirect into a rollback/teleport/smoke event.
-    return !mapItems.some((item, index) => {
-      if (consumed[index]) return false;
-      const trapPosition = item.type === 'wormhole' ? item.entrance : item.position;
-      return (item.type === 'mine' || item.type === 'wormhole' || item.type === 'smoke') &&
-        !!trapPosition && isSamePosition(target, trapPosition);
-    });
-  });
-  if (alternatives.length === 0) return requestedDirection;
-  return alternatives[stableEffectHash(`${effect.seed}:direction:${actionNumber}`) % alternatives.length];
+function forgetWallKnowledgeForPlayer(state: GameState, playerId: string): GameState {
+  const collisionWalls = Object.fromEntries(
+    Object.entries(collisionRecord(state.collisionWalls)).filter(
+      ([, wall]) => wall.playerId !== playerId
+    )
+  );
+  const revealedWallsByPlayer = { ...(state.revealedWallsByPlayer || {}) };
+  delete revealedWallsByPlayer[playerId];
+  const nextState: GameState = {
+    ...state,
+    collisionWalls,
+    revealedWallsByPlayer,
+  };
+  const wormholeRun = state.wormholeRunsByPlayer?.[playerId];
+  if (wormholeRun && isLegacyWormholeRun(wormholeRun) && wormholeRun.discoveredWalls?.length) {
+    const clearedRun = { ...wormholeRun };
+    delete clearedRun.discoveredWalls;
+    nextState.wormholeRunsByPlayer = {
+      ...(state.wormholeRunsByPlayer || {}),
+      [playerId]: clearedRun,
+    };
+  }
+  return nextState;
 }
 
 function matchingWallItemIndex(
@@ -448,26 +383,37 @@ function findNearbyStaticWalls(position: Position, playedMap: GameMap): Obstacle
   return mergeWallSegments([], found);
 }
 
-function resolveWormholeMove(
+function resolveLegacyWormholeMove(
   state: GameState,
   actorId: string,
   direction: Direction,
   playedMap: GameMap,
   mapOwnerId: string,
-  now: number
+  now: number,
+  consumeOutOfBounds = false
 ): TurnResolution | null {
   const player = state.players[actorId];
   const run = state.wormholeRunsByPlayer?.[actorId];
-  if (!player || !run || run.mapOwnerId !== mapOwnerId || !isValidWormholeChallenge(run.challenge)) {
+  if (!player || !run || run.mapOwnerId !== mapOwnerId) {
     return null;
   }
+  // Version-specific resolution stays behind this dispatcher. A V2 challenge
+  // must never fall through to the V1 seal-maze rules below.
+  if (!isLegacyWormholeRun(run)) return null;
   const wormhole = getMapItems(playedMap)[run.itemIndex];
-  if (!wormhole || wormhole.type !== 'wormhole' || !wormhole.exit || !wormhole.challenge) return null;
+  if (
+    !wormhole ||
+    wormhole.type !== 'wormhole' ||
+    !wormhole.exit ||
+    !wormhole.challenge ||
+    wormhole.challenge.version !== 1
+  ) return null;
 
   const origin = run.position;
   const attempted = getNewPosition(origin, direction);
-  if (!isPositionInBoard(attempted)) return null;
-  const blocked = !canMove(origin, direction, run.challenge.obstacles);
+  const attemptedInBoard = isPositionInBoard(attempted);
+  if (!attemptedInBoard && !consumeOutOfBounds) return null;
+  const blocked = !attemptedInBoard || !canMove(origin, direction, run.challenge.obstacles);
   const position = blocked ? origin : attempted;
   const activatedSeals = { ...(run.activatedSeals || {}) };
   const sealIndex = blocked
@@ -482,12 +428,14 @@ function resolveWormholeMove(
   const allSealsActivated = activatedSealCount === run.challenge.seals.length;
   const returned = !blocked && allSealsActivated && isSamePosition(position, run.challenge.endPosition);
   const moves = (player.moves || 0) + 1;
-  const discoveredWalls = blocked
+  const discoveredWalls = blocked && attemptedInBoard
     ? mergeWallSegments(run.discoveredWalls || [], [{ position: origin, direction }])
     : [...(run.discoveredWalls || [])];
 
   let message = blocked
-    ? '웜홀 내부의 숨은 벽에 부딪혔습니다.'
+    ? attemptedInBoard
+      ? '웜홀 내부의 숨은 벽에 부딪혔습니다.'
+      : '중독으로 웜홀 경계에 부딪혀 행동을 소모했습니다.'
     : `${player.displayName || '플레이어'}가 웜홀 내부에서 한 칸 이동했습니다.`;
   let wormholeTransition: MoveTurnOutcome['wormholeTransition'];
   if (activatedNewSeal) {
@@ -560,7 +508,7 @@ function resolveWormholeMove(
   };
 }
 
-function resolveMove(
+function resolveDiceWormholeMove(
   state: GameState,
   actorId: string,
   direction: Direction,
@@ -569,9 +517,147 @@ function resolveMove(
   now: number
 ): TurnResolution | null {
   const player = state.players[actorId];
+  const run = state.wormholeRunsByPlayer?.[actorId];
+  if (!player || !run || run.mapOwnerId !== mapOwnerId || !isDiceWormholeRun(run)) return null;
+
+  const wormhole = getMapItems(playedMap)[run.itemIndex];
+  if (
+    !wormhole ||
+    wormhole.type !== 'wormhole' ||
+    !wormhole.exit ||
+    wormhole.challenge?.version !== 2 ||
+    !isValidDiceWormholeChallenge(wormhole.challenge)
+  ) return null;
+
+  const origin = run.position;
+  const attempted = getNewPosition(origin, direction);
+  const attemptedInBoard = isDiceWormholePosition(attempted);
+  const blocked = !attemptedInBoard || run.challenge.blockedCells.some((cell) =>
+    isSamePosition(cell, attempted)
+  );
+  const position = blocked ? origin : attempted;
+  const orientation = blocked
+    ? run.orientation
+    : rollDiceOrientation(run.orientation, direction);
+  const actionsTaken = run.actionsTaken + 1;
+  const top = getDiceOrientationFaces(orientation).top;
+  const returned = !blocked &&
+    isSamePosition(position, run.challenge.endPosition) &&
+    top === run.challenge.targetTop;
+  const moves = (player.moves || 0) + 1;
+
+  let message = blocked
+    ? attemptedInBoard
+      ? '주사위가 차원 방의 막힌 칸에 부딪혔습니다.'
+      : '주사위가 차원 방 경계에 부딪혀 행동을 소모했습니다.'
+    : `${player.displayName || '플레이어'}가 주사위를 굴렸습니다. 현재 윗면 ${top}`;
+  if (!blocked && isSamePosition(position, run.challenge.endPosition) && !returned) {
+    message = `출구에 도착했지만 윗면이 ${top}입니다. ${run.challenge.targetTop}을(를) 맞춰야 나갈 수 있습니다.`;
+  }
+
+  const players = {
+    ...state.players,
+    [actorId]: returned
+      ? {
+          ...player,
+          position: { ...wormhole.exit },
+          moves,
+          positionHistory: appendTurnPosition(
+            player.positionHistory,
+            player.position || playedMap.startPosition,
+            wormhole.exit
+          ),
+        }
+      : { ...player, moves },
+  };
+  const runs = { ...(state.wormholeRunsByPlayer || {}) };
+  let wormholeTransition: MoveTurnOutcome['wormholeTransition'];
+  if (returned) {
+    delete runs[actorId];
+    wormholeTransition = 'returned';
+    message = `주사위 윗면 ${run.challenge.targetTop}을(를) 맞춰 웜홀에서 탈출했습니다.`;
+  } else {
+    const nextRun: DiceWormholeRunState = {
+      ...run,
+      position,
+      orientation,
+      actionsTaken,
+    };
+    runs[actorId] = nextRun;
+  }
+
+  const nextState: GameState = {
+    ...state,
+    players,
+    currentTurn: getNextTurnPlayerId(players, actorId, state.turnOrder),
+    turnNumber: (state.turnNumber || 1) + 1,
+    turnMessage: message,
+    turnMessageTimestamp: now,
+  };
+  if (Object.keys(runs).length > 0) nextState.wormholeRunsByPlayer = runs;
+  else delete nextState.wormholeRunsByPlayer;
+
+  return {
+    state: nextState,
+    outcome: {
+      type: 'move',
+      direction,
+      origin,
+      attempted,
+      position: returned ? { ...wormhole.exit } : position,
+      moves,
+      effect: blocked ? 'bump' : returned ? 'wormhole' : 'move',
+      consumedItemIndex: null,
+      ...(returned ? {
+        itemPosition: player.position || playedMap.startPosition,
+        wormholeExit: wormhole.exit,
+      } : {}),
+      realm: returned ? 'main' : 'wormhole',
+      ...(wormholeTransition ? { wormholeTransition } : {}),
+      reachedGoal: false,
+      message,
+    },
+  };
+}
+
+function resolveWormholeMove(
+  state: GameState,
+  actorId: string,
+  direction: Direction,
+  playedMap: GameMap,
+  mapOwnerId: string,
+  now: number,
+  consumeOutOfBounds = false
+): TurnResolution | null {
+  const run = state.wormholeRunsByPlayer?.[actorId];
+  if (!run) return null;
+  return run.challenge.version === 2
+    ? resolveDiceWormholeMove(state, actorId, direction, playedMap, mapOwnerId, now)
+    : resolveLegacyWormholeMove(
+        state,
+        actorId,
+        direction,
+        playedMap,
+        mapOwnerId,
+        now,
+        consumeOutOfBounds
+      );
+}
+
+function resolveMove(
+  state: GameState,
+  actorId: string,
+  direction: Direction,
+  playedMap: GameMap,
+  mapOwnerId: string,
+  now: number,
+  consumeOutOfBounds = false
+): TurnResolution | null {
+  const player = state.players[actorId];
   const origin = player.position || playedMap.startPosition;
   const attempted = getNewPosition(origin, direction);
-  if (!isPositionInBoard(attempted)) return null;
+  const attemptedInBoard = isPositionInBoard(attempted);
+  if (!attemptedInBoard && !consumeOutOfBounds) return null;
 
   const mapItems = getMapItems(playedMap);
   const mapItemState = state.itemState?.[mapOwnerId];
@@ -597,6 +683,7 @@ function resolveMove(
   let fireTriggered = false;
   let poisonTriggered = false;
   let message = `${player.displayName || '플레이어'}가 한 칸 이동했습니다.`;
+  const activeFireEffect = getActiveFireVisionEffect(state, actorId);
 
   const consumeItem = (index: number) => {
     consumed[index] = true;
@@ -651,27 +738,36 @@ function resolveMove(
       effect = 'wormhole';
       consumeItem(wormholeIndex);
       itemPosition = wormhole.entrance;
-      if (exitIsSafe && exit && isValidWormholeChallenge(wormhole.challenge)) {
+      if (
+        exitIsSafe &&
+        exit &&
+        wormhole.challenge &&
+        isValidWormholeChallenge(wormhole.challenge)
+      ) {
         position = landingPosition;
         wormholeExit = wormhole.challenge.startPosition;
         wormholeTransition = 'entered';
-        wormholeRunToCreate = {
-          mapOwnerId,
-          itemIndex: wormholeIndex,
-          position: { ...wormhole.challenge.startPosition },
-          challenge: {
-            version: 1,
-            startPosition: { ...wormhole.challenge.startPosition },
-            endPosition: { ...wormhole.challenge.endPosition },
-            seals: wormhole.challenge.seals.map((seal) => ({ ...seal })),
-            obstacles: wormhole.challenge.obstacles.map((obstacle) => ({
-              position: { ...obstacle.position },
-              direction: obstacle.direction,
-            })),
-          },
-          enteredAtTurn: state.turnNumber || 1,
-        };
-        message = `${player.displayName || '플레이어'}가 웜홀 내부 미로로 끌려갔습니다.`;
+        const challenge = cloneWormholeChallenge(wormhole.challenge);
+        wormholeRunToCreate = challenge.version === 2
+          ? {
+              mapOwnerId,
+              itemIndex: wormholeIndex,
+              position: { ...challenge.startPosition },
+              challenge,
+              orientation: challenge.initialOrientation,
+              actionsTaken: 0,
+              enteredAtTurn: state.turnNumber || 1,
+            }
+          : {
+              mapOwnerId,
+              itemIndex: wormholeIndex,
+              position: { ...challenge.startPosition },
+              challenge,
+              enteredAtTurn: state.turnNumber || 1,
+            };
+        message = challenge.version === 2
+          ? `${player.displayName || '플레이어'}가 주사위 웜홀 방으로 끌려갔습니다. 출구에서 윗면 ${challenge.targetTop}을(를) 맞춰야 합니다.`
+          : `${player.displayName || '플레이어'}가 웜홀 내부 미로로 끌려갔습니다.`;
       } else {
         const destination = exitIsSafe && exit ? exit : fallbackPosition;
         position = destination;
@@ -689,14 +785,16 @@ function resolveMove(
       smokeTriggered = true;
       consumeItem(smokeIndex);
       itemPosition = mapItems[smokeIndex].position;
-      message = `${player.displayName || '플레이어'}가 연막 함정을 밟았습니다. 다음 차례의 시야가 가려집니다.`;
+      message = activeFireEffect
+        ? `${player.displayName || '플레이어'}가 연막 함정을 밟았지만 타오르는 불길이 연막을 흩트러뜨렸습니다. 화염 상태가 계속됩니다.`
+        : `${player.displayName || '플레이어'}가 연막 함정을 밟았습니다. 다음 차례의 시야가 가려집니다.`;
       return true;
     }
 
     return false;
   };
 
-  const passesStaticWall = canMove(origin, direction, playedMap.obstacles || []);
+  const passesStaticWall = attemptedInBoard && canMove(origin, direction, playedMap.obstacles || []);
   const matchingIndex = passesStaticWall
     ? matchingWallItemIndex(origin, direction, mapItems, consumed, activeWalls)
     : -1;
@@ -722,12 +820,12 @@ function resolveMove(
         blocked = true;
         consumeItem(matchingIndex);
         fireTriggered = true;
-        message = '화염벽에 부딪혀 불이 붙었습니다. 열기 속 진짜벽과 환영벽이 뒤섞입니다.';
+        message = '화염벽에 부딪혀 불이 붙었습니다. 벽에 대한 기억이 흐려집니다.';
         break;
       case 'poisonWall':
         consumeItem(matchingIndex);
         poisonTriggered = true;
-        message = '독벽을 통과해 중독됐습니다. 다음 4번의 행동은 25% 확률로 방향이 뒤틀립니다.';
+        message = '독벽을 통과해 중독됐습니다. 다음 4번의 행동 방향이 무작위로 뒤틀립니다.';
         break;
       case 'collapseWall':
         blocked = !!activeWalls[matchingIndex];
@@ -867,7 +965,7 @@ function resolveMove(
     ...(reachedGoal ? { finished: true, finishMoves: moves } : {}),
   };
   const players = { ...state.players, [actorId]: updatedPlayer };
-  const nextState: GameState = {
+  let nextState: GameState = {
     ...state,
     players,
     currentTurn: getNextTurnPlayerId(players, actorId, state.turnOrder),
@@ -898,7 +996,9 @@ function resolveMove(
     };
   }
 
-  if (smokeTriggered) {
+  // Fire owns the single vision-effect slot for its full four-action lifetime.
+  // A smoke trap is still consumed, but cannot truncate an active fire ledger.
+  if (smokeTriggered && !activeFireEffect) {
     nextState.visionEffectsByPlayer = {
       ...(state.visionEffectsByPlayer || {}),
       [actorId]: {
@@ -911,23 +1011,17 @@ function resolveMove(
   }
 
   if (fireTriggered) {
+    // Ignition immediately wipes only this runner's learned wall state. The
+    // consumed fire wall itself is deliberately not re-added as a collision.
+    nextState = forgetWallKnowledgeForPlayer(nextState, actorId);
     nextState.visionEffectsByPlayer = {
       ...(state.visionEffectsByPlayer || {}),
       [actorId]: {
         type: 'fire',
         sourcePlayerId: mapOwnerId,
         appliedAtTurn: state.turnNumber || 1,
-        expiresAtTargetMove: moves + 2,
-        phantomWalls: createFireHallucinationWalls(
-          state,
-          actorId,
-          mapOwnerId,
-          playedMap,
-          mapItems,
-          consumed,
-          origin
-        ),
-      },
+        expiresAtTargetMove: moves + FIRE_ACTION_DURATION,
+      } as FireVisionEffect,
     };
   }
 
@@ -950,7 +1044,7 @@ function resolveMove(
     };
   }
 
-  if (blocked) {
+  if (blocked && attemptedInBoard && wallItem?.type !== 'fireWall') {
     const collision: CollisionWall = {
       playerId: actorId,
       position: origin,
@@ -1006,19 +1100,41 @@ export function resolveTurnAction(
   // Retired detector/skill commands can still appear in legacy receipts and
   // payload types, but movement is now the only legal runtime action.
   if (action.type !== 'move') return null;
-  const actionPosition = state.wormholeRunsByPlayer?.[actorId]?.position ||
-    player.position || playedMap.startPosition;
+  const storedFireEffect = state.visionEffectsByPlayer?.[actorId];
+  const fireLedger = storedFireEffect?.type === 'fire' ? storedFireEffect : null;
+  const playerMovesBeforeAction = player.moves || 0;
+  // Keep an inactive fire ledger through equality so the fourth affected
+  // action's discovery is removed immediately before the fifth own action.
+  // If this attempted action is rejected, the prepared state is never
+  // committed and the temporary discovery remains visible as intended.
+  const preparedState = fireLedger && playerMovesBeforeAction <= fireLedger.expiresAtTargetMove
+    ? forgetWallKnowledgeForPlayer(state, actorId)
+    : state;
+  const poisonWasActive = !!getActivePoisonEffect(preparedState, actorId);
   const resolvedDirection = poisonDirectionForAction(
-    state,
+    preparedState,
     actorId,
-    action.direction,
-    actionPosition,
-    playedMap,
-    mapOwnerId
+    action.direction
   );
-  const resolved = state.wormholeRunsByPlayer?.[actorId]
-    ? resolveWormholeMove(state, actorId, resolvedDirection, playedMap, mapOwnerId, now)
-    : resolveMove(state, actorId, resolvedDirection, playedMap, mapOwnerId, now);
+  const resolved = preparedState.wormholeRunsByPlayer?.[actorId]
+    ? resolveWormholeMove(
+        preparedState,
+        actorId,
+        resolvedDirection,
+        playedMap,
+        mapOwnerId,
+        now,
+        poisonWasActive
+      )
+    : resolveMove(
+        preparedState,
+        actorId,
+        resolvedDirection,
+        playedMap,
+        mapOwnerId,
+        now,
+        poisonWasActive
+      );
 
   if (!resolved) return null;
 
@@ -1031,13 +1147,19 @@ export function resolveTurnAction(
 
   const previousEffect = state.visionEffectsByPlayer?.[actorId];
   const nextEffect = resolved.state.visionEffectsByPlayer?.[actorId];
-  if (
-    previousEffect &&
+  const sameVisionEffect = previousEffect &&
     nextEffect &&
     nextEffect.type === previousEffect.type &&
-    nextEffect.appliedAtTurn === previousEffect.appliedAtTurn &&
-    !isTimedEffectActive(resolved.state, actorId, nextEffect)
-  ) {
+    nextEffect.appliedAtTurn === previousEffect.appliedAtTurn;
+  const shouldRemoveVisionEffect = sameVisionEffect && (
+    previousEffect.type === 'fire'
+      ? playerMovesBeforeAction >= previousEffect.expiresAtTargetMove ||
+        !!resolved.state.players[actorId]?.finished ||
+        !!resolved.state.players[actorId]?.forfeited ||
+        !!resolved.state.players[actorId]?.hasLeft
+      : !isTimedEffectActive(resolved.state, actorId, nextEffect)
+  );
+  if (shouldRemoveVisionEffect) {
     const visionEffectsByPlayer = { ...(resolved.state.visionEffectsByPlayer || {}) };
     delete visionEffectsByPlayer[actorId];
     resolved.state = { ...resolved.state, visionEffectsByPlayer };

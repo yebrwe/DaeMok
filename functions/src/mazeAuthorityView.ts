@@ -3,12 +3,16 @@ import { getVisibleCollisionWalls } from '../vendor/maze-engine/dist/lib/gameUti
 import {
   GamePhase,
   type CollisionWall,
+  type DiceFace,
+  type DiceOrientationId,
+  type DiceWormholeRunState,
   type Direction,
   type GameMap,
   type GameRuleSnapshot,
   type ItemType,
   type MapItem,
   type MazeSkillId,
+  type LegacyWormholeRunState,
   type Obstacle,
   type Position,
   type VisionEffect,
@@ -96,11 +100,8 @@ export interface MazeAuthorityBoardBoundaryView {
 
 export type MazeAuthorityMapView = MazeAuthorityBoardBoundaryView | GameMap;
 
-/**
- * A wormhole challenge projected to clients. Internal walls are deliberately
- * absent during PLAY and are only populated for an END projection.
- */
-export interface MazeAuthorityWormholeChallengeView {
+/** V1 internal walls stay hidden during PLAY and appear only in an END projection. */
+export interface MazeAuthorityLegacyWormholeChallengeView {
   version: 1;
   startPosition: Position;
   endPosition: Position;
@@ -108,15 +109,43 @@ export interface MazeAuthorityWormholeChallengeView {
   obstacles?: Obstacle[];
 }
 
-export interface MazeAuthorityWormholeRunView {
+/** V2 geometry is puzzle state, so the affected runner receives the whole challenge. */
+export interface MazeAuthorityDiceWormholeChallengeView {
+  version: 2;
+  boardSize: 4;
+  startPosition: Position;
+  endPosition: Position;
+  blockedCells: Position[];
+  initialOrientation: DiceOrientationId;
+  targetTop: DiceFace;
+}
+
+export type MazeAuthorityWormholeChallengeView =
+  | MazeAuthorityLegacyWormholeChallengeView
+  | MazeAuthorityDiceWormholeChallengeView;
+
+interface MazeAuthorityWormholeRunViewBase {
   mapOwnerId: string;
   itemIndex: number;
   position: Position;
-  challenge: MazeAuthorityWormholeChallengeView;
-  activatedSeals?: Record<number, boolean>;
-  discoveredWalls?: Obstacle[];
   enteredAtTurn: number;
 }
+
+export interface MazeAuthorityLegacyWormholeRunView extends MazeAuthorityWormholeRunViewBase {
+  challenge: MazeAuthorityLegacyWormholeChallengeView;
+  activatedSeals?: Record<number, boolean>;
+  discoveredWalls?: Obstacle[];
+}
+
+export interface MazeAuthorityDiceWormholeRunView extends MazeAuthorityWormholeRunViewBase {
+  challenge: MazeAuthorityDiceWormholeChallengeView;
+  orientation: DiceOrientationId;
+  actionsTaken: number;
+}
+
+export type MazeAuthorityWormholeRunView =
+  | MazeAuthorityLegacyWormholeRunView
+  | MazeAuthorityDiceWormholeRunView;
 
 /** Public/member poison status. The authority-only direction seed never crosses this boundary. */
 export interface MazeAuthorityPoisonEffectView {
@@ -202,6 +231,17 @@ function cloneObstacle(obstacle: Obstacle): Obstacle {
 }
 
 function cloneWormholeChallenge(challenge: WormholeChallenge): WormholeChallenge {
+  if (challenge.version === 2) {
+    return {
+      version: 2,
+      boardSize: 4,
+      startPosition: clonePosition(challenge.startPosition),
+      endPosition: clonePosition(challenge.endPosition),
+      blockedCells: challenge.blockedCells.map(clonePosition),
+      initialOrientation: challenge.initialOrientation,
+      targetTop: challenge.targetTop,
+    };
+  }
   return {
     version: 1,
     startPosition: clonePosition(challenge.startPosition),
@@ -533,20 +573,30 @@ function projectVisionEffects(
   for (const uid of visibleIds) {
     const effect = source[uid];
     if (!effect || !memberSet.has(effect.sourcePlayerId)) continue;
-    projected[uid] = effect.type === 'fire'
-      ? {
-          type: 'fire',
-          sourcePlayerId: effect.sourcePlayerId,
-          appliedAtTurn: effect.appliedAtTurn,
-          expiresAtTargetMove: effect.expiresAtTargetMove,
-          phantomWalls: effect.phantomWalls.map(cloneObstacle),
-        }
-      : {
-          type: 'smoke',
-          sourcePlayerId: effect.sourcePlayerId,
-          appliedAtTurn: effect.appliedAtTurn,
-          expiresAtTargetMove: effect.expiresAtTargetMove,
-        };
+    if (effect.type === 'fire') {
+      const player = state.gameState.players[uid];
+      if (!player
+        || player.finished
+        || player.forfeited
+        || player.hasLeft
+        || (player.moves ?? 0) >= effect.expiresAtTargetMove) continue;
+      projected[uid] = {
+        type: 'fire',
+        sourcePlayerId: effect.sourcePlayerId,
+        appliedAtTurn: effect.appliedAtTurn,
+        expiresAtTargetMove: effect.expiresAtTargetMove,
+        ...(effect.phantomWalls
+          ? { phantomWalls: effect.phantomWalls.map(cloneObstacle) }
+          : {}),
+      };
+      continue;
+    }
+    projected[uid] = {
+      type: 'smoke',
+      sourcePlayerId: effect.sourcePlayerId,
+      appliedAtTurn: effect.appliedAtTurn,
+      expiresAtTargetMove: effect.expiresAtTargetMove,
+    };
   }
   return projected;
 }
@@ -577,32 +627,56 @@ function projectPoisonEffects(
   return projected;
 }
 
+function isDiceWormholeRun(run: WormholeRunState): run is DiceWormholeRunState {
+  return run.challenge.version === 2;
+}
+
 function projectWormholeRun(
   run: WormholeRunState,
   revealObstacles: boolean,
 ): MazeAuthorityWormholeRunView {
+  if (isDiceWormholeRun(run)) {
+    return {
+      mapOwnerId: run.mapOwnerId,
+      itemIndex: run.itemIndex,
+      position: clonePosition(run.position),
+      challenge: {
+        version: 2,
+        boardSize: 4,
+        startPosition: clonePosition(run.challenge.startPosition),
+        endPosition: clonePosition(run.challenge.endPosition),
+        blockedCells: run.challenge.blockedCells.map(clonePosition),
+        initialOrientation: run.challenge.initialOrientation,
+        targetTop: run.challenge.targetTop,
+      },
+      orientation: run.orientation,
+      actionsTaken: run.actionsTaken,
+      enteredAtTurn: run.enteredAtTurn,
+    };
+  }
+  const legacyRun = run as LegacyWormholeRunState;
   const activatedSeals: Record<number, boolean> = {};
-  for (let index = 0; index < run.challenge.seals.length; index += 1) {
-    const activated = run.activatedSeals?.[index];
+  for (let index = 0; index < legacyRun.challenge.seals.length; index += 1) {
+    const activated = legacyRun.activatedSeals?.[index];
     if (typeof activated === 'boolean') activatedSeals[index] = activated;
   }
   return {
-    mapOwnerId: run.mapOwnerId,
-    itemIndex: run.itemIndex,
-    position: clonePosition(run.position),
+    mapOwnerId: legacyRun.mapOwnerId,
+    itemIndex: legacyRun.itemIndex,
+    position: clonePosition(legacyRun.position),
     challenge: {
       version: 1,
-      startPosition: clonePosition(run.challenge.startPosition),
-      endPosition: clonePosition(run.challenge.endPosition),
-      seals: run.challenge.seals.map(clonePosition),
+      startPosition: clonePosition(legacyRun.challenge.startPosition),
+      endPosition: clonePosition(legacyRun.challenge.endPosition),
+      seals: legacyRun.challenge.seals.map(clonePosition),
       ...(revealObstacles
-        ? { obstacles: run.challenge.obstacles.map(cloneObstacle) }
+        ? { obstacles: legacyRun.challenge.obstacles.map(cloneObstacle) }
         : {}),
     },
-    enteredAtTurn: run.enteredAtTurn,
+    enteredAtTurn: legacyRun.enteredAtTurn,
     ...(Object.keys(activatedSeals).length > 0 ? { activatedSeals } : {}),
-    ...(Array.isArray(run.discoveredWalls) && run.discoveredWalls.length > 0
-      ? { discoveredWalls: run.discoveredWalls.map(cloneObstacle) }
+    ...(Array.isArray(legacyRun.discoveredWalls) && legacyRun.discoveredWalls.length > 0
+      ? { discoveredWalls: legacyRun.discoveredWalls.map(cloneObstacle) }
       : {}),
   };
 }

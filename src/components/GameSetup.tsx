@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Direction, GameMap, GamePhase, ItemType, MapItem, Obstacle, Position, WormholeChallenge } from '@/types/game';
+import { Direction, GameMap, GamePhase, ItemType, MapItem, Obstacle, Position } from '@/types/game';
 import {
   Aperture,
   ArrowDown,
@@ -25,7 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import GameBoard from './GameBoard';
-import WormholeChallengeEditor from './WormholeChallengeEditor';
+import { generateDiceWormholeChallenge } from '@/lib/diceWormhole';
 import {
   isValidNewMap,
   BOARD_SIZE,
@@ -65,6 +65,45 @@ function clonePosition(position: Position | undefined): Position | undefined {
 
 function cloneMapItems(items: readonly MapItem[]): MapItem[] {
   return items.map(cloneMapItem);
+}
+
+function stableWormholeSeed(
+  entrance: Position,
+  exit: Position,
+  obstacles: readonly Obstacle[],
+  items: readonly MapItem[]
+): number {
+  const value = [
+    `${entrance.row},${entrance.col}>${exit.row},${exit.col}`,
+    ...obstacles.map((wall) => `${wall.position.row},${wall.position.col}:${wall.direction}`),
+    ...items.map((item) => item.type),
+  ].join('|');
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+function upgradeLegacyWormholeItem(
+  item: MapItem,
+  obstacles: readonly Obstacle[],
+  siblings: readonly MapItem[]
+): MapItem {
+  const cloned = cloneMapItem(item);
+  if (
+    cloned.type !== 'wormhole' ||
+    cloned.challenge?.version !== 1 ||
+    !cloned.entrance ||
+    !cloned.exit
+  ) return cloned;
+  return {
+    ...cloned,
+    challenge: generateDiceWormholeChallenge(
+      stableWormholeSeed(cloned.entrance, cloned.exit, obstacles, siblings)
+    ),
+  };
 }
 
 function cloneEditorSnapshot(snapshot: MapEditorSnapshot): MapEditorSnapshot {
@@ -113,16 +152,31 @@ const SPECIAL_WALL_ITEMS: PlaceableItemType[] = [
 const ITEM_DESCRIPTIONS: Record<PlaceableItemType, string> = {
   oneTimeWall: '발동 전까지 무기한 정상벽으로 위장하고 처음 한 번만 막음',
   mine: '밟으면 실제 2턴 전 위치로 되돌림',
-  wormhole: '별도 내부 미로에서 봉인 3개를 풀어야 복귀',
+  wormhole: '4×4 방에서 주사위를 굴려 출구의 목표 윗면을 맞춰야 복귀',
   smoke: '상대의 다음 행동 동안 보드를 가림',
   steelWall: '어떤 벽 효과로도 통과할 수 없는 영구벽',
-  fireWall: '처음 막고 불을 붙여 2행동 동안 진짜·환영벽을 뒤섞음',
-  poisonWall: '통과 후 4행동 동안 25% 확률로 입력 방향을 뒤틀음',
+  fireWall: '처음 막고 불을 붙여 발견한 벽을 지우고 4행동 동안 새 벽 기억도 태움',
+  poisonWall: '통과 후 4행동의 방향을 매번 상·하·좌·우 중 하나로 무작위 변환',
   iceWall: '통과 후 진행 방향으로 한 칸 더 미끄러짐',
   windWall: '첫 통과 후 가능하면 지정 방향으로 한 칸 밀고 소멸',
   phaseWall: '막힘과 통과 상태가 시도할 때마다 교대',
   thornWall: '처음 막고 실제 2턴 전 위치로 되돌림',
   crystalWall: '처음 막고 주변의 진짜 벽을 노출',
+};
+
+const ITEM_SHORT_LABELS: Record<PlaceableItemType, string> = {
+  oneTimeWall: '가짜',
+  mine: '지뢰',
+  wormhole: '웜홀',
+  smoke: '연막',
+  steelWall: '강철',
+  fireWall: '화염',
+  poisonWall: '독',
+  iceWall: '빙결',
+  windWall: '바람',
+  phaseWall: '위상',
+  thornWall: '가시',
+  crystalWall: '수정',
 };
 
 const DIRECTIONS: Array<{ direction: Direction; label: string; Icon: LucideIcon }> = [
@@ -170,13 +224,13 @@ const GameSetup: React.FC<GameSetupProps> = ({
       .filter((item) =>
         item.type !== 'collapseWall' && item.type !== 'mirrorWall' && item.type !== 'radar'
       )
-      .map(cloneMapItem)
+      .map((item, _index, siblings) => upgradeLegacyWormholeItem(
+        item,
+        initialMap?.obstacles || [],
+        siblings
+      ))
   );
   const [wormholeEntrance, setWormholeEntrance] = useState<Position | null>(null);
-  const [wormholeDraft, setWormholeDraft] = useState<{
-    entrance: Position;
-    returnExit: Position;
-  } | null>(null);
   const [paletteTab, setPaletteTab] = useState<'traps' | 'walls'>('traps');
   const [windDirection, setWindDirection] = useState<Direction>('right');
   const historyRef = useRef<{
@@ -232,7 +286,6 @@ const GameSetup: React.FC<GameSetupProps> = ({
     setSetupPhase(snapshot.setupPhase);
     setPlaceMode('wall');
     setWormholeEntrance(null);
-    setWormholeDraft(null);
   }, []);
 
   const handleUndo = useCallback(() => {
@@ -465,7 +518,15 @@ const GameSetup: React.FC<GameSetupProps> = ({
           if (!canAffordItem('wormhole')) return;
           if (!startPosition || !endPosition) return;
 
-          const wormhole: MapItem = { type: 'wormhole', entrance: wormholeEntrance, exit: position };
+          const challenge = generateDiceWormholeChallenge(
+            stableWormholeSeed(wormholeEntrance, position, obstacles, items)
+          );
+          const wormhole: MapItem = {
+            type: 'wormhole',
+            entrance: { ...wormholeEntrance },
+            exit: { ...position },
+            challenge,
+          };
           const candidateMap: GameMap = {
             startPosition,
             endPosition,
@@ -478,11 +539,9 @@ const GameSetup: React.FC<GameSetupProps> = ({
             return;
           }
 
-          setWormholeDraft({
-            entrance: { ...wormholeEntrance },
-            returnExit: { ...position },
-          });
+          addItem(wormhole);
           setWormholeEntrance(null);
+          setPlaceMode('wall');
         }
       }
     }
@@ -609,7 +668,6 @@ const GameSetup: React.FC<GameSetupProps> = ({
       return;
     }
     setWormholeEntrance(null);
-    setWormholeDraft(null);
 
     setPlaceMode((prev) => (prev === type ? 'wall' : type));
   };
@@ -712,40 +770,6 @@ const GameSetup: React.FC<GameSetupProps> = ({
   const activeWallGuide = activeItem && isWallItemType(activeItem) ? activeItem : null;
   const canUndo = historyRef.current.past.length > 0;
   const canRedo = historyRef.current.future.length > 0;
-
-  const completeWormholeChallenge = (challenge: WormholeChallenge) => {
-    if (!wormholeDraft || !canAffordItem('wormhole') || !hasItemCapacity('wormhole')) return;
-    addItem({
-      type: 'wormhole',
-      entrance: { ...wormholeDraft.entrance },
-      exit: { ...wormholeDraft.returnExit },
-      challenge,
-    });
-    setWormholeDraft(null);
-    setPlaceMode('wall');
-  };
-
-  if (wormholeDraft) {
-    return (
-      <div
-        className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-gradient-to-b from-slate-800 via-slate-900 to-slate-950 p-2"
-        data-testid="game-setup-layout"
-        data-setup-mode="wormhole-challenge"
-      >
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
-          <WormholeChallengeEditor
-            entrance={wormholeDraft.entrance}
-            returnExit={wormholeDraft.returnExit}
-            onComplete={completeWormholeChallenge}
-            onCancel={() => {
-              setWormholeDraft(null);
-              setPlaceMode('wall');
-            }}
-          />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -858,9 +882,9 @@ const GameSetup: React.FC<GameSetupProps> = ({
 
       {/* 하단 HUD: 아이템 팔레트 + 진행 버튼 */}
       <div
-        className="relative order-3 z-20 mx-auto flex max-h-[46%] w-[96%] max-w-3xl shrink-0 flex-col items-center gap-2 overflow-y-auto overscroll-contain pt-2"
+        className="relative order-3 z-20 mx-auto flex max-h-[46%] w-[96%] max-w-3xl shrink-0 flex-col items-center gap-1 overflow-y-auto overscroll-contain pt-1"
         data-testid="setup-controls"
-        style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
+        style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
       >
         {setupPhase === 'obstacles' && !isMapValid && (obstacles.length > 0 || items.length > 0) && (
           <p className="text-red-300 text-xs px-3 py-1 rounded-full bg-red-500/20 border border-red-500/50 backdrop-blur-sm">
@@ -875,13 +899,13 @@ const GameSetup: React.FC<GameSetupProps> = ({
 
         {/* 공용 벽 예산 안에서 함정과 특수벽을 고른다. */}
         {setupPhase === 'obstacles' && (
-          <div className="game-panel w-full !rounded-lg !border-[#8b684c] px-2.5 py-2" data-testid="setup-palette">
+          <div className="game-panel w-full !rounded-lg !border-[#8b684c] px-2 py-1.5" data-testid="setup-palette">
             <div className="flex items-center justify-between gap-2">
               <div className="flex rounded-md border border-slate-600 bg-slate-900/70 p-0.5" role="tablist" aria-label="아이템 종류">
                 <button
                   role="tab"
                   aria-selected={paletteTab === 'traps'}
-                  className={`h-11 px-3 text-[11px] font-bold ${paletteTab === 'traps' ? 'rounded bg-slate-600 text-white' : 'text-slate-400'}`}
+                  className={`h-9 px-2.5 text-[10px] font-bold ${paletteTab === 'traps' ? 'rounded bg-slate-600 text-white' : 'text-slate-400'}`}
                   onClick={() => handlePaletteTabChange('traps')}
                 >
                   함정
@@ -889,7 +913,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
                 <button
                   role="tab"
                   aria-selected={paletteTab === 'walls'}
-                  className={`h-11 px-3 text-[11px] font-bold ${paletteTab === 'walls' ? 'rounded bg-slate-600 text-white' : 'text-slate-400'}`}
+                  className={`h-9 px-2.5 text-[10px] font-bold ${paletteTab === 'walls' ? 'rounded bg-slate-600 text-white' : 'text-slate-400'}`}
                   onClick={() => handlePaletteTabChange('walls')}
                 >
                   특수벽
@@ -900,14 +924,18 @@ const GameSetup: React.FC<GameSetupProps> = ({
               </span>
             </div>
 
-            <div className="mt-1.5 flex h-12 gap-1.5 overflow-x-auto overscroll-x-contain pb-1" role="tabpanel">
+            <div
+              className={`mt-1 grid h-9 gap-1 ${paletteTab === 'traps' ? 'grid-cols-4' : 'grid-cols-8'}`}
+              role="tabpanel"
+              data-testid="setup-palette-options"
+            >
               {paletteItems.map((type) => {
                 const Icon = ITEM_ICONS[type];
                 const count = items.filter((item) => item.type === type).length;
                 return (
                   <button
                     key={type}
-                    className={`flex h-11 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-bold transition-colors ${
+                    className={`flex h-9 min-w-0 items-center justify-center gap-0.5 overflow-hidden rounded-md border px-0.5 text-[9px] font-bold transition-colors ${
                       placeMode === type
                         ? 'border-amber-400 bg-amber-400 text-slate-950'
                         : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-amber-400/60'
@@ -915,29 +943,32 @@ const GameSetup: React.FC<GameSetupProps> = ({
                     onClick={() => handleSelectItemMode(type)}
                     disabled={!canAffordItem(type) || !hasItemCapacity(type)}
                     title={`${ITEM_LABELS[type]}: ${ITEM_DESCRIPTIONS[type]}`}
+                    aria-label={`${ITEM_LABELS[type]} 선택 · 비용 ${ITEM_COSTS[type]}`}
                   >
-                    <Icon size={14} aria-hidden="true" />
-                    <span>{ITEM_LABELS[type]}</span>
-                    <span className={placeMode === type ? 'text-slate-700' : 'text-amber-300'}>-{ITEM_COSTS[type]}</span>
-                    {count > 0 && <span className="text-[9px]">{count}</span>}
+                    <Icon className="hidden shrink-0 min-[520px]:block" size={12} aria-hidden="true" />
+                    <span className="truncate">{ITEM_SHORT_LABELS[type]}</span>
+                    <span className={`shrink-0 text-[8px] ${placeMode === type ? 'text-slate-700' : 'text-amber-300'}`}>
+                      -{ITEM_COSTS[type]}
+                    </span>
+                    {count > 0 && <span className="sr-only">배치됨</span>}
                   </button>
                 );
               })}
             </div>
 
-            <div className="flex min-h-8 flex-col items-stretch gap-1.5 border-t border-[#b89a77] pt-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
-              <div id="active-palette-description" className="flex min-w-0 items-start gap-1.5 text-[10px] font-semibold text-[#3d352d] sm:items-center" data-testid="active-palette-description">
-                <ActiveItemIcon className="shrink-0 text-amber-700" size={14} aria-hidden="true" />
-                <span className="whitespace-normal break-words leading-[1.35]">
+            <div className="flex min-h-7 items-center justify-between gap-1 border-t border-[#b89a77] pt-1">
+              <div id="active-palette-description" className="flex min-w-0 items-center gap-1 text-[9px] font-semibold text-[#3d352d]" data-testid="active-palette-description">
+                <ActiveItemIcon className="shrink-0 text-amber-700" size={12} aria-hidden="true" />
+                <span className="truncate leading-tight">
                   {activeItem ? `${ITEM_LABELS[activeItem]}: ${ITEM_DESCRIPTIONS[activeItem]}` : '일반벽 배치'}
                 </span>
               </div>
               {placeMode === 'windWall' && (
-                <div className="grid w-full shrink-0 grid-cols-4 rounded-md border border-slate-600 bg-slate-900 p-0.5 sm:flex sm:w-auto" role="group" aria-label="바람 방향">
+                <div className="flex shrink-0 rounded-md border border-slate-600 bg-slate-900 p-0.5" role="group" aria-label="바람 방향">
                   {DIRECTIONS.map(({ direction, label, Icon }) => (
                     <button
                       key={direction}
-                      className={`flex h-11 min-w-11 items-center justify-center rounded sm:w-11 ${windDirection === direction ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}
+                      className={`flex h-11 w-11 items-center justify-center rounded ${windDirection === direction ? 'bg-cyan-500 text-slate-950' : 'text-slate-300'}`}
                       onClick={() => setWindDirection(direction)}
                       title={`바람 ${label}`}
                       aria-label={`바람 ${label}`}
@@ -951,24 +982,24 @@ const GameSetup: React.FC<GameSetupProps> = ({
               )}
               {placeMode === 'wormhole' && wormholeEntrance && (
                 <span className="shrink-0 text-[10px] font-bold text-emerald-300">
-                  안전 출구 {wormholeExitCandidates.length}칸
+                  인접칸 있는 출구 {wormholeExitCandidates.length}칸
                 </span>
               )}
             </div>
 
             {items.length > 0 && (
-              <div className="mt-1 flex h-12 gap-1 overflow-x-auto" aria-label="배치된 아이템">
+              <div className="mt-1 flex h-10 gap-1 overflow-x-auto" aria-label="배치된 아이템">
                 {items.map((item, index) => {
                   const Icon = ITEM_ICONS[item.type];
                   return (
                     <span
                       key={`${item.type}-${index}`}
-                      className="inline-flex h-11 shrink-0 items-center gap-1 rounded border border-slate-600 bg-slate-800 pl-2 text-[10px] font-bold text-slate-200"
+                      className="inline-flex h-9 shrink-0 items-center gap-1 rounded border border-slate-600 bg-slate-800 pl-1.5 text-[9px] font-bold text-slate-200"
                     >
                       <Icon size={12} aria-hidden="true" />
                       {ITEM_LABELS[item.type]}
                       <button
-                        className="flex size-11 items-center justify-center text-red-300 hover:text-red-200"
+                        className="flex size-9 items-center justify-center text-red-300 hover:text-red-200"
                         onClick={() => handleRemoveItem(index)}
                         title={`${ITEM_LABELS[item.type]} 제거`}
                         aria-label={`${ITEM_LABELS[item.type]} 제거`}

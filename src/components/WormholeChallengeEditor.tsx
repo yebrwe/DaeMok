@@ -2,7 +2,12 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Redo2, Undo2, Wand2, X } from 'lucide-react';
-import type { Direction, Obstacle, Position, WormholeChallenge } from '@/types/game';
+import type {
+  Direction,
+  LegacyWormholeChallenge as WormholeChallenge,
+  Obstacle,
+  Position,
+} from '@/types/game';
 import {
   BOARD_SIZE,
   getWormholeChallengeCompletionSteps,

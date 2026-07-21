@@ -33,8 +33,9 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.GameTurn = exports.GameRules = exports.MazeSkills = exports.GameUtils = exports.GameTypes = void 0;
+exports.GameTurn = exports.GameRules = exports.MazeSkills = exports.GameUtils = exports.DiceWormhole = exports.GameTypes = void 0;
 exports.GameTypes = __importStar(require("./types/game"));
+exports.DiceWormhole = __importStar(require("./lib/diceWormhole"));
 exports.GameUtils = __importStar(require("./lib/gameUtils"));
 exports.MazeSkills = __importStar(require("./lib/mazeSkills"));
 exports.GameRules = __importStar(require("./lib/gameRules"));

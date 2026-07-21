@@ -8,7 +8,10 @@ import {
   Obstacle,
   Player,
   Position,
-  WormholeChallenge,
+  DiceWormholeChallenge,
+  DiceWormholeRunState,
+  LegacyWormholeRunState,
+  WormholeRunState,
 } from '@/types/game';
 import {
   BOARD_SIZE,
@@ -29,6 +32,18 @@ import {
   isVisionObscuredForPlayer,
   mergeWallSegments,
 } from '@/lib/gameTurn';
+import {
+  generateDiceWormholeChallenge,
+  getDiceWormholeShortestPath,
+} from '@/lib/diceWormhole';
+
+function isDiceWormholeRun(run: WormholeRunState): run is DiceWormholeRunState {
+  return run.challenge.version === 2 && 'orientation' in run && 'actionsTaken' in run;
+}
+
+function isLegacyWormholeRun(run: WormholeRunState): run is LegacyWormholeRunState {
+  return run.challenge.version === 1;
+}
 
 export const PRACTICE_USER_ID = 'practice-user';
 export const PRACTICE_AI_IDS = ['practice-ai-1', 'practice-ai-2', 'practice-ai-3'] as const;
@@ -75,27 +90,8 @@ const specialWall = (
   ...(effectDirection ? { effectDirection } : {}),
 });
 
-function createPracticeWormholeChallenge(): WormholeChallenge {
-  return {
-    version: 1,
-    startPosition: { row: 0, col: 0 },
-    endPosition: { row: 2, col: 2 },
-    seals: [
-      { row: 0, col: 5 },
-      { row: 5, col: 5 },
-      { row: 5, col: 0 },
-    ],
-    obstacles: [
-      wall(0, 1, 'down'),
-      wall(0, 2, 'down'),
-      wall(1, 3, 'right'),
-      wall(2, 3, 'right'),
-      wall(3, 1, 'right'),
-      wall(4, 1, 'right'),
-      wall(4, 3, 'down'),
-      wall(4, 4, 'down'),
-    ],
-  };
+function createPracticeWormholeChallenge(): DiceWormholeChallenge {
+  return generateDiceWormholeChallenge(0xDAE0_4D4F);
 }
 
 const wormhole = (entrance: Position, exit: Position): MapItem => ({
@@ -315,8 +311,8 @@ export function createAiPracticeMap(index: number): GameMap {
 
 export function createMapTestGameState(playerMap: GameMap): GameState {
   const map = clonePracticeMap(playerMap);
-  if (!isValidMap(map) || getMapBudgetUsed(map) !== MAX_OBSTACLES) {
-    throw new Error(`Map test requires a valid ${MAX_OBSTACLES}/${MAX_OBSTACLES} map.`);
+  if (!isValidMap(map)) {
+    throw new Error('Map test requires a valid map.');
   }
   const player: Player = {
     id: PRACTICE_USER_ID,
@@ -427,6 +423,14 @@ function directionBetween(from: Position, to: Position): Direction | null {
 function chooseWormholeAiDirection(state: GameState, runnerId: string): Direction | null {
   const run = state.wormholeRunsByPlayer?.[runnerId];
   if (!run) return null;
+
+  if (isDiceWormholeRun(run)) {
+    return getDiceWormholeShortestPath(run.challenge, {
+      position: run.position,
+      orientation: run.orientation,
+    })?.[0] ?? null;
+  }
+  if (!isLegacyWormholeRun(run)) return null;
 
   let targetPath: Position[] | null = null;
   run.challenge.seals.forEach((seal, index) => {

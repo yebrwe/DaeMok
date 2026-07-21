@@ -937,6 +937,169 @@ test('Authority replaces a new poison effect seed with deterministic private-sta
   );
 });
 
+test('stored fire effects accept the new exact shape and the six-wall legacy shape', () => {
+  const active = startMatch(readyTwoPlayerRoom());
+  active.gameState.players[OWNER].moves = 4;
+  active.gameState.visionEffectsByPlayer = {
+    [OWNER]: {
+      type: 'fire',
+      sourcePlayerId: GUEST,
+      appliedAtTurn: 1,
+      expiresAtTargetMove: 4,
+    },
+  };
+
+  const parsedActive = parseMazeAuthorityState(active);
+  const exactEffect = parsedActive.gameState.visionEffectsByPlayer?.[OWNER];
+  assert.deepEqual(exactEffect, {
+    type: 'fire',
+    sourcePlayerId: GUEST,
+    appliedAtTurn: 1,
+    expiresAtTargetMove: 4,
+  });
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(exactEffect ?? {}, 'phantomWalls'),
+    false,
+    'the canonical fire shape must not be materialized with an empty phantom list',
+  );
+
+  const legacyPhantomWalls = [
+    { position: { row: 0, col: 0 }, direction: 'right' as const },
+    { position: { row: 0, col: 1 }, direction: 'right' as const },
+    { position: { row: 0, col: 2 }, direction: 'right' as const },
+    { position: { row: 0, col: 3 }, direction: 'right' as const },
+    { position: { row: 0, col: 4 }, direction: 'right' as const },
+    { position: { row: 1, col: 0 }, direction: 'right' as const },
+  ];
+  const legacy = cloneJson(active);
+  const legacyEffect = {
+    type: 'fire' as const,
+    sourcePlayerId: GUEST,
+    appliedAtTurn: 1,
+    expiresAtTargetMove: 4,
+    phantomWalls: legacyPhantomWalls,
+  };
+  legacy.gameState.visionEffectsByPlayer = {
+    [OWNER]: legacyEffect,
+  };
+  assert.deepEqual(
+    parseMazeAuthorityState(legacy).gameState.visionEffectsByPlayer?.[OWNER],
+    legacy.gameState.visionEffectsByPlayer[OWNER],
+  );
+
+  const malformedLegacy = cloneJson(legacy);
+  malformedLegacy.gameState.visionEffectsByPlayer![OWNER] = {
+    ...legacyEffect,
+    phantomWalls: legacyPhantomWalls.slice(0, 5),
+  };
+  expectDomainError(
+    () => parseMazeAuthorityState(malformedLegacy),
+    'data-loss',
+    'authority-vision-effect',
+  );
+
+  const tooOld = cloneJson(active);
+  tooOld.gameState.players[OWNER].moves = 5;
+  expectDomainError(
+    () => parseMazeAuthorityState(tooOld),
+    'data-loss',
+    'authority-private-effect-reference',
+  );
+});
+
+test('V2 wormhole parsing keeps a strict run union while map validity stays canonical', () => {
+  const challenge = {
+    version: 2 as const,
+    boardSize: 4 as const,
+    startPosition: { row: 0, col: 0 },
+    endPosition: { row: 3, col: 3 },
+    blockedCells: [{ row: 1, col: 1 }, { row: 2, col: 2 }],
+    initialOrientation: 0,
+    targetTop: 2 as const,
+  };
+  const state = startMatch(readyTwoPlayerRoom());
+  const entrance = { row: 5, col: 5 };
+  state.gameState.maps![GUEST] = {
+    rulesVersion: 3,
+    startPosition: entrance,
+    endPosition: { row: 5, col: 4 },
+    obstacles: [],
+    items: [{
+      type: 'wormhole',
+      entrance,
+      exit: { row: 4, col: 4 },
+      challenge,
+    }],
+    skillLoadout: 'scoutPulse',
+  };
+  state.gameState.players[OWNER].position = entrance;
+  state.gameState.players[OWNER].positionHistory = [entrance];
+  state.gameState.itemState = { [GUEST]: { consumed: { 0: true } } };
+  state.gameState.wormholeRunsByPlayer = {
+    [OWNER]: {
+      mapOwnerId: GUEST,
+      itemIndex: 0,
+      position: challenge.startPosition,
+      challenge,
+      orientation: challenge.initialOrientation,
+      actionsTaken: 0,
+      enteredAtTurn: 1,
+    },
+  };
+
+  assert.deepEqual(
+    parseMazeAuthorityState(state).gameState.wormholeRunsByPlayer?.[OWNER],
+    state.gameState.wormholeRunsByPlayer![OWNER],
+  );
+
+  const missingProgress = cloneJson(state);
+  delete (missingProgress.gameState.wormholeRunsByPlayer?.[OWNER] as unknown as Record<string, unknown>)
+    .actionsTaken;
+  expectDomainError(
+    () => parseMazeAuthorityState(missingProgress),
+    'data-loss',
+    'authority-wormhole-run',
+  );
+
+  const mixedVersionFields = cloneJson(state);
+  (mixedVersionFields.gameState.wormholeRunsByPlayer?.[OWNER] as unknown as Record<string, unknown>)
+    .discoveredWalls = [];
+  expectDomainError(
+    () => parseMazeAuthorityState(mixedVersionFields),
+    'data-loss',
+    'authority-wormhole-run',
+  );
+
+  const setup = createRoom();
+  const semanticallyInvalidChallenge = {
+    ...challenge,
+    endPosition: challenge.startPosition,
+    blockedCells: [],
+  };
+  const command = {
+    type: 'submitMap' as const,
+    commandId: 'command-v2-canonical-map',
+    roomId: ROOM_ID,
+    expectedGeneration: setup.meta.generation,
+    expectedRevision: setup.meta.revision,
+    map: {
+      ...simpleMap(),
+      items: [{
+        type: 'wormhole' as const,
+        entrance: { row: 1, col: 1 },
+        exit: { row: 4, col: 4 },
+        challenge: semanticallyInvalidChallenge,
+      }],
+    },
+  };
+  assert.deepEqual(parseMazeAuthorityCommand(command), command);
+  expectDomainError(
+    () => reduceMazeAuthorityCommand(setup, OWNER, command, 1_500),
+    'failed-precondition',
+    'invalid-v3-map',
+  );
+});
+
 test('forfeit is retired while a server-owned offline skip preserves every runner and result field', () => {
   const state = startMatch(readyTwoPlayerRoom());
   const originalPlayers = cloneJson(state.gameState.players);

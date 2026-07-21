@@ -31,10 +31,15 @@ function loadTypeScript(relativePath, aliases = {}) {
 
 const types = loadTypeScript('src/types/game.ts');
 const mazeSkills = loadTypeScript('src/lib/mazeSkills.ts');
-const gameUtils = loadTypeScript('src/lib/gameUtils.ts', { '@/types/game': types });
+const diceWormhole = loadTypeScript('src/lib/diceWormhole.ts', { '@/types/game': types });
+const gameUtils = loadTypeScript('src/lib/gameUtils.ts', {
+  '@/types/game': types,
+  '@/lib/diceWormhole': diceWormhole,
+});
 const gameTurn = loadTypeScript('src/lib/gameTurn.ts', {
   '@/types/game': types,
   '@/lib/gameUtils': gameUtils,
+  '@/lib/diceWormhole': diceWormhole,
   '@/lib/mazeSkills': mazeSkills,
 });
 const offlineTurn = loadTypeScript('src/lib/offlineTurn.ts', {

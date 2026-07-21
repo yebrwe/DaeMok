@@ -186,10 +186,19 @@ export function deriveLiveBoardVisualTransition(
     : null;
   if (wormhole?.entrance) {
     const route = cardinalPath(origin, wormhole.entrance, true);
+    const enteredInternalRoom = !previous.wormholeRunsByPlayer?.[runnerId]
+      && !!next.wormholeRunsByPlayer?.[runnerId];
     return {
       action: 'wormhole',
       sequence,
-      fx: { key: sequence, type: 'wormhole', at: wormhole.entrance, to: position, delay: 0.35 },
+      fx: {
+        key: sequence,
+        type: 'wormhole',
+        at: wormhole.entrance,
+        to: position,
+        delay: 0.35,
+        ...(enteredInternalRoom ? { wormholeTransition: 'entered' as const } : {}),
+      },
       via: route.length > 0 ? route : [wormhole.entrance],
     };
   }

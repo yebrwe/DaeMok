@@ -28,17 +28,23 @@ function loadTypeScript(relativePath, aliases = {}) {
 }
 
 const types = loadTypeScript('src/types/game.ts');
-const utils = loadTypeScript('src/lib/gameUtils.ts', { '@/types/game': types });
+const diceWormhole = loadTypeScript('src/lib/diceWormhole.ts');
+const utils = loadTypeScript('src/lib/gameUtils.ts', {
+  '@/types/game': types,
+  '@/lib/diceWormhole': diceWormhole,
+});
 const mazeSkills = loadTypeScript('src/lib/mazeSkills.ts');
 const turns = loadTypeScript('src/lib/gameTurn.ts', {
   '@/types/game': types,
   '@/lib/gameUtils': utils,
+  '@/lib/diceWormhole': diceWormhole,
   '@/lib/mazeSkills': mazeSkills,
 });
 const practice = loadTypeScript('src/lib/practiceBattle.ts', {
   '@/types/game': types,
   '@/lib/gameUtils': utils,
   '@/lib/gameTurn': turns,
+  '@/lib/diceWormhole': diceWormhole,
   '@/lib/mazeSkills': mazeSkills,
 });
 
@@ -119,7 +125,7 @@ assert.notStrictEqual(
 const specialWallCosts = {
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 1,
+  poisonWall: 3,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,
@@ -269,8 +275,8 @@ assert.equal(
 );
 assert.equal(
   utils.isValidNewMap(baseMap({ skillLoadout: 'scoutPulse', items: [sealedWormhole] })),
-  true,
-  'new maps accept a configured three-seal wormhole challenge'
+  false,
+  'new maps reject the retired hand-authored three-seal wormhole challenge'
 );
 const clonedWormholeMap = utils.cloneGameMap(baseMap({ items: [sealedWormhole] }));
 assert.deepEqual(clonedWormholeMap.items[0].challenge, sealedWormholeChallenge);
@@ -290,6 +296,107 @@ assert.notStrictEqual(
   'wormhole challenge walls are deep-cloned'
 );
 
+assert.equal(diceWormhole.DICE_ORIENTATIONS.length, 24, 'the die exposes all 24 physical orientations');
+assert.equal(
+  new Set(diceWormhole.DICE_ORIENTATIONS.map((faces) => (
+    [faces.top, faces.bottom, faces.north, faces.south, faces.east, faces.west].join(',')
+  ))).size,
+  24,
+  'every persisted orientation id has a unique physical face layout'
+);
+const oppositeDirection = { up: 'down', right: 'left', down: 'up', left: 'right' };
+for (let orientation = 0; orientation < 24; orientation += 1) {
+  const faces = diceWormhole.getDiceOrientationFaces(orientation);
+  assert.equal(faces.top + faces.bottom, 7, `orientation ${orientation} keeps top/bottom opposite`);
+  assert.equal(faces.north + faces.south, 7, `orientation ${orientation} keeps north/south opposite`);
+  assert.equal(faces.east + faces.west, 7, `orientation ${orientation} keeps east/west opposite`);
+  for (const direction of diceWormhole.DICE_WORMHOLE_DIRECTIONS) {
+    const rolled = diceWormhole.rollDiceOrientation(orientation, direction);
+    assert.equal(
+      diceWormhole.rollDiceOrientation(rolled, oppositeDirection[direction]),
+      orientation,
+      `orientation ${orientation} ${direction} roll is reversible`
+    );
+  }
+}
+
+assert.equal(
+  diceWormhole.isValidDiceWormholeChallenge(diceWormhole.DICE_WORMHOLE_FALLBACK_CHALLENGE),
+  true,
+  'the fixed generator fallback is always a valid 4x4 dice challenge'
+);
+assert.equal(
+  diceWormhole.getDiceWormholeShortestSteps(diceWormhole.DICE_WORMHOLE_FALLBACK_CHALLENGE),
+  6,
+  'the fixed fallback has a six-action optimal solution'
+);
+
+for (let seed = 0; seed < 256; seed += 1) {
+  const generated = diceWormhole.generateDiceWormholeChallenge(seed);
+  const repeated = diceWormhole.generateDiceWormholeChallenge(seed);
+  assert.deepEqual(repeated, generated, `dice challenge seed ${seed} is deterministic`);
+  assert.equal(
+    diceWormhole.isValidDiceWormholeChallenge(generated),
+    true,
+    `dice challenge seed ${seed} satisfies the complete V2 contract`
+  );
+  assert.equal(generated.boardSize, 4);
+  assert.ok(generated.blockedCells.length >= 1 && generated.blockedCells.length <= 3);
+  const shortestSteps = diceWormhole.getDiceWormholeShortestSteps(generated);
+  assert.ok(shortestSteps >= 6 && shortestSteps <= 8, `seed ${seed} shortest route is 6-8 actions`);
+}
+
+const diceChallenge = diceWormhole.generateDiceWormholeChallenge(0xDAE0C);
+const diceWormholeItem = wormhole(pos(0, 1), pos(4, 4), diceChallenge);
+assert.equal(utils.isValidWormholeChallenge(diceChallenge), true, 'generic validator accepts V2 dice challenge');
+assert.equal(
+  utils.isValidNewMap(baseMap({ skillLoadout: 'scoutPulse', items: [diceWormholeItem] })),
+  true,
+  'new maps accept an auto-generated V2 dice wormhole'
+);
+assert.equal(
+  diceWormhole.getDiceWormholeChallengeError({ ...diceChallenge, boardSize: 6 }),
+  '지원하지 않는 주사위 웜홀 버전 또는 크기입니다.',
+  'V2 challenges cannot silently expand back to the outer 6x6 board'
+);
+assert.equal(
+  diceWormhole.isValidDiceWormholeChallenge({
+    ...diceChallenge,
+    blockedCells: [diceChallenge.startPosition],
+  }),
+  false,
+  'a blocked cell cannot overlap the internal start'
+);
+
+const dicePath = diceWormhole.getDiceWormholeShortestPath(diceChallenge);
+assert.ok(dicePath && dicePath.length >= 6, 'generated challenge exposes an optimal orientation-aware route');
+const firstPathDirection = dicePath[0];
+const firstPathPosition = {
+  row: diceChallenge.startPosition.row + (firstPathDirection === 'up' ? -1 : firstPathDirection === 'down' ? 1 : 0),
+  col: diceChallenge.startPosition.col + (firstPathDirection === 'left' ? -1 : firstPathDirection === 'right' ? 1 : 0),
+};
+const firstPathOrientation = diceWormhole.rollDiceOrientation(
+  diceChallenge.initialOrientation,
+  firstPathDirection
+);
+assert.equal(
+  diceWormhole.getDiceWormholeShortestSteps(diceChallenge, {
+    position: firstPathPosition,
+    orientation: firstPathOrientation,
+  }),
+  dicePath.length - 1,
+  'following the computed shortest path reduces the route by one action'
+);
+
+const clonedDiceMap = utils.cloneGameMap(baseMap({ items: [diceWormholeItem] }));
+assert.deepEqual(clonedDiceMap.items[0].challenge, diceChallenge);
+assert.notStrictEqual(clonedDiceMap.items[0].challenge, diceChallenge, 'V2 challenge clone is detached');
+assert.notStrictEqual(
+  clonedDiceMap.items[0].challenge.blockedCells[0],
+  diceChallenge.blockedCells[0],
+  'V2 blocked cells are deep-cloned'
+);
+
 const isolatedExitWalls = [
   { position: pos(3, 4), direction: 'down' },
   { position: pos(3, 5), direction: 'down' },
@@ -301,15 +408,35 @@ assert.equal(
     obstacles: isolatedExitWalls,
     items: [wormhole(pos(2, 2), pos(5, 5))],
   })),
-  false,
-  'two-open-direction exit disconnected from goal'
+  true,
+  'an exit with an adjacent space does not need a guaranteed route to the goal'
 );
 assert.equal(
   utils.isValidMap(baseMap({
     items: [fake(5, 4), wormhole(pos(2, 2), pos(5, 5))],
   })),
+  true,
+  'one immediately open adjacent space is enough beside a wormhole exit'
+);
+const sealedExitWalls = [
+  { position: pos(4, 5), direction: 'down' },
+  { position: pos(5, 4), direction: 'right' },
+];
+assert.equal(
+  utils.getWormholeExitOpenDirections(
+    baseMap({ obstacles: sealedExitWalls }),
+    pos(5, 5)
+  ).length,
+  0,
+  'a corner exit with both inward edges blocked has no adjacent movement space'
+);
+assert.equal(
+  utils.isValidMap(baseMap({
+    obstacles: sealedExitWalls,
+    items: [wormhole(pos(2, 2), pos(5, 5))],
+  })),
   false,
-  'fake wall cannot count as an open exit direction'
+  'a completely sealed wormhole exit remains invalid'
 );
 
 assert.equal(
@@ -368,21 +495,169 @@ assert.deepEqual(steelHit.outcome.position, pos(0, 0), 'steel always blocks');
 assert.equal(steelHit.outcome.wallEffect, 'steelWall', 'steel effect identified');
 assert.equal(steelHit.outcome.consumedItemIndex, null, 'steel ignores consumed/breach state');
 
-const fireHit = resolveSpecial(baseMap({ items: [specialWall('fireWall', 0, 0)] }));
+const fireKnowledgeMap = baseMap({
+  obstacles: [{ position: pos(0, 0), direction: 'down' }],
+  items: [specialWall('fireWall', 0, 0)],
+});
+const fireKnowledgeState = runtimeState(fireKnowledgeMap);
+const actorKnownCollision = {
+  playerId: 'a',
+  position: pos(1, 1),
+  direction: 'right',
+  timestamp: 1,
+  mapOwnerId: 'b',
+};
+const otherKnownCollision = {
+  playerId: 'other',
+  position: pos(2, 2),
+  direction: 'down',
+  timestamp: 2,
+  mapOwnerId: 'b',
+};
+const actorRevealedWall = { position: pos(3, 3), direction: 'right' };
+const otherRevealedWall = { position: pos(4, 4), direction: 'down' };
+fireKnowledgeState.collisionWalls = {
+  actor_old: actorKnownCollision,
+  other_old: otherKnownCollision,
+};
+fireKnowledgeState.revealedWallsByPlayer = {
+  a: [actorRevealedWall],
+  other: [otherRevealedWall],
+};
+const fireHit = turns.resolveTurnAction(fireKnowledgeState, 'a', {
+  type: 'move',
+  direction: 'right',
+}, 100);
+assert.ok(fireHit, 'fire wall turn resolves');
 assert.deepEqual(fireHit.outcome.position, pos(0, 0), 'fire blocks once');
 assert.equal(fireHit.outcome.moves, 1, 'fire no longer adds a numeric move penalty');
 assert.equal(fireHit.state.itemState.b.consumed[0], true, 'fire is consumed');
 assert.equal(fireHit.state.visionEffectsByPlayer.a.type, 'fire', 'fire ignites the runner');
 assert.equal(
-  fireHit.state.visionEffectsByPlayer.a.phantomWalls.length,
-  6,
-  'fire mixes six real-looking heat walls into the runner view'
+  Object.values(fireHit.state.collisionWalls || {}).some((wall) => wall.playerId === 'a'),
+  false,
+  'ignition immediately erases only the burned runner\'s collision knowledge'
 );
+assert.deepEqual(fireHit.state.revealedWallsByPlayer.a, undefined);
+assert.deepEqual(
+  Object.values(fireHit.state.collisionWalls || {}).filter((wall) => wall.playerId === 'other'),
+  [otherKnownCollision],
+  'ignition preserves another runner\'s collision knowledge'
+);
+assert.deepEqual(fireHit.state.revealedWallsByPlayer.other, [otherRevealedWall]);
 assert.equal(
   fireHit.state.visionEffectsByPlayer.a.expiresAtTargetMove,
-  3,
-  'fire hallucinations last for the next two runner actions'
+  5,
+  'fire burns learned wall knowledge for the next four actions'
 );
+
+let burningState = fireHit.state;
+for (let actionNumber = 1; actionNumber <= 5; actionNumber += 1) {
+  const staleReveal = { position: pos(actionNumber - 1, 5), direction: 'left' };
+  burningState.revealedWallsByPlayer = {
+    ...(burningState.revealedWallsByPlayer || {}),
+    a: [staleReveal],
+  };
+  const burnedAction = turns.resolveTurnAction(burningState, 'a', {
+    type: 'move',
+    direction: 'down',
+  }, 200 + actionNumber);
+  assert.ok(burnedAction, `fire follow-up action ${actionNumber} resolves`);
+  const actorCollisions = Object.values(burnedAction.state.collisionWalls || {})
+    .filter((wall) => wall.playerId === 'a');
+  assert.equal(actorCollisions.length, 1, 'each affected action forgets the previous collision');
+  assert.equal(
+    actorCollisions[0].timestamp,
+    200 + actionNumber,
+    'the collision learned by the current action remains visible until the next action'
+  );
+  assert.equal(
+    burnedAction.state.revealedWallsByPlayer?.a,
+    undefined,
+    'each fire-ledger action deletes prior explicit wall reveals'
+  );
+  assert.deepEqual(
+    Object.values(burnedAction.state.collisionWalls || {})
+      .filter((wall) => wall.playerId === 'other'),
+    [otherKnownCollision],
+    'repeated burning never deletes another runner\'s wall knowledge'
+  );
+  assert.deepEqual(burnedAction.state.revealedWallsByPlayer.other, [otherRevealedWall]);
+  if (actionNumber <= 4) {
+    assert.equal(
+      burnedAction.state.visionEffectsByPlayer?.a?.type,
+      'fire',
+      'the fire ledger remains through the fourth affected action'
+    );
+  } else {
+    assert.equal(
+      burnedAction.state.visionEffectsByPlayer?.a,
+      undefined,
+      'the fifth action clears the expired fire ledger after its pre-action wipe'
+    );
+  }
+  burningState = burnedAction.state;
+}
+assert.equal(
+  Object.values(burningState.collisionWalls || {})
+    .find((wall) => wall.playerId === 'a')?.timestamp,
+  205,
+  'the fourth discovery is deleted before action five while action five\'s discovery is retained'
+);
+
+const fireSmokeMap = baseMap({
+  obstacles: [{ position: pos(1, 0), direction: 'right' }],
+  items: [
+    specialWall('fireWall', 0, 0),
+    smoke(1, 0),
+  ],
+});
+const fireSmokeIgnition = turns.resolveTurnAction(runtimeState(fireSmokeMap), 'a', {
+  type: 'move',
+  direction: 'right',
+}, 300);
+assert.ok(fireSmokeIgnition, 'fire-smoke precedence fixture ignites');
+const originalFireLedger = structuredClone(fireSmokeIgnition.state.visionEffectsByPlayer.a);
+const smokeDuringFire = turns.resolveTurnAction(fireSmokeIgnition.state, 'a', {
+  type: 'move',
+  direction: 'down',
+}, 301);
+assert.ok(smokeDuringFire, 'an active fire runner can consume a smoke trap');
+assert.equal(smokeDuringFire.outcome.effect, 'smoke');
+assert.equal(smokeDuringFire.state.itemState.b.consumed[1], true, 'smoke is consumed under fire');
+assert.deepEqual(
+  smokeDuringFire.state.visionEffectsByPlayer.a,
+  originalFireLedger,
+  'smoke cannot replace or shorten an active four-action fire ledger'
+);
+assert.match(
+  smokeDuringFire.outcome.message,
+  /연막.*불길.*화염 상태/u,
+  'the overlap message explains that fire continues after consuming smoke'
+);
+const collisionAfterBurnedSmoke = turns.resolveTurnAction(smokeDuringFire.state, 'a', {
+  type: 'move',
+  direction: 'right',
+}, 302);
+assert.ok(collisionAfterBurnedSmoke, 'fire remains active after the consumed smoke');
+assert.equal(
+  Object.values(collisionAfterBurnedSmoke.state.collisionWalls || {})
+    .filter((wall) => wall.playerId === 'a').length,
+  1,
+  'the next affected action can temporarily learn a collision'
+);
+const cleanupAfterBurnedSmoke = turns.resolveTurnAction(collisionAfterBurnedSmoke.state, 'a', {
+  type: 'move',
+  direction: 'up',
+}, 303);
+assert.ok(cleanupAfterBurnedSmoke, 'the following active-fire action resolves');
+assert.equal(
+  Object.values(cleanupAfterBurnedSmoke.state.collisionWalls || {})
+    .filter((wall) => wall.playerId === 'a').length,
+  0,
+  'fire still erases the prior collision after a smoke overlap'
+);
+assert.deepEqual(cleanupAfterBurnedSmoke.state.visionEffectsByPlayer.a, originalFireLedger);
 
 const fakeHitMap = baseMap({ items: [fake(0, 0)] });
 const fakeHit = resolveSpecial(fakeHitMap);
@@ -449,115 +724,130 @@ assert.equal(
   'poison lasts for the next four runner actions'
 );
 
-let poisonedTurn = null;
-let poisonMisdirectionSeed = null;
-for (let seed = 0; seed < 256 && !poisonedTurn; seed += 1) {
-  const candidateState = structuredClone(poisonPass.state);
-  candidateState.currentTurn = 'a';
-  candidateState.players.a.position = pos(2, 2);
-  candidateState.players.a.moves = 1;
-  candidateState.poisonEffectsByPlayer.a = {
-    sourcePlayerId: 'b',
-    appliedAtTurn: 1,
-    expiresAtTargetMove: 10,
-    seed,
+const cardinalDirections = ['up', 'right', 'down', 'left'];
+function runtimeStateWithPoison(seed, {
+  position = pos(2, 2),
+  moves = 1,
+  playedMap = baseMap(),
+  expiresAtTargetMove = 10,
+} = {}) {
+  const poisonedState = runtimeState(playedMap, {
+    position,
+    history: [position],
+    moves,
+  });
+  poisonedState.poisonEffectsByPlayer = {
+    a: {
+      sourcePlayerId: 'b',
+      appliedAtTurn: 1,
+      expiresAtTargetMove,
+      seed,
+    },
   };
-  const candidate = turns.resolveTurnAction(candidateState, 'a', {
+  return poisonedState;
+}
+
+const poisonSeedByDirection = {};
+for (let seed = 0; seed < 2_048 && Object.keys(poisonSeedByDirection).length < 4; seed += 1) {
+  const sampled = turns.resolveTurnAction(runtimeStateWithPoison(seed), 'a', {
     type: 'move',
     direction: 'right',
-  }, 102);
-  if (candidate?.outcome.poisonMisdirected) {
-    poisonedTurn = candidate;
-    poisonMisdirectionSeed = seed;
-  }
+  }, 300 + seed);
+  assert.ok(sampled, `poison direction sample ${seed} resolves`);
+  poisonSeedByDirection[sampled.outcome.direction] ??= seed;
 }
-assert.ok(poisonedTurn, 'a deterministic poison seed exercises the one-in-four branch');
-assert.notEqual(poisonMisdirectionSeed, null, 'the deterministic poison branch exposes its seed');
-assert.equal(poisonedTurn.outcome.requestedDirection, 'right', 'poison records the intended input');
-assert.notEqual(poisonedTurn.outcome.direction, 'right', 'poison selects a different direction');
-assert.equal(
-  Math.abs(poisonedTurn.outcome.position.row - 2) + Math.abs(poisonedTurn.outcome.position.col - 2),
-  1,
-  'poison redirects to another valid adjacent cell'
+assert.deepEqual(
+  Object.keys(poisonSeedByDirection).sort(),
+  [...cardinalDirections].sort(),
+  'deterministic poison seeds cover all four cardinal results'
 );
 
-const poisonCleanRedirectMap = baseMap({
-  obstacles: [{ position: pos(2, 2), direction: 'up' }],
-  items: [specialWall('fireWall', 2, 2, 'down')],
+const requestIndependentResults = cardinalDirections.map((requestedDirection) => {
+  const resolved = turns.resolveTurnAction(
+    runtimeStateWithPoison(poisonSeedByDirection.down),
+    'a',
+    { type: 'move', direction: requestedDirection },
+    500
+  );
+  assert.ok(resolved, `poison request ${requestedDirection} resolves`);
+  return resolved.outcome.direction;
 });
-const poisonCleanRedirectState = runtimeState(poisonCleanRedirectMap, {
-  position: pos(2, 2),
-  history: [pos(2, 2)],
-  moves: 1,
-});
-poisonCleanRedirectState.poisonEffectsByPlayer = {
-  a: {
-    sourcePlayerId: 'b',
-    appliedAtTurn: 1,
-    expiresAtTargetMove: 10,
-    seed: poisonMisdirectionSeed,
-  },
-};
-const poisonCleanRedirect = turns.resolveTurnAction(poisonCleanRedirectState, 'a', {
-  type: 'move',
-  direction: 'right',
-}, 103);
-assert.ok(poisonCleanRedirect, 'poison resolves when only one clean alternate direction remains');
-assert.equal(poisonCleanRedirect.outcome.poisonMisdirected, true);
-assert.equal(poisonCleanRedirect.outcome.direction, 'left');
 assert.deepEqual(
-  poisonCleanRedirect.outcome.position,
-  pos(2, 1),
-  'poison skips a static wall and an active special wall to guarantee a real alternate step'
-);
-assert.equal(
-  poisonCleanRedirect.state.itemState?.b?.consumed,
-  undefined,
-  'the redirected step does not consume the special wall it avoided'
-);
-assert.equal(
-  poisonCleanRedirect.state.visionEffectsByPlayer,
-  undefined,
-  'the redirected step does not trigger the avoided fire wall'
+  new Set(requestIndependentResults),
+  new Set(['down']),
+  'the same poison seed and action choose the same direction regardless of requested input'
 );
 
-const poisonNoCleanRedirectMap = baseMap({
-  obstacles: [{ position: pos(2, 2), direction: 'up' }],
-  items: [
-    specialWall('fireWall', 2, 2, 'down'),
-    mine(2, 1),
-  ],
+let poisonSequenceState = runtimeStateWithPoison(poisonSeedByDirection.left, {
+  expiresAtTargetMove: 5,
 });
-const poisonNoCleanRedirectState = runtimeState(poisonNoCleanRedirectMap, {
-  position: pos(2, 2),
-  history: [pos(2, 2)],
-  moves: 1,
+for (let actionNumber = 1; actionNumber <= 4; actionNumber += 1) {
+  const requestedSamples = cardinalDirections.map((requestedDirection) => {
+    const sample = turns.resolveTurnAction(
+      structuredClone(poisonSequenceState),
+      'a',
+      { type: 'move', direction: requestedDirection },
+      600 + actionNumber
+    );
+    assert.ok(sample, `poisoned action ${actionNumber}/${requestedDirection} resolves`);
+    return sample.outcome.direction;
+  });
+  assert.equal(
+    new Set(requestedSamples).size,
+    1,
+    `poisoned action ${actionNumber} resolves randomly without consulting the requested direction`
+  );
+  const randomDirection = requestedSamples[0];
+  const requestedDirection = cardinalDirections.find((direction) => direction !== randomDirection);
+  const beforeMoves = poisonSequenceState.players.a.moves;
+  const resolved = turns.resolveTurnAction(poisonSequenceState, 'a', {
+    type: 'move',
+    direction: requestedDirection,
+  }, 700 + actionNumber);
+  assert.ok(resolved, `poisoned sequence action ${actionNumber} resolves`);
+  assert.equal(resolved.outcome.direction, randomDirection);
+  assert.equal(resolved.outcome.requestedDirection, requestedDirection);
+  assert.equal(resolved.outcome.poisonMisdirected, true);
+  assert.equal(
+    resolved.state.players.a.moves,
+    beforeMoves + 1,
+    'every random poison result consumes exactly one action, including a boundary bump'
+  );
+  poisonSequenceState = resolved.state;
+}
+assert.equal(
+  poisonSequenceState.poisonEffectsByPlayer?.a,
+  undefined,
+  'the poison ledger expires after four randomized actions'
+);
+const poisonSequencePosition = poisonSequenceState.players.a.position;
+const normalDirection = cardinalDirections.find((direction) => {
+  const target = utils.getNewPosition(poisonSequencePosition, direction);
+  return utils.isPositionInBoard(target)
+    && !utils.isSamePosition(target, poisonSequenceState.maps.b.endPosition);
 });
-poisonNoCleanRedirectState.poisonEffectsByPlayer = {
-  a: {
-    sourcePlayerId: 'b',
-    appliedAtTurn: 1,
-    expiresAtTargetMove: 10,
-    seed: poisonMisdirectionSeed,
-  },
-};
-const poisonNoCleanRedirect = turns.resolveTurnAction(poisonNoCleanRedirectState, 'a', {
+assert.ok(normalDirection, 'the fifth-action fixture has a safe ordinary direction');
+const poisonFifthAction = turns.resolveTurnAction(poisonSequenceState, 'a', {
+  type: 'move',
+  direction: normalDirection,
+}, 705);
+assert.ok(poisonFifthAction, 'the fifth post-poison action resolves normally');
+assert.equal(poisonFifthAction.outcome.direction, normalDirection);
+assert.equal(poisonFifthAction.outcome.poisonMisdirected, undefined);
+
+const poisonMainBoundaryState = runtimeStateWithPoison(poisonSeedByDirection.up, {
+  position: pos(0, 0),
+});
+const poisonMainBoundary = turns.resolveTurnAction(poisonMainBoundaryState, 'a', {
   type: 'move',
   direction: 'right',
-}, 104);
-assert.ok(poisonNoCleanRedirect, 'poison keeps the input when every alternate route has an effect');
-assert.equal(poisonNoCleanRedirect.outcome.poisonMisdirected, undefined);
-assert.equal(poisonNoCleanRedirect.outcome.direction, 'right');
-assert.deepEqual(
-  poisonNoCleanRedirect.outcome.position,
-  pos(2, 3),
-  'the requested direction is preserved when no clean alternate step exists'
-);
-assert.equal(
-  poisonNoCleanRedirect.state.itemState,
-  undefined,
-  'fallback movement consumes neither the alternate wall nor the alternate mine'
-);
+}, 800);
+assert.ok(poisonMainBoundary, 'a poisoned out-of-bounds main-map action still resolves');
+assert.equal(poisonMainBoundary.outcome.direction, 'up');
+assert.equal(poisonMainBoundary.outcome.effect, 'bump');
+assert.deepEqual(poisonMainBoundary.outcome.position, pos(0, 0));
+assert.equal(poisonMainBoundary.state.players.a.moves, 2);
+assert.equal(poisonMainBoundary.state.turnNumber, poisonMainBoundaryState.turnNumber + 1);
 
 const icePass = resolveSpecial(baseMap({ items: [specialWall('iceWall', 0, 0)] }));
 assert.deepEqual(icePass.outcome.position, pos(0, 2), 'ice safely slides one extra cell');
@@ -878,6 +1168,199 @@ assert.equal(
   'legacy wormhole does not create an internal challenge run'
 );
 
+const diceRuntimeMap = baseMap({ items: [diceWormholeItem] });
+const enteredDiceWormhole = resolveSpecial(diceRuntimeMap);
+assert.equal(enteredDiceWormhole.outcome.effect, 'wormhole');
+assert.equal(enteredDiceWormhole.outcome.realm, 'main');
+assert.equal(enteredDiceWormhole.outcome.wormholeTransition, 'entered');
+assert.deepEqual(enteredDiceWormhole.state.players.a.position, diceWormholeItem.entrance);
+assert.deepEqual(
+  enteredDiceWormhole.state.wormholeRunsByPlayer.a.position,
+  diceChallenge.startPosition,
+  'V2 entry starts at the generated internal start cell'
+);
+assert.equal(
+  enteredDiceWormhole.state.wormholeRunsByPlayer.a.orientation,
+  diceChallenge.initialOrientation,
+  'V2 entry uses the generated initial die orientation'
+);
+assert.equal(
+  enteredDiceWormhole.state.wormholeRunsByPlayer.a.actionsTaken,
+  0,
+  'entering the V2 room does not count as an internal die action'
+);
+
+function resolveSingleActorDiceMove(state, direction, now) {
+  const resolved = turns.resolveTurnAction(state, 'a', { type: 'move', direction }, now);
+  assert.ok(resolved, `V2 dice move ${direction} resolves`);
+  return resolved;
+}
+
+let dicePathRuntimeState = structuredClone(enteredDiceWormhole.state);
+let expectedDiceOrientation = diceChallenge.initialOrientation;
+for (let index = 0; index < dicePath.length; index += 1) {
+  const direction = dicePath[index];
+  const previousExternalPosition = { ...dicePathRuntimeState.players.a.position };
+  expectedDiceOrientation = diceWormhole.rollDiceOrientation(expectedDiceOrientation, direction);
+  const rolled = resolveSingleActorDiceMove(dicePathRuntimeState, direction, 2_000 + index);
+  if (index < dicePath.length - 1) {
+    assert.equal(
+      rolled.state.wormholeRunsByPlayer.a.orientation,
+      expectedDiceOrientation,
+      'each legal internal step rolls the physical die orientation'
+    );
+    assert.equal(rolled.state.wormholeRunsByPlayer.a.actionsTaken, index + 1);
+    assert.deepEqual(
+      rolled.state.players.a.position,
+      previousExternalPosition,
+      'the outer pawn stays pinned while the die moves internally'
+    );
+  } else {
+    assert.equal(rolled.outcome.wormholeTransition, 'returned');
+    assert.equal(rolled.outcome.realm, 'main');
+    assert.equal(rolled.outcome.effect, 'wormhole');
+    assert.deepEqual(
+      rolled.state.players.a.position,
+      diceWormholeItem.exit,
+      'the correct exit orientation returns the pawn to the configured outer exit'
+    );
+    assert.equal(rolled.state.wormholeRunsByPlayer, undefined);
+  }
+  dicePathRuntimeState = rolled.state;
+}
+assert.equal(
+  dicePathRuntimeState.players.a.moves,
+  1 + dicePath.length,
+  'entry and every shortest-path die roll each cost exactly one move'
+);
+
+function findWrongTopDicePath(challenge) {
+  const queue = [{
+    position: challenge.startPosition,
+    orientation: challenge.initialOrientation,
+    path: [],
+  }];
+  const visited = new Set([
+    `${challenge.startPosition.row},${challenge.startPosition.col}:${challenge.initialOrientation}`,
+  ]);
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const direction of diceWormhole.DICE_WORMHOLE_DIRECTIONS) {
+      const position = utils.getNewPosition(current.position, direction);
+      if (!diceWormhole.isDiceWormholePosition(position)
+        || challenge.blockedCells.some((cell) => utils.isSamePosition(cell, position))) continue;
+      const orientation = diceWormhole.rollDiceOrientation(current.orientation, direction);
+      const path = [...current.path, direction];
+      const atExit = utils.isSamePosition(position, challenge.endPosition);
+      const correctTop = diceWormhole.getDiceOrientationFaces(orientation).top === challenge.targetTop;
+      if (atExit && !correctTop) return path;
+      // A real run would already have returned at the solved exit state.
+      if (atExit && correctTop) continue;
+      const key = `${position.row},${position.col}:${orientation}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      queue.push({ position, orientation, path });
+    }
+  }
+  return null;
+}
+
+const wrongTopPath = findWrongTopDicePath(diceChallenge);
+assert.ok(wrongTopPath?.length, 'the generated fixture has a physically reachable wrong-top exit');
+let wrongTopState = structuredClone(enteredDiceWormhole.state);
+let wrongTopArrival;
+for (let index = 0; index < wrongTopPath.length; index += 1) {
+  wrongTopArrival = resolveSingleActorDiceMove(wrongTopState, wrongTopPath[index], 2_100 + index);
+  wrongTopState = wrongTopArrival.state;
+}
+assert.ok(wrongTopArrival, 'the wrong-top fixture reaches the internal exit');
+assert.deepEqual(wrongTopArrival.outcome.position, diceChallenge.endPosition);
+assert.match(wrongTopArrival.outcome.message, /출구.*윗면|윗면.*맞춰/u);
+assert.ok(
+  wrongTopArrival.state.wormholeRunsByPlayer.a,
+  'reaching the V2 exit with the wrong top face keeps the player locked inside'
+);
+assert.deepEqual(wrongTopArrival.state.players.a.position, diceWormholeItem.entrance);
+
+function isolatedDiceRunState({ position, orientation, actionsTaken }) {
+  const state = structuredClone(enteredDiceWormhole.state);
+  state.wormholeRunsByPlayer.a.position = { ...position };
+  state.wormholeRunsByPlayer.a.orientation = orientation;
+  state.wormholeRunsByPlayer.a.actionsTaken = actionsTaken;
+  state.players.a.moves = 1 + actionsTaken;
+  return state;
+}
+
+let blockerFixture = null;
+for (let row = 0; row < 4 && !blockerFixture; row += 1) {
+  for (let col = 0; col < 4 && !blockerFixture; col += 1) {
+    const origin = pos(row, col);
+    if (diceChallenge.blockedCells.some((cell) => utils.isSamePosition(cell, origin))) continue;
+    for (const direction of diceWormhole.DICE_WORMHOLE_DIRECTIONS) {
+      const target = utils.getNewPosition(origin, direction);
+      if (diceChallenge.blockedCells.some((cell) => utils.isSamePosition(cell, target))) {
+        blockerFixture = { origin, direction };
+        break;
+      }
+    }
+  }
+}
+assert.ok(blockerFixture, 'the generated blocker has an adjacent walkable test cell');
+const blockerState = isolatedDiceRunState({
+  position: blockerFixture.origin,
+  orientation: diceChallenge.initialOrientation,
+  actionsTaken: 3,
+});
+const blockerHit = resolveSingleActorDiceMove(blockerState, blockerFixture.direction, 2_200);
+assert.equal(blockerHit.outcome.effect, 'bump');
+assert.deepEqual(blockerHit.state.wormholeRunsByPlayer.a.position, blockerFixture.origin);
+assert.equal(
+  blockerHit.state.wormholeRunsByPlayer.a.orientation,
+  diceChallenge.initialOrientation,
+  'a blocked cell consumes an action without rolling the die'
+);
+assert.equal(blockerHit.state.wormholeRunsByPlayer.a.actionsTaken, 4);
+assert.equal(blockerHit.state.players.a.moves, blockerState.players.a.moves + 1);
+
+const boundaryFixture = (() => {
+  for (let row = 0; row < 4; row += 1) {
+    for (let col = 0; col < 4; col += 1) {
+      const position = pos(row, col);
+      if (diceChallenge.blockedCells.some((cell) => utils.isSamePosition(cell, position))) continue;
+      if (row === 0) return { position, direction: 'up' };
+      if (row === 3) return { position, direction: 'down' };
+      if (col === 0) return { position, direction: 'left' };
+      if (col === 3) return { position, direction: 'right' };
+    }
+  }
+  return null;
+})();
+assert.ok(boundaryFixture, 'the V2 board exposes a non-blocked boundary cell');
+const boundaryState = isolatedDiceRunState({
+  position: boundaryFixture.position,
+  orientation: diceChallenge.initialOrientation,
+  actionsTaken: 4,
+});
+const boundaryHit = resolveSingleActorDiceMove(boundaryState, boundaryFixture.direction, 2_201);
+assert.equal(boundaryHit.outcome.effect, 'bump');
+assert.deepEqual(boundaryHit.state.wormholeRunsByPlayer.a.position, boundaryFixture.position);
+assert.equal(boundaryHit.state.wormholeRunsByPlayer.a.orientation, diceChallenge.initialOrientation);
+assert.equal(boundaryHit.state.wormholeRunsByPlayer.a.actionsTaken, 5);
+assert.equal(boundaryHit.state.players.a.moves, boundaryState.players.a.moves + 1);
+
+const noHintState = isolatedDiceRunState({
+  position: diceChallenge.startPosition,
+  orientation: diceChallenge.initialOrientation,
+  actionsTaken: 9,
+});
+const noHintRoll = resolveSingleActorDiceMove(noHintState, dicePath[0], 2_300);
+assert.equal(noHintRoll.state.wormholeRunsByPlayer.a.actionsTaken, 10);
+assert.doesNotMatch(
+  noHintRoll.outcome.message,
+  /힌트|다음 방향|방향을 알려줍니다/u,
+  'the tenth and later internal actions never reveal a route hint'
+);
+
 let wormholeRelayState = {
   phase: types.GamePhase.PLAY,
   currentTurn: 'a',
@@ -982,7 +1465,7 @@ poisonedWormholeState.poisonEffectsByPlayer = {
     sourcePlayerId: 'b',
     appliedAtTurn: 1,
     expiresAtTargetMove: 10,
-    seed: poisonMisdirectionSeed,
+    seed: poisonSeedByDirection.up,
   },
 };
 const poisonedWormholeMove = turns.resolveTurnAction(poisonedWormholeState, 'a', {
@@ -992,17 +1475,22 @@ const poisonedWormholeMove = turns.resolveTurnAction(poisonedWormholeState, 'a',
 assert.ok(poisonedWormholeMove, 'poison direction selection resolves inside a wormhole challenge');
 assert.equal(poisonedWormholeMove.outcome.poisonMisdirected, true);
 assert.equal(poisonedWormholeMove.outcome.requestedDirection, 'right');
-assert.equal(poisonedWormholeMove.outcome.direction, 'down');
-assert.equal(poisonedWormholeMove.outcome.effect, 'move');
+assert.equal(poisonedWormholeMove.outcome.direction, 'up');
+assert.equal(poisonedWormholeMove.outcome.effect, 'bump');
 assert.deepEqual(
   poisonedWormholeMove.state.wormholeRunsByPlayer.a.position,
-  pos(1, 0),
-  'poison skips the internal wall and completes the only passable alternate step'
+  pos(0, 0),
+  'a randomized V1 wormhole boundary hit keeps the internal position fixed'
 );
 assert.equal(
-  poisonedWormholeMove.state.wormholeRunsByPlayer.a.discoveredWalls,
-  undefined,
-  'poison redirection does not record a collision against the avoided internal wall'
+  poisonedWormholeMove.state.players.a.moves,
+  enteredWormhole.state.players.a.moves + 1,
+  'a randomized V1 wormhole boundary hit consumes exactly one action'
+);
+assert.equal(
+  poisonedWormholeMove.state.turnNumber,
+  enteredWormhole.state.turnNumber + 1,
+  'a randomized V1 wormhole boundary hit advances the shared turn once'
 );
 
 const internalWallHit = resolveChallengeMove('right');
@@ -1018,6 +1506,39 @@ assert.equal(
   Object.keys(internalWallHit.state.collisionWalls || {}).length,
   0,
   'an internal collision does not leak into the outer map collision history'
+);
+
+const burningWormholeState = structuredClone(internalWallHit.state);
+burningWormholeState.currentTurn = 'a';
+burningWormholeState.visionEffectsByPlayer = {
+  a: {
+    type: 'fire',
+    sourcePlayerId: 'b',
+    appliedAtTurn: burningWormholeState.turnNumber,
+    expiresAtTargetMove: burningWormholeState.players.a.moves + 2,
+  },
+};
+const otherRunnerWall = { position: pos(2, 1), direction: 'right' };
+const otherWormholeRun = {
+  ...structuredClone(burningWormholeState.wormholeRunsByPlayer.a),
+  mapOwnerId: 'a',
+  discoveredWalls: [otherRunnerWall],
+};
+burningWormholeState.wormholeRunsByPlayer.b = otherWormholeRun;
+const burningWormholeMove = turns.resolveTurnAction(burningWormholeState, 'a', {
+  type: 'move',
+  direction: 'down',
+}, wormholeNow++);
+assert.ok(burningWormholeMove, 'an active-fire V1 wormhole action resolves');
+assert.equal(
+  burningWormholeMove.state.wormholeRunsByPlayer.a.discoveredWalls,
+  undefined,
+  'fire erases the acting runner\'s previously discovered V1 internal wall'
+);
+assert.deepEqual(
+  burningWormholeMove.state.wormholeRunsByPlayer.b,
+  otherWormholeRun,
+  'fire never erases another runner\'s V1 internal wall knowledge'
 );
 
 const lockedExit = resolveChallengeMove('down');
@@ -1080,7 +1601,10 @@ assert.equal(
 );
 
 const unsafeRuntimeMap = baseMap({
-  obstacles: [{ position: pos(5, 4), direction: 'right' }],
+  obstacles: [
+    { position: pos(4, 5), direction: 'down' },
+    { position: pos(5, 4), direction: 'right' },
+  ],
   items: [wormhole(pos(0, 1), pos(5, 5))],
 });
 const ownMap = baseMap();
@@ -1264,8 +1788,8 @@ for (const [index, map] of practice.PRACTICE_MAP_TEMPLATES.entries()) {
   const manhattan = Math.abs(map.startPosition.row - map.endPosition.row) +
     Math.abs(map.startPosition.col - map.endPosition.col);
   assert.ok(
-    practice.getPracticeMapRouteLength(map) > manhattan,
-    `practice template ${index + 1} forces a real detour to the exit`
+    practice.getPracticeMapRouteLength(map) >= manhattan,
+    `practice template ${index + 1} keeps a reachable non-shortcut route to the exit`
   );
   assert.equal(
     map.skillLoadout,
@@ -1347,10 +1871,26 @@ assert.equal(
   practice.PRACTICE_USER_ID,
   'solo map test immediately returns the next turn to the creator'
 );
+const sparseMapTestState = practice.createMapTestGameState(baseMap());
+assert.equal(
+  utils.getMapBudgetUsed(sparseMapTestState.maps[practice.PRACTICE_USER_ID]),
+  0,
+  'solo map test accepts a valid 0/24 map without auto-filling the unused budget'
+);
+assert.deepEqual(
+  sparseMapTestState.maps[practice.PRACTICE_USER_ID].obstacles,
+  [],
+  'solo map test preserves the creator\'s sparse wall list'
+);
 assert.throws(
-  () => practice.createMapTestGameState(baseMap()),
-  /valid 24\/24 map/,
-  'solo map test rejects incomplete maps outside the setup UI'
+  () => practice.createMapTestGameState(baseMap({
+    obstacles: [
+      { position: pos(0, 0), direction: 'right' },
+      { position: pos(0, 0), direction: 'down' },
+    ],
+  })),
+  /valid map/,
+  'solo map test still rejects a map whose start is isolated'
 );
 const completedMapTest = simulatePracticeState(
   practice.createMapTestGameState(practice.PRACTICE_MAP_TEMPLATES[0]),

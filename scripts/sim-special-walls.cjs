@@ -30,7 +30,7 @@ const FORCED_EFFECTS = new Set(['ice', 'wind', 'mirror']);
 const SPECIALS = [
   { kind: 'steel', initialCost: 1 },
   { kind: 'fire', initialCost: 1 },
-  { kind: 'poison', initialCost: 1 },
+  { kind: 'poison', initialCost: 3 },
   { kind: 'ice', initialCost: 1 },
   { kind: 'wind', initialCost: 1 },
   { kind: 'collapse', initialCost: 1 },
@@ -664,6 +664,10 @@ function runGame(map, policy, special = null) {
     knownSpecial: false,
     phaseOpen: false,
     collapseClosed: false,
+    fireActions: 0,
+    fireCleanupPending: false,
+    poisonActions: 0,
+    poisonSeed: 0,
   };
   let moves = 0;
   let activated = false;
@@ -688,9 +692,31 @@ function runGame(map, policy, special = null) {
     pendingRetry = null;
   };
 
+  const forgetWallKnowledge = () => {
+    believed.fill(0);
+    hitCounts.fill(0);
+    learnedAt.fill(0);
+    pendingRetry = null;
+  };
+
   while (runtime.position !== map.goal && moves < MAX_MOVES && guard++ < MAX_MOVES * 10) {
+    if (runtime.fireActions > 0) {
+      forgetWallKnowledge();
+      runtime.fireActions -= 1;
+    } else if (runtime.fireCleanupPending) {
+      // The fourth affected action's collision remains visible until the fifth
+      // action begins, when it is erased before permanent knowledge resumes.
+      forgetWallKnowledge();
+      runtime.fireCleanupPending = false;
+    }
+
     let target = -1;
-    if (pendingRetry?.from === runtime.position) target = pendingRetry.target;
+    if (runtime.poisonActions > 0) {
+      const direction = hashString(`${runtime.poisonSeed}:direction:${moves}`) % DELTAS.length;
+      target = neighborInDirection(runtime.position, direction);
+      runtime.poisonActions -= 1;
+      pendingRetry = null;
+    } else if (pendingRetry?.from === runtime.position) target = pendingRetry.target;
     else {
       pendingRetry = null;
       target = planFirstStep(map, special, runtime, believed);
@@ -698,6 +724,14 @@ function runGame(map, policy, special = null) {
         if (policy === 'adaptive' && forgetWeakest(believed, hitCounts, learnedAt)) continue;
         return { moves, activated, hardlock: true, safetyFailure };
       }
+    }
+
+    if (target < 0) {
+      // Poison can choose an out-of-board direction. It consumes the action
+      // without teaching the runner a synthetic boundary wall.
+      record(runtime.position, 1);
+      pendingRetry = null;
+      continue;
     }
 
     const origin = runtime.position;
@@ -738,14 +772,18 @@ function runGame(map, policy, special = null) {
       runtime.knownSpecial = true;
       if (special.kind === 'fire') {
         runtime.active = false;
-        record(origin, 2);
-        learnCollision(edge, origin, target, origin);
+        runtime.fireActions = 4;
+        runtime.fireCleanupPending = true;
+        forgetWallKnowledge();
+        record(origin, 1);
         continue;
       }
       if (special.kind === 'poison') {
         runtime.active = false;
         runtime.position = target;
-        record(runtime.position, 3);
+        runtime.poisonActions = 4;
+        runtime.poisonSeed = hashString(`${map.start}:${map.goal}:${special.edge}:${moves}:poison`);
+        record(runtime.position, 1);
         pendingRetry = null;
         continue;
       }

@@ -88,8 +88,8 @@ export default function PracticePage() {
   const subtitle = stage === 'configure'
     ? '연습 방식 선택'
     : stage === 'setup'
-      ? mode === 'mapTest' ? '24벽 · 내 맵 제작' : `AI ${aiCount}명 · 24벽 맵 제작`
-      : mode === 'mapTest' ? '제작자 시점 · 단독 주행' : `나 + AI ${aiCount}명 · 교대 대전`;
+      ? mode === 'mapTest' ? '최대 24 · 필요한 만큼 배치' : `AI ${aiCount}명 · 24벽 맵 제작`
+      : mode === 'mapTest' ? '제작자·상대 시점 · 단독 주행' : `나 + AI ${aiCount}명 · 교대 대전`;
 
   return (
     <MazeShell screen="practice" phase={stage === 'battle' ? 'play' : stage}>
@@ -216,7 +216,7 @@ export default function PracticePage() {
             key={`practice-setup-${matchKey}`}
             onMapComplete={handleMapComplete}
             initialMap={playerMap}
-            requireFullBudget
+            requireFullBudget={mode !== 'mapTest'}
           />
         )}
 

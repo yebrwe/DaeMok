@@ -2,11 +2,38 @@
 
 import React from 'react';
 import { CloudFog, Eye } from 'lucide-react';
-import { CollisionWall, GameMap, GamePhase, Obstacle, Position } from '@/types/game';
+import {
+  CollisionWall,
+  DiceWormholeRunState,
+  GameMap,
+  GamePhase,
+  LegacyWormholeRunState,
+  Obstacle,
+  Position,
+  WormholeRunState,
+} from '@/types/game';
 import { getMapItems, getVisibleCollisionWalls } from '@/lib/gameUtils';
-import type { MazeAuthorityWormholeRunView } from '@/lib/mazeAuthorityClient';
+import type {
+  MazeAuthorityDiceWormholeRunView,
+  MazeAuthorityLegacyWormholeRunView,
+  MazeAuthorityWormholeRunView,
+} from '@/lib/mazeAuthorityClient';
+import { getDiceOrientationFaces } from '@/lib/diceWormhole';
 import GameBoard3D, { BoardFx } from './three/GameBoard3D';
+import DiceWormholeBoard from './DiceWormholeBoard';
 import type { LiveBoardVisualAction } from '@/lib/liveBoardVisuals';
+
+type LiveWormholeRun = WormholeRunState | MazeAuthorityWormholeRunView;
+type LiveDiceWormholeRun = DiceWormholeRunState | MazeAuthorityDiceWormholeRunView;
+type LiveLegacyWormholeRun = LegacyWormholeRunState | MazeAuthorityLegacyWormholeRunView;
+
+function isDiceWormholeRun(run: LiveWormholeRun | null): run is LiveDiceWormholeRun {
+  return run?.challenge.version === 2;
+}
+
+function isLegacyWormholeRun(run: LiveWormholeRun | null): run is LiveLegacyWormholeRun {
+  return run?.challenge.version === 1;
+}
 
 export interface LiveBoardEntry {
   runnerId: string;
@@ -36,9 +63,10 @@ export interface LiveBoardEntry {
   pawnColor?: string;
   smokeAffected?: boolean;
   visionObscured?: boolean;
-  // Practice may pass the full structurally-compatible run; Authority PLAY omits challenge walls.
-  wormholeRun?: MazeAuthorityWormholeRunView | null;
+  // Practice, legacy rooms, and Authority projections may carry either version.
+  wormholeRun?: LiveWormholeRun | null;
   fireAffected?: boolean;
+  // Read-only compatibility for old callers. Heat hallucinations are no longer rendered.
   heatWalls?: Obstacle[];
   poisonAffected?: boolean;
 }
@@ -59,6 +87,163 @@ function boardStatus(board: LiveBoardEntry, isCurrentTurn: boolean, isMine: bool
   return '대기';
 }
 
+const WORMHOLE_ENTRY_TRANSITION_MS = 920;
+
+function usePrefersReducedMotion(): boolean {
+  const [reducedMotion, setReducedMotion] = React.useState(false);
+
+  React.useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(media.matches);
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+
+  return reducedMotion;
+}
+
+interface LiveBoardRealmProps {
+  board: LiveBoardEntry;
+  wormholeRun: LiveWormholeRun | null;
+  showMapSecrets: boolean;
+  effectiveRevealObstacles: boolean;
+  reducedMotion: boolean;
+}
+
+const LiveBoardRealm: React.FC<LiveBoardRealmProps> = ({
+  board,
+  wormholeRun,
+  showMapSecrets,
+  effectiveRevealObstacles,
+  reducedMotion,
+}) => {
+  const isInsideWormhole = !!wormholeRun;
+  const previousInsideRef = React.useRef(isInsideWormhole);
+  const [showInsideWormhole, setShowInsideWormhole] = React.useState(isInsideWormhole);
+  const [enteringWormhole, setEnteringWormhole] = React.useState(false);
+  const [entryTransitionElapsedMs, setEntryTransitionElapsedMs] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    const wasInsideWormhole = previousInsideRef.current;
+    previousInsideRef.current = isInsideWormhole;
+
+    if (!wasInsideWormhole && isInsideWormhole && !reducedMotion) {
+      const startedAt = performance.now();
+      setShowInsideWormhole(false);
+      setEnteringWormhole(true);
+      setEntryTransitionElapsedMs(null);
+      const timer = window.setTimeout(() => {
+        setEntryTransitionElapsedMs(performance.now() - startedAt);
+        setShowInsideWormhole(true);
+        setEnteringWormhole(false);
+      }, WORMHOLE_ENTRY_TRANSITION_MS);
+      return () => window.clearTimeout(timer);
+    }
+
+    setShowInsideWormhole(isInsideWormhole);
+    setEnteringWormhole(false);
+  }, [isInsideWormhole, reducedMotion]);
+
+  const visibleRun = showInsideWormhole ? wormholeRun : null;
+  const diceWormholeRun = isDiceWormholeRun(visibleRun) ? visibleRun : null;
+  const legacyWormholeRun = isLegacyWormholeRun(visibleRun) ? visibleRun : null;
+  const renderedMap: GameMap = legacyWormholeRun
+    ? {
+        rulesVersion: board.map.rulesVersion,
+        startPosition: legacyWormholeRun.challenge.startPosition,
+        endPosition: legacyWormholeRun.challenge.endPosition,
+        obstacles: legacyWormholeRun.challenge.obstacles ?? [],
+        items: [],
+        skillLoadout: board.map.skillLoadout,
+      }
+    : board.map;
+  const visibleItems = visibleRun ? [] : showMapSecrets ? getMapItems(board.map) : [];
+  const visibleCollisions = legacyWormholeRun
+    ? (legacyWormholeRun.discoveredWalls || []).map((wall, index): CollisionWall => ({
+        playerId: board.runnerId,
+        mapOwnerId: board.mapOwnerId,
+        position: wall.position,
+        direction: wall.direction,
+        timestamp: legacyWormholeRun.enteredAtTurn + index,
+      }))
+    : diceWormholeRun
+      ? []
+      : getVisibleCollisionWalls(
+          board.collisions || [],
+          board.map,
+          board.itemsConsumed || {}
+        );
+  const activatedSealCount = legacyWormholeRun
+    ? legacyWormholeRun.challenge.seals.reduce(
+        (count, _, index) => count + (legacyWormholeRun.activatedSeals?.[index] ? 1 : 0),
+        0
+      )
+    : 0;
+
+  return (
+    <div
+      className="absolute inset-0"
+      data-testid="live-board-realm-stage"
+      data-displayed-realm={visibleRun ? 'wormhole' : 'main'}
+      data-realm-transition={enteringWormhole ? 'entering' : 'idle'}
+      data-realm-transition-elapsed-ms={entryTransitionElapsedMs === null
+        ? undefined
+        : Math.round(entryTransitionElapsedMs)}
+    >
+      {diceWormholeRun ? (
+        <DiceWormholeBoard run={diceWormholeRun} />
+      ) : (
+        <GameBoard3D
+          key={legacyWormholeRun ? `wormhole-${legacyWormholeRun.mapOwnerId}-${legacyWormholeRun.itemIndex}` : 'main'}
+          gamePhase={GamePhase.PLAY}
+          startPosition={renderedMap.startPosition}
+          endPosition={renderedMap.endPosition}
+          playerPosition={legacyWormholeRun?.position || board.position}
+          obstacles={renderedMap.obstacles}
+          collisionWalls={visibleCollisions}
+          readOnly
+          revealObstacles={effectiveRevealObstacles}
+          revealItems={showMapSecrets}
+          pawnColor={board.pawnColor}
+          items={visibleItems}
+          itemsConsumed={board.itemsConsumed || {}}
+          itemActiveWalls={board.itemActiveWalls || {}}
+          itemPhaseOpen={board.itemPhaseOpen || {}}
+          revealedWalls={board.revealedWalls || []}
+          fx={board.fx || null}
+          pawnVia={board.via || null}
+          celebrating={!!board.celebrating}
+          fireAffected={!!board.fireAffected}
+          poisonAffected={!!board.poisonAffected}
+          challengeSeals={legacyWormholeRun?.challenge.seals}
+          challengeActivatedSeals={legacyWormholeRun?.activatedSeals}
+          wormholeChallenge={!!legacyWormholeRun}
+          fullscreen
+          compact
+        />
+      )}
+
+      {enteringWormhole && !showInsideWormhole && (
+        <div
+          className="wormhole-realm-transition"
+          data-testid="wormhole-realm-transition"
+          aria-hidden="true"
+        >
+          <span className="wormhole-realm-transition-vortex" />
+          <span className="wormhole-realm-transition-core" />
+        </div>
+      )}
+
+      {legacyWormholeRun && (
+        <div className="pointer-events-none absolute left-1/2 top-7 z-10 -translate-x-1/2 rounded-full border border-fuchsia-300/70 bg-slate-950/90 px-2 py-0.5 text-[9px] font-black text-fuchsia-100 shadow-lg">
+          웜홀 내부 · 봉인 {activatedSealCount}/{legacyWormholeRun.challenge.seals.length}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
   boards,
   currentTurnId = null,
@@ -67,6 +252,7 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
   className = '',
   emptyState = null,
 }) => {
+  const reducedMotion = usePrefersReducedMotion();
   const visibleBoards = boards.slice(0, 4);
   if (visibleBoards.length === 0) {
     return <div className={`flex h-full w-full items-center justify-center ${className}`}>{emptyState}</div>;
@@ -91,33 +277,14 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
           const revealObstacles = gameEnded || isMapOwner || !!board.revealObstacles;
           const effectiveRevealObstacles = revealObstacles && !board.fireAffected;
           const wormholeRun = board.wormholeRun || null;
-          const renderedMap: GameMap = wormholeRun
-            ? {
-                rulesVersion: board.map.rulesVersion,
-                startPosition: wormholeRun.challenge.startPosition,
-                endPosition: wormholeRun.challenge.endPosition,
-                obstacles: wormholeRun.challenge.obstacles ?? [],
-                items: [],
-                skillLoadout: board.map.skillLoadout,
-              }
-            : board.map;
-          const visibleItems = wormholeRun ? [] : showMapSecrets ? getMapItems(board.map) : [];
-          const visibleCollisions = wormholeRun
-            ? (wormholeRun.discoveredWalls || []).map((wall, index): CollisionWall => ({
-                playerId: board.runnerId,
-                mapOwnerId: board.mapOwnerId,
-                position: wall.position,
-                direction: wall.direction,
-                timestamp: wormholeRun.enteredAtTurn + index,
-              }))
-            : getVisibleCollisionWalls(
-                board.collisions || [],
-                board.map,
-                board.itemsConsumed || {}
-              );
-          const activatedSealCount = wormholeRun
-            ? wormholeRun.challenge.seals.reduce(
-                (count, _, index) => count + (wormholeRun.activatedSeals?.[index] ? 1 : 0),
+          const diceWormholeRun = isDiceWormholeRun(wormholeRun) ? wormholeRun : null;
+          const legacyWormholeRun = isLegacyWormholeRun(wormholeRun) ? wormholeRun : null;
+          const diceFaces = diceWormholeRun
+            ? getDiceOrientationFaces(diceWormholeRun.orientation)
+            : null;
+          const activatedSealCount = legacyWormholeRun
+            ? legacyWormholeRun.challenge.seals.reduce(
+                (count, _, index) => count + (legacyWormholeRun.activatedSeals?.[index] ? 1 : 0),
                 0
               )
             : 0;
@@ -142,9 +309,13 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
             data-vision-obscured={board.visionObscured ? 'true' : undefined}
             data-fire-affected={board.fireAffected ? 'true' : 'false'}
             data-poison-affected={board.poisonAffected ? 'true' : 'false'}
-            data-heat-wall-count={board.heatWalls?.length || 0}
             data-board-realm={wormholeRun ? 'wormhole' : 'main'}
-            data-wormhole-seals={wormholeRun ? `${activatedSealCount}/${wormholeRun.challenge.seals.length}` : undefined}
+            data-wormhole-version={wormholeRun?.challenge.version}
+            data-dice-top={diceFaces?.top}
+            data-dice-target={diceWormholeRun?.challenge.targetTop}
+            data-dice-actions={diceWormholeRun?.actionsTaken}
+            data-dice-hint={diceWormholeRun ? 'none' : undefined}
+            data-wormhole-seals={legacyWormholeRun ? `${activatedSealCount}/${legacyWormholeRun.challenge.seals.length}` : undefined}
             aria-label={`${board.runnerName} 게임 보드`}
             className={`relative min-h-0 min-w-0 touch-none overflow-hidden rounded-2xl border-2 bg-[#eff7f2] ${
               isCurrentTurn
@@ -154,49 +325,21 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
                   : 'border-[#e5cfad]'
             }`}
           >
-            <GameBoard3D
-              key={wormholeRun ? `wormhole-${wormholeRun.mapOwnerId}-${wormholeRun.itemIndex}` : 'main'}
-              gamePhase={GamePhase.PLAY}
-              startPosition={renderedMap.startPosition}
-              endPosition={renderedMap.endPosition}
-              playerPosition={wormholeRun?.position || board.position}
-              obstacles={renderedMap.obstacles}
-              collisionWalls={visibleCollisions}
-              readOnly
-              revealObstacles={effectiveRevealObstacles}
-              revealItems={showMapSecrets}
-              pawnColor={board.pawnColor}
-              items={visibleItems}
-              itemsConsumed={board.itemsConsumed || {}}
-              itemActiveWalls={board.itemActiveWalls || {}}
-              itemPhaseOpen={board.itemPhaseOpen || {}}
-              revealedWalls={board.revealedWalls || []}
-              heatWalls={board.heatWalls || []}
-              fx={board.fx || null}
-              pawnVia={board.via || null}
-              celebrating={!!board.celebrating}
-              fireAffected={!!board.fireAffected}
-              poisonAffected={!!board.poisonAffected}
-              challengeSeals={wormholeRun?.challenge.seals}
-              challengeActivatedSeals={wormholeRun?.activatedSeals}
-              wormholeChallenge={!!wormholeRun}
-              fullscreen
-              compact
+            <LiveBoardRealm
+              board={board}
+              wormholeRun={wormholeRun}
+              showMapSecrets={showMapSecrets}
+              effectiveRevealObstacles={effectiveRevealObstacles}
+              reducedMotion={reducedMotion}
             />
-
-            {wormholeRun && (
-              <div className="pointer-events-none absolute left-1/2 top-7 z-10 -translate-x-1/2 rounded-full border border-fuchsia-300/70 bg-slate-950/90 px-2 py-0.5 text-[9px] font-black text-fuchsia-100 shadow-lg">
-                웜홀 내부 · 봉인 {activatedSealCount}/{wormholeRun.challenge.seals.length}
-              </div>
-            )}
 
             {(board.fireAffected || board.poisonAffected) && (
               <div
                 className="pointer-events-none absolute right-1.5 top-7 z-10 flex max-w-[58%] flex-col items-end gap-1"
                 role="status"
                 aria-label={[
-                  board.fireAffected ? '화염 상태: 진짜 벽과 열기 환영 벽이 뒤섞여 보입니다.' : '',
-                  board.poisonAffected ? '중독 상태: 방향 입력이 25퍼센트 확률로 뒤틀립니다.' : '',
+                  board.fireAffected ? '화염 상태: 지도가 소각되어 새 벽 기억도 다음 행동에 사라집니다.' : '',
+                  board.poisonAffected ? '중독 상태: 모든 입력이 상하좌우 네 방향 중 하나로 무작위 변환됩니다.' : '',
                 ].filter(Boolean).join(' ')}
               >
                 {board.fireAffected && (
@@ -204,7 +347,7 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
                     data-status-badge="fire"
                     className="rounded-full border border-orange-300/80 bg-[#661c0f]/90 px-2 py-0.5 text-[8px] font-black leading-tight text-orange-100 shadow-lg sm:text-[9px]"
                   >
-                    🔥 화염 · 진짜/환영벽 혼선
+                    🔥 지도 소각 · 새 벽 기억도 다음 행동에 사라짐
                   </span>
                 )}
                 {board.poisonAffected && (
@@ -212,7 +355,7 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
                     data-status-badge="poison"
                     className="rounded-full border border-lime-300/80 bg-[#274e13]/90 px-2 py-0.5 text-[8px] font-black leading-tight text-lime-50 shadow-lg sm:text-[9px]"
                   >
-                    ☠ 중독 · 방향 혼선 25%
+                    ☠ 중독 · 모든 입력 4방향 무작위
                   </span>
                 )}
               </div>

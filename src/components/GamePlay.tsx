@@ -228,8 +228,12 @@ const GamePlay: React.FC<GamePlayProps> = ({
       setMessage(`${currentTurnName}의 턴입니다. 차례를 기다려주세요.`);
       return;
     }
-    const actionPosition = gameState?.wormholeRunsByPlayer?.[userId]?.position || playerPosition;
-    if (!isPositionInBoard(getNewPosition(actionPosition, direction))) {
+    const actionWormholeRun = gameState?.wormholeRunsByPlayer?.[userId] || null;
+    const actionPosition = actionWormholeRun?.position || playerPosition;
+    // V2는 4×4 내부 경계/차원석 충돌도 정상 행동으로 소비한다. 6×6 메인 보드용
+    // 사전 가드에서 잘라내지 않고 reducer가 bump 결과를 확정하게 한다.
+    const isDiceWormholeAction = actionWormholeRun?.challenge.version === 2;
+    if (!isDiceWormholeAction && !isPositionInBoard(getNewPosition(actionPosition, direction))) {
       setLastMoveValid(null);
       setMessage('보드 밖으로는 이동할 수 없습니다.');
       return;
@@ -292,7 +296,15 @@ const GamePlay: React.FC<GamePlayProps> = ({
         fireFx({ type: 'mine', at: committed.itemPosition, delay: 0.35 });
       } else if (committed.effect === 'wormhole') {
         setLocalVisualRoute(null);
-        fireFx({ type: 'wormhole', at: committed.itemPosition, to: committed.wormholeExit, delay: 0.35 });
+        fireFx({
+          type: 'wormhole',
+          at: committed.itemPosition,
+          to: committed.wormholeExit,
+          delay: 0.35,
+          ...(committed.wormholeTransition === 'entered' || committed.wormholeTransition === 'returned'
+            ? { wormholeTransition: committed.wormholeTransition }
+            : {}),
+        });
       } else if (
         (committed.wallEffect === 'iceWall' ||
           committed.wallEffect === 'windWall' ||
@@ -423,7 +435,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
         revealedWalls: isMine
           ? revealedWalls
           : (gameState.revealedWallsByPlayer?.[runnerId] || []),
-        heatWalls: fireEffect?.phantomWalls || [],
+        heatWalls: fireEffect?.phantomWalls ?? [],
         fireAffected: !!fireEffect,
         poisonAffected: !!poisonEffect,
         fx: isMine ? fx : (remoteVisuals[runnerId]?.fx || null),

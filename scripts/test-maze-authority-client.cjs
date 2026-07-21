@@ -39,7 +39,12 @@ function clone(value) {
   return structuredClone(value);
 }
 
-const gameUtils = loadTypeScript('src/lib/gameUtils.ts');
+const gameTypes = loadTypeScript('src/types/game.ts');
+const diceWormhole = loadTypeScript('src/lib/diceWormhole.ts');
+const gameUtils = loadTypeScript('src/lib/gameUtils.ts', {
+  '@/types/game': gameTypes,
+  '@/lib/diceWormhole': diceWormhole,
+});
 
 const ITEM_COSTS = {
   oneTimeWall: 7,
@@ -49,7 +54,7 @@ const ITEM_COSTS = {
   smoke: 1,
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 1,
+  poisonWall: 3,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,
@@ -89,6 +94,10 @@ function isValidMapForRuleSnapshot(map, snapshot) {
     && map?.endPosition?.row >= 0;
 }
 
+function isValidNewMapForRuleSnapshot(map, snapshot) {
+  return isValidMapForRuleSnapshot(map, snapshot);
+}
+
 function validMap(overrides = {}) {
   return {
     rulesVersion: 3,
@@ -98,6 +107,30 @@ function validMap(overrides = {}) {
     items: [],
     skillLoadout: 'scoutPulse',
     ...overrides,
+  };
+}
+
+function diceWormholeItem(challenge = diceWormhole.generateDiceWormholeChallenge(0xDAE0C)) {
+  return {
+    type: 'wormhole',
+    entrance: { row: 0, col: 1 },
+    exit: { row: 4, col: 4 },
+    challenge,
+  };
+}
+
+function legacyWormholeChallenge() {
+  return {
+    version: 1,
+    startPosition: { row: 0, col: 0 },
+    endPosition: { row: 1, col: 0 },
+    seals: [{ row: 0, col: 5 }, { row: 5, col: 5 }, { row: 5, col: 0 }],
+    obstacles: [
+      { position: { row: 0, col: 0 }, direction: 'right' },
+      { position: { row: 2, col: 1 }, direction: 'right' },
+      { position: { row: 3, col: 2 }, direction: 'right' },
+      { position: { row: 4, col: 3 }, direction: 'right' },
+    ],
   };
 }
 
@@ -246,6 +279,7 @@ async function main() {
       createCanonicalGameRuleSnapshot: ruleSnapshot,
       isValidGameRuleSnapshot: isValidRuleSnapshot,
       isValidMapForRuleSnapshot,
+      isValidNewMapForRuleSnapshot,
     },
     '@/lib/firebase': {
       firebaseInitPromise: Promise.resolve({
@@ -254,6 +288,7 @@ async function main() {
       }),
     },
     '@/lib/gameUtils': gameUtils,
+    '@/lib/diceWormhole': diceWormhole,
     'firebase/functions': {
       httpsCallable(functions, name) {
         assert.strictEqual(functions, firebaseFunctions);
@@ -264,6 +299,10 @@ async function main() {
         };
       },
     },
+  });
+  const presentation = loadTypeScript('src/lib/mazeAuthorityPresentation.ts', {
+    '@/lib/mazeAuthorityClient': client,
+    '@/types/game': gameTypes,
   });
 
   assert.equal(client.MAZE_AUTHORITY_FUNCTIONS_REGION, 'asia-southeast1');
@@ -421,6 +460,49 @@ async function main() {
     ...normalizedSubmit,
     map: { ...normalizedSubmit.map, skillLoadout: 'dash' },
   }), null, 'the strict wire parser rejects retired skill loadouts');
+
+  const submittedDiceChallenge = diceWormhole.generateDiceWormholeChallenge(0xA11CE);
+  const diceSubmit = client.buildMazeAuthoritySubmitMapCommand({
+    ...fence,
+    map: validMap({ items: [diceWormholeItem(submittedDiceChallenge)] }),
+  });
+  assert.deepEqual(
+    diceSubmit.map.items[0].challenge,
+    submittedDiceChallenge,
+    'new Authority commands preserve the canonical V2 dice challenge',
+  );
+  assert.throws(
+    () => client.buildMazeAuthoritySubmitMapCommand({
+      ...fence,
+      map: validMap({ items: [diceWormholeItem(legacyWormholeChallenge())] }),
+    }),
+    (error) => error?.code === 'invalid-command',
+    'new Authority commands reject a valid legacy V1 challenge',
+  );
+  assert.throws(
+    () => client.buildMazeAuthoritySubmitMapCommand({
+      ...fence,
+      map: validMap({
+        items: [{
+          type: 'wormhole',
+          entrance: { row: 0, col: 1 },
+          exit: { row: 4, col: 4 },
+        }],
+      }),
+    }),
+    (error) => error?.code === 'invalid-command',
+    'new Authority commands reject challenge-less legacy wormholes',
+  );
+  assert.equal(client.parseMazeAuthorityCommand({
+    ...diceSubmit,
+    map: {
+      ...diceSubmit.map,
+      items: [{
+        ...diceSubmit.map.items[0],
+        challenge: { ...submittedDiceChallenge, boardSize: 6 },
+      }],
+    },
+  }), null, 'new Authority commands reject non-canonical V2 challenge fields');
 
   const turn = client.buildMazeAuthorityTurnCommand({
     ...fence,
@@ -803,6 +885,83 @@ async function main() {
     'RTDB numeric-key arrays canonicalize back to boolean index records',
   );
 
+  const projectedMapDiceChallenge = diceWormhole.generateDiceWormholeChallenge(0x4D4150);
+  const memberWithDiceMap = clone(memberRaw);
+  memberWithDiceMap.gameState.maps[OWNER].items = {
+    0: diceWormholeItem(projectedMapDiceChallenge),
+  };
+  const memberDiceMapView = client.canonicalizeMazeAuthorityMemberView(
+    memberWithDiceMap,
+    OWNER,
+    ROOM_ID,
+  );
+  assert.ok(memberDiceMapView, 'a projected full map reads the canonical V2 challenge');
+  assert.deepEqual(
+    memberDiceMapView.gameState.maps[OWNER].items[0].challenge,
+    projectedMapDiceChallenge,
+  );
+  const memberWithLegacyMap = clone(memberRaw);
+  memberWithLegacyMap.gameState.maps[OWNER].items = {
+    0: diceWormholeItem(legacyWormholeChallenge()),
+  };
+  assert.ok(
+    client.canonicalizeMazeAuthorityMemberView(memberWithLegacyMap, OWNER, ROOM_ID),
+    'projected legacy V1 authored maps remain readable during drain',
+  );
+
+  const memberWithFire = clone(memberRaw);
+  memberWithFire.gameState.visionEffectsByPlayer = {
+    [OWNER]: {
+      type: 'fire',
+      sourcePlayerId: GUEST,
+      appliedAtTurn: 4,
+      expiresAtTargetMove: 8,
+    },
+  };
+  const memberFireView = client.canonicalizeMazeAuthorityMemberView(
+    memberWithFire,
+    OWNER,
+    ROOM_ID,
+  );
+  assert.ok(memberFireView, 'the new common-only fire projection is readable');
+  assert.deepEqual(memberFireView.gameState.visionEffectsByPlayer[OWNER], {
+    type: 'fire',
+    sourcePlayerId: GUEST,
+    appliedAtTurn: 4,
+    expiresAtTargetMove: 8,
+  });
+  const fireBoard = presentation.buildMazeAuthorityLiveBoards({
+    gameState: memberFireView.gameState,
+    viewerUid: OWNER,
+  }).find((board) => board.runnerId === OWNER);
+  assert.equal(fireBoard?.fireAffected, true, 'presentation trusts the projected active fire status');
+  assert.deepEqual(fireBoard?.heatWalls, [], 'new fire effects need no legacy phantom walls');
+
+  const legacyHeatWalls = Array.from({ length: 6 }, (_, index) => ({
+    position: { row: index, col: 0 },
+    direction: 'right',
+  }));
+  const memberWithLegacyFire = clone(memberWithFire);
+  memberWithLegacyFire.gameState.visionEffectsByPlayer[OWNER].phantomWalls = legacyHeatWalls;
+  const memberLegacyFireView = client.canonicalizeMazeAuthorityMemberView(
+    memberWithLegacyFire,
+    OWNER,
+    ROOM_ID,
+  );
+  assert.ok(memberLegacyFireView, 'legacy six-wall fire projections remain readable');
+  const legacyFireBoard = presentation.buildMazeAuthorityLiveBoards({
+    gameState: memberLegacyFireView.gameState,
+    viewerUid: OWNER,
+  }).find((board) => board.runnerId === OWNER);
+  assert.deepEqual(legacyFireBoard?.heatWalls, legacyHeatWalls);
+  const malformedLegacyFire = clone(memberWithLegacyFire);
+  malformedLegacyFire.gameState.visionEffectsByPlayer[OWNER].phantomWalls.pop();
+  assert.equal(
+    client.canonicalizeMazeAuthorityMemberView(malformedLegacyFire, OWNER, ROOM_ID),
+    null,
+    'legacy fire projections still require exactly six phantom walls',
+  );
+
   const memberWithPoison = clone(memberRaw);
   memberWithPoison.gameState.poisonEffectsByPlayer = {
     [OWNER]: {
@@ -883,6 +1042,15 @@ async function main() {
     false,
     'a parsed member PLAY run never materializes hidden challenge walls',
   );
+  const legacyRunBoard = presentation.buildMazeAuthorityLiveBoards({
+    gameState: sparseSealView.gameState,
+    viewerUid: OWNER,
+  }).find((board) => board.runnerId === OWNER);
+  assert.deepEqual(
+    legacyRunBoard?.wormholeRun?.challenge.obstacles,
+    [],
+    'active V1 presentation keeps undiscovered internal walls redacted',
+  );
 
   const memberWithLeakedWormholeWalls = clone(memberWithSparseSeals);
   memberWithLeakedWormholeWalls.gameState.wormholeRunsByPlayer[OWNER]
@@ -904,6 +1072,63 @@ async function main() {
     client.canonicalizeMazeAuthorityPublicView(publicWithLeakedWormholeWalls, ROOM_ID),
     null,
     'a public PLAY projection rejects injected hidden wormhole walls',
+  );
+
+  const projectedDiceChallenge = diceWormhole.generateDiceWormholeChallenge(0xB0A4D);
+  const memberWithDiceRun = clone(memberRaw);
+  memberWithDiceRun.gameState.wormholeRunsByPlayer = {
+    [OWNER]: {
+      mapOwnerId: GUEST,
+      itemIndex: 0,
+      position: clone(projectedDiceChallenge.startPosition),
+      enteredAtTurn: 4,
+      challenge: clone(projectedDiceChallenge),
+      orientation: projectedDiceChallenge.initialOrientation,
+      actionsTaken: 10,
+    },
+  };
+  const memberDiceRunView = client.canonicalizeMazeAuthorityMemberView(
+    memberWithDiceRun,
+    OWNER,
+    ROOM_ID,
+  );
+  assert.ok(memberDiceRunView, 'an active V2 dice run preserves its full public puzzle state');
+  assert.deepEqual(
+    memberDiceRunView.gameState.wormholeRunsByPlayer[OWNER].challenge,
+    projectedDiceChallenge,
+  );
+  assert.equal(memberDiceRunView.gameState.wormholeRunsByPlayer[OWNER].actionsTaken, 10);
+  const diceRunBoard = presentation.buildMazeAuthorityLiveBoards({
+    gameState: memberDiceRunView.gameState,
+    viewerUid: OWNER,
+  }).find((board) => board.runnerId === OWNER);
+  assert.deepEqual(diceRunBoard?.wormholeRun, {
+    ...memberDiceRunView.gameState.wormholeRunsByPlayer[OWNER],
+    position: clone(projectedDiceChallenge.startPosition),
+    challenge: clone(projectedDiceChallenge),
+  }, 'presentation materializes every V2 run field without V1 redaction');
+  for (const missingField of ['orientation', 'actionsTaken']) {
+    const invalidDiceRun = clone(memberWithDiceRun);
+    delete invalidDiceRun.gameState.wormholeRunsByPlayer[OWNER][missingField];
+    assert.equal(
+      client.canonicalizeMazeAuthorityMemberView(invalidDiceRun, OWNER, ROOM_ID),
+      null,
+      `a V2 run requires ${missingField}`,
+    );
+  }
+  const diceRunWithLegacyState = clone(memberWithDiceRun);
+  diceRunWithLegacyState.gameState.wormholeRunsByPlayer[OWNER].activatedSeals = { 0: true };
+  assert.equal(
+    client.canonicalizeMazeAuthorityMemberView(diceRunWithLegacyState, OWNER, ROOM_ID),
+    null,
+    'the V2 run union rejects legacy seal state',
+  );
+  const diceRunOutsideBoard = clone(memberWithDiceRun);
+  diceRunOutsideBoard.gameState.wormholeRunsByPlayer[OWNER].position = { row: 4, col: 0 };
+  assert.equal(
+    client.canonicalizeMazeAuthorityMemberView(diceRunOutsideBoard, OWNER, ROOM_ID),
+    null,
+    'the V2 run position is confined to its 4x4 board',
   );
 
   assert.equal(
@@ -1150,6 +1375,7 @@ async function main() {
       createCanonicalGameRuleSnapshot: ruleSnapshot,
       isValidGameRuleSnapshot: isValidRuleSnapshot,
       isValidMapForRuleSnapshot,
+      isValidNewMapForRuleSnapshot,
     },
     '@/lib/firebase': {
       firebaseInitPromise: Promise.resolve({
@@ -1158,6 +1384,7 @@ async function main() {
       }),
     },
     '@/lib/gameUtils': gameUtils,
+    '@/lib/diceWormhole': diceWormhole,
     'firebase/functions': {
       httpsCallable: () => {
         missingAppCheckInvocation = true;

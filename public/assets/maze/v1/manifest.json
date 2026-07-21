@@ -1,0 +1,656 @@
+{
+  "version": 1,
+  "coordinateSystem": "glTF Y-up; +Z forward; ground anchor at Y=0",
+  "unitScale": 1,
+  "tileSize": 1.0,
+  "tileHeight": 0.16,
+  "wallLength": 1.084,
+  "wallHeight": 0.5,
+  "wallDepth": 0.16,
+  "runtimePlacement": {
+    "mainTileSurfaceY": 0.08,
+    "mainProps": "goal/items/portal/legacy seal roots at main-board Y=0.08",
+    "walls": "root at main-board Y=0; local +X is H; rotate Y by PI/2 for V",
+    "wormholeBoardBase": "root at wormhole-world Y=0; geometry spans Y=-0.46..-0.08; grid centered at X=0,Z=0",
+    "wormholeBoardTiles": "reuse v1 tile-cream/tile-sage at root Y=-0.08",
+    "wormholeBoardProps": "die/rock/target roots at playable surface Y=0.08",
+    "dieOrientation": "neutral local faces: 1=+Y,6=-Y,2=-Z,5=+Z,3=+X,4=-X; animate parent quaternion"
+  },
+  "assets": {
+    "rabbit-pawn": {
+      "objects": 8,
+      "meshes": 7,
+      "vertices": 2899,
+      "triangles": 5714,
+      "bounds_blender_xyz": [
+        -0.2304,
+        -0.2157,
+        0.0,
+        0.2304,
+        0.2357,
+        0.92
+      ],
+      "file": "rabbit-pawn.glb",
+      "bytes": 111896,
+      "sha256": "3adf399cf4adc15bea7772f4f294760adcec434ad75d86da85761811224d18f2",
+      "root": "asset_rabbit_pawn"
+    },
+    "tile-cream": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 120,
+      "triangles": 220,
+      "bounds_blender_xyz": [
+        -0.5,
+        -0.5,
+        0.0,
+        0.5,
+        0.5,
+        0.166
+      ],
+      "file": "tile-cream.glb",
+      "bytes": 10364,
+      "sha256": "48a856c042c3753161ddd716728147581fdb289ab150f9b549452452370f62aa",
+      "root": "asset_tile_cream"
+    },
+    "tile-sage": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 120,
+      "triangles": 220,
+      "bounds_blender_xyz": [
+        -0.5,
+        -0.5,
+        0.0,
+        0.5,
+        0.5,
+        0.166
+      ],
+      "file": "tile-sage.glb",
+      "bytes": 10368,
+      "sha256": "da00f3020d947b4266fe23e088352c65e6bce56f84c0ee45b3ceac19c5d5104b",
+      "root": "asset_tile_sage"
+    },
+    "board-base": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 112,
+      "triangles": 216,
+      "bounds_blender_xyz": [
+        -3.85,
+        -3.85,
+        -0.46,
+        3.85,
+        3.85,
+        -0.08
+      ],
+      "file": "board-base.glb",
+      "bytes": 13272,
+      "sha256": "3bad502d4ae9aba6e4fff7d3e834c828e3753851940f8ef99424da48d79986da",
+      "root": "asset_board_base"
+    },
+    "marker-start": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 162,
+      "triangles": 308,
+      "bounds_blender_xyz": [
+        -0.32,
+        -0.32,
+        0.0,
+        0.32,
+        0.32,
+        0.085
+      ],
+      "file": "marker-start.glb",
+      "bytes": 9152,
+      "sha256": "189e169793288318146e613bc6d5274606c7e39f384a2f38aaf8a21e5bd0a60d",
+      "root": "asset_marker_start"
+    },
+    "marker-goal": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 256,
+      "triangles": 500,
+      "bounds_blender_xyz": [
+        -0.32,
+        -0.32,
+        0.0,
+        0.32,
+        0.32,
+        0.0745
+      ],
+      "file": "marker-goal.glb",
+      "bytes": 19224,
+      "sha256": "c61b1ecea63a66a967e53a7d87da5a9852c266fcc93831a9005585b29fd81c77",
+      "root": "asset_marker_goal"
+    },
+    "wall-normal": {
+      "objects": 2,
+      "meshes": 1,
+      "vertices": 56,
+      "triangles": 108,
+      "bounds_blender_xyz": [
+        -0.542,
+        -0.08,
+        0.0,
+        0.542,
+        0.08,
+        0.5
+      ],
+      "file": "wall-normal.glb",
+      "bytes": 7168,
+      "sha256": "a415831b28c117ca7f40619dad5487defdf01edac1daec245987e58a58de93e1",
+      "root": "asset_wall_normal"
+    },
+    "wall-steel": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 284,
+      "triangles": 540,
+      "bounds_blender_xyz": [
+        -0.542,
+        -0.089,
+        0.0,
+        0.542,
+        0.089,
+        0.5775
+      ],
+      "file": "wall-steel.glb",
+      "bytes": 28836,
+      "sha256": "43b66574ef74a3b2d56c543b63838dd92dfd29fe84057950f5a3a307d666b88c",
+      "root": "asset_wall_steel"
+    },
+    "wall-fire": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 176,
+      "triangles": 312,
+      "bounds_blender_xyz": [
+        -0.542,
+        -0.0811,
+        0.0,
+        0.542,
+        0.09,
+        0.84
+      ],
+      "file": "wall-fire.glb",
+      "bytes": 21100,
+      "sha256": "2da83eb38f32b28a71e9b8f7e8a4a6c1a056cb58aa94c72861678330ac525380",
+      "root": "asset_wall_fire"
+    },
+    "wall-poison": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 988,
+      "triangles": 1944,
+      "bounds_blender_xyz": [
+        -0.542,
+        -0.135,
+        0.0,
+        0.542,
+        0.08,
+        0.645
+      ],
+      "file": "wall-poison.glb",
+      "bytes": 46608,
+      "sha256": "ac715c228b1bbf4f92f40a9af7408fb2269ec9198a680ebcbfe87fb714460ac4",
+      "root": "asset_wall_poison"
+    },
+    "wall-ice": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 140,
+      "triangles": 256,
+      "bounds_blender_xyz": [
+        -0.542,
+        -0.09,
+        0.0,
+        0.542,
+        0.09,
+        0.85
+      ],
+      "file": "wall-ice.glb",
+      "bytes": 17600,
+      "sha256": "f5910150d115e14c2a4038bd5a537b6e134f0b5e532489eb2dac6ead033aeb6e",
+      "root": "asset_wall_ice"
+    },
+    "wall-wind": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 328,
+      "triangles": 648,
+      "bounds_blender_xyz": [
+        -0.5246,
+        -0.05,
+        0.0,
+        0.5246,
+        0.05,
+        0.775
+      ],
+      "file": "wall-wind.glb",
+      "bytes": 14212,
+      "sha256": "0655ba5300e60cd165ac182a90305150d327f0e5ddf8df78e4a96f599cc4d771",
+      "root": "asset_wall_wind"
+    },
+    "wall-phase": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 200,
+      "triangles": 380,
+      "bounds_blender_xyz": [
+        -0.537,
+        -0.065,
+        0.0,
+        0.537,
+        0.065,
+        0.5
+      ],
+      "file": "wall-phase.glb",
+      "bytes": 21200,
+      "sha256": "b4763bbd69598e82bb8b2ccfa7623e8529745039f8099997be9b91576db0619e",
+      "root": "asset_wall_phase"
+    },
+    "wall-thorn": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 227,
+      "triangles": 406,
+      "bounds_blender_xyz": [
+        -0.542,
+        -0.127,
+        0.0,
+        0.542,
+        0.095,
+        0.68
+      ],
+      "file": "wall-thorn.glb",
+      "bytes": 21036,
+      "sha256": "3f0b38653c98b69747d0a2570e8fb1c8a55fe955c23dea1b1501019858556827",
+      "root": "asset_wall_thorn"
+    },
+    "wall-crystal": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 140,
+      "triangles": 256,
+      "bounds_blender_xyz": [
+        -0.542,
+        -0.1,
+        0.0,
+        0.542,
+        0.1,
+        0.88
+      ],
+      "file": "wall-crystal.glb",
+      "bytes": 17696,
+      "sha256": "429194867dc7c60e93b3fa330557570dd4bce340719bd56430fe52cb18e38685",
+      "root": "asset_wall_crystal"
+    },
+    "wormhole-die": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 560,
+      "triangles": 1032,
+      "bounds_blender_xyz": [
+        -0.306,
+        -0.306,
+        0.0,
+        0.306,
+        0.306,
+        0.612
+      ],
+      "file": "wormhole-die.glb",
+      "bytes": 25952,
+      "sha256": "79a9bbe98ba0b7beb31effd04e50ac3f8327be36b35bc8428645d32ca917beb2",
+      "root": "asset_wormhole_die",
+      "materials": [
+        "mat_wormhole_die_body",
+        "mat_wormhole_die_pips"
+      ]
+    },
+    "wormhole-board-base": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 112,
+      "triangles": 216,
+      "bounds_blender_xyz": [
+        -2.45,
+        -2.45,
+        -0.46,
+        2.45,
+        2.45,
+        -0.08
+      ],
+      "file": "wormhole-board-base.glb",
+      "bytes": 13376,
+      "sha256": "f05d78082516ed618d94776cb54c39e251621adcb0f81af740da1a7da335001f",
+      "root": "asset_wormhole_board_base",
+      "materials": [
+        "mat_wormhole_board_base_dark",
+        "mat_wormhole_board_base_rim"
+      ]
+    },
+    "wormhole-rock": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 117,
+      "triangles": 222,
+      "bounds_blender_xyz": [
+        -0.2945,
+        -0.27,
+        -0.0,
+        0.2586,
+        0.23,
+        0.55
+      ],
+      "file": "wormhole-rock.glb",
+      "bytes": 7912,
+      "sha256": "7421157e7bd01675270048e563727189250e3bfcb7944d1f454557151acce0c1",
+      "root": "asset_wormhole_rock",
+      "materials": [
+        "mat_wormhole_rock_accent",
+        "mat_wormhole_rock_body"
+      ]
+    },
+    "wormhole-target-pad": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 208,
+      "triangles": 396,
+      "bounds_blender_xyz": [
+        -0.39,
+        -0.39,
+        0.0,
+        0.39,
+        0.39,
+        0.1029
+      ],
+      "file": "wormhole-target-pad.glb",
+      "bytes": 9904,
+      "sha256": "3af53101585b0abd83c42366f5afd9609d12c6796d90d9d854571382f657991c",
+      "root": "asset_wormhole_target_pad",
+      "materials": [
+        "mat_wormhole_target_accent",
+        "mat_wormhole_target_body"
+      ]
+    },
+    "wormhole-portal": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 506,
+      "triangles": 996,
+      "bounds_blender_xyz": [
+        -0.357,
+        -0.357,
+        0.0,
+        0.357,
+        0.357,
+        0.152
+      ],
+      "file": "wormhole-portal.glb",
+      "bytes": 21788,
+      "sha256": "b75aa68bd08ad748dba809ea27462f1932ec06a8675ac2f432b27e6a22477ab5",
+      "root": "asset_wormhole_portal",
+      "materials": [
+        "mat_wormhole_portal_accent",
+        "mat_wormhole_portal_body",
+        "mat_wormhole_portal_core"
+      ]
+    },
+    "item-mine": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 308,
+      "triangles": 584,
+      "bounds_blender_xyz": [
+        -0.265,
+        -0.265,
+        0.0,
+        0.265,
+        0.265,
+        0.459
+      ],
+      "file": "item-mine.glb",
+      "bytes": 16024,
+      "sha256": "855096a0946411859cbcfabb7d45dd9a1a897e504c77e61040152dca75f41bd1",
+      "root": "asset_item_mine",
+      "materials": [
+        "mat_item_mine_body",
+        "mat_item_mine_lamp",
+        "mat_item_mine_metal"
+      ]
+    },
+    "item-mine-used": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 312,
+      "triangles": 608,
+      "bounds_blender_xyz": [
+        -0.31,
+        -0.31,
+        0.0,
+        0.31,
+        0.31,
+        0.091
+      ],
+      "file": "item-mine-used.glb",
+      "bytes": 25080,
+      "sha256": "adacbda50f1239dc5a95a6e3cfaa1270b765281f1d350393f11dd80e2d243f7b",
+      "root": "asset_item_mine_used",
+      "materials": [
+        "mat_item_mine_used_accent",
+        "mat_item_mine_used_body"
+      ]
+    },
+    "item-smoke": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 264,
+      "triangles": 516,
+      "bounds_blender_xyz": [
+        -0.16,
+        -0.16,
+        0.0,
+        0.16,
+        0.16,
+        0.4725
+      ],
+      "file": "item-smoke.glb",
+      "bytes": 12980,
+      "sha256": "6d86216c88dc514cc0490d75fdf637995c82e2d10df4ec239af8c765410e9030",
+      "root": "asset_item_smoke",
+      "materials": [
+        "mat_item_smoke_body",
+        "mat_item_smoke_fuse",
+        "mat_item_smoke_metal"
+      ]
+    },
+    "item-smoke-used": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 64,
+      "triangles": 120,
+      "bounds_blender_xyz": [
+        -0.27,
+        -0.27,
+        -0.0,
+        0.27,
+        0.27,
+        0.26
+      ],
+      "file": "item-smoke-used.glb",
+      "bytes": 4804,
+      "sha256": "8eb59b79d541fb95a2e55ccf8586cd3f67d4cc3312e7a8e60978d0015b8fdf70",
+      "root": "asset_item_smoke_used",
+      "materials": [
+        "mat_item_smoke_used_accent",
+        "mat_item_smoke_used_body"
+      ]
+    },
+    "goal-flag": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 310,
+      "triangles": 596,
+      "bounds_blender_xyz": [
+        -0.1871,
+        -0.19,
+        0.0,
+        0.34,
+        0.19,
+        0.95
+      ],
+      "file": "goal-flag.glb",
+      "bytes": 26056,
+      "sha256": "355df624413e1c3f69ec0a983c6565d015d9031fb5db7e554f2cbffd67b12ce7",
+      "root": "asset_goal_flag",
+      "materials": [
+        "mat_goal_flag_base",
+        "mat_goal_flag_cloth",
+        "mat_goal_flag_pole"
+      ]
+    },
+    "goal-lock": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 224,
+      "triangles": 440,
+      "bounds_blender_xyz": [
+        -0.16,
+        -0.087,
+        0.0,
+        0.16,
+        0.065,
+        0.432
+      ],
+      "file": "goal-lock.glb",
+      "bytes": 14336,
+      "sha256": "081c5dbd83e39b11cb5b7e8b232d3d05707713454825b5a2c4d28e441a797ede",
+      "root": "asset_goal_lock",
+      "materials": [
+        "mat_goal_lock_body",
+        "mat_goal_lock_glow"
+      ]
+    },
+    "wall-collapse": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 560,
+      "triangles": 1080,
+      "bounds_blender_xyz": [
+        -0.542,
+        -0.08,
+        0.0,
+        0.542,
+        0.08,
+        0.5
+      ],
+      "file": "wall-collapse.glb",
+      "bytes": 60500,
+      "sha256": "dc26ee91b73cdb52586a8ca85b91df98e2c21d017f366021ea32e650552da8e8",
+      "root": "asset_wall_collapse",
+      "materials": [
+        "mat_wall_collapse_accent",
+        "mat_wall_collapse_body",
+        "mat_wall_collapse_crack"
+      ]
+    },
+    "wall-mirror": {
+      "objects": 4,
+      "meshes": 3,
+      "vertices": 504,
+      "triangles": 972,
+      "bounds_blender_xyz": [
+        -0.542,
+        -0.08,
+        0.0,
+        0.542,
+        0.08,
+        0.5
+      ],
+      "file": "wall-mirror.glb",
+      "bytes": 54060,
+      "sha256": "27202c1ff2e5eed9b4325484b2b07306ad10528815b248a922136db4ae4f2ab7",
+      "root": "asset_wall_mirror",
+      "materials": [
+        "mat_wall_mirror_accent",
+        "mat_wall_mirror_body",
+        "mat_wall_mirror_frame"
+      ]
+    },
+    "legacy-seal-die": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 704,
+      "triangles": 1316,
+      "bounds_blender_xyz": [
+        -0.284,
+        -0.284,
+        0.0,
+        0.284,
+        0.284,
+        0.405
+      ],
+      "file": "legacy-seal-die.glb",
+      "bytes": 31260,
+      "sha256": "7489e47164d07fed4da4f5103f18fa9509d5a5265d8a8fa9601eb3089066c9ea",
+      "root": "asset_legacy_seal_die",
+      "materials": [
+        "mat_legacy_seal_die_accent",
+        "mat_legacy_seal_die_body"
+      ]
+    }
+  },
+  "generatorRevision": 2,
+  "tileGap": 0.14,
+  "tileSpacing": 1.1400000000000001,
+  "dieSide": 0.612,
+  "dieCenterY": 0.306,
+  "dieBaseFaces": {
+    "+Y": 1,
+    "-Y": 6,
+    "-Z": 2,
+    "+Z": 5,
+    "+X": 3,
+    "-X": 4
+  },
+  "wormholeBoard": {
+    "size": 4,
+    "gridSpan": 4.42,
+    "origin": "grid center",
+    "tileAssetRootY": -0.08,
+    "playableTopY": 0.08
+  },
+  "materialContracts": {
+    "wormholeDie": {
+      "body": "mat_wormhole_die_body",
+      "pips": "mat_wormhole_die_pips"
+    },
+    "wormholeRock": {
+      "emissive": "mat_wormhole_rock_accent"
+    },
+    "wormholeTargetPad": {
+      "tintAndEmissive": "mat_wormhole_target_accent"
+    },
+    "wormholePortal": {
+      "tintAndEmissive": "mat_wormhole_portal_accent",
+      "core": "mat_wormhole_portal_core"
+    },
+    "itemMine": {
+      "animatedEmissive": "mat_item_mine_lamp"
+    },
+    "itemSmoke": {
+      "animatedEmissive": "mat_item_smoke_fuse"
+    },
+    "goalFlag": {
+      "stateTint": "mat_goal_flag_cloth"
+    },
+    "goalLock": {
+      "emissive": "mat_goal_lock_glow"
+    },
+    "legacySealDie": {
+      "activatedTintAndEmissive": "mat_legacy_seal_die_accent"
+    }
+  }
+}

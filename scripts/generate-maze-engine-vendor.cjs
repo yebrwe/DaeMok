@@ -16,10 +16,18 @@ const SOURCE_FILES = [
     target: 'types/game.ts',
   },
   {
+    source: 'src/lib/diceWormhole.ts',
+    target: 'lib/diceWormhole.ts',
+    replacements: {
+      "from '@/types/game'": "from '../types/game'",
+    },
+  },
+  {
     source: 'src/lib/gameUtils.ts',
     target: 'lib/gameUtils.ts',
     replacements: {
       "from '@/types/game'": "from '../types/game'",
+      "from '@/lib/diceWormhole'": "from './diceWormhole'",
     },
   },
   {
@@ -41,6 +49,7 @@ const SOURCE_FILES = [
     replacements: {
       "from '@/types/game'": "from '../types/game'",
       "from '@/lib/gameUtils'": "from './gameUtils'",
+      "from '@/lib/diceWormhole'": "from './diceWormhole'",
     },
   },
 ];
@@ -48,6 +57,7 @@ const SOURCE_FILES = [
 const STATIC_FILES = {
   'src/index.ts': [
     "export * as GameTypes from './types/game';",
+    "export * as DiceWormhole from './lib/diceWormhole';",
     "export * as GameUtils from './lib/gameUtils';",
     "export * as MazeSkills from './lib/mazeSkills';",
     "export * as GameRules from './lib/gameRules';",

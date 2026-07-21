@@ -41,13 +41,25 @@ export type SpecialWallType = 'steelWall' | 'fireWall' | 'poisonWall' | 'iceWall
 export type WallItemType = 'oneTimeWall' | SpecialWallType;
 export type ItemType = WallItemType | 'mine' | 'wormhole' | 'radar' | 'smoke';
 export type MazeSkillId = 'scoutPulse' | 'breach' | 'anchor' | 'dash';
-export interface WormholeChallenge {
+export interface LegacyWormholeChallenge {
     version: 1;
     startPosition: Position;
     endPosition: Position;
     seals: Position[];
     obstacles: Obstacle[];
 }
+export type DiceFace = 1 | 2 | 3 | 4 | 5 | 6;
+export type DiceOrientationId = number;
+export interface DiceWormholeChallenge {
+    version: 2;
+    boardSize: 4;
+    startPosition: Position;
+    endPosition: Position;
+    blockedCells: Position[];
+    initialOrientation: DiceOrientationId;
+    targetTop: DiceFace;
+}
+export type WormholeChallenge = LegacyWormholeChallenge | DiceWormholeChallenge;
 export interface MazeSkillStateData {
     version: 1;
     loadout: MazeSkillId[];
@@ -99,7 +111,7 @@ export interface FireVisionEffect {
     sourcePlayerId: string;
     appliedAtTurn: number;
     expiresAtTargetMove: number;
-    phantomWalls: Obstacle[];
+    phantomWalls?: Obstacle[];
 }
 export type VisionEffect = SmokeVisionEffect | FireVisionEffect;
 export interface PoisonEffect {
@@ -108,15 +120,23 @@ export interface PoisonEffect {
     expiresAtTargetMove: number;
     seed: number;
 }
-export interface WormholeRunState {
+interface WormholeRunStateBase {
     mapOwnerId: string;
     itemIndex: number;
     position: Position;
-    challenge: WormholeChallenge;
-    activatedSeals?: Record<number, boolean>;
-    discoveredWalls?: Obstacle[];
     enteredAtTurn: number;
 }
+export interface LegacyWormholeRunState extends WormholeRunStateBase {
+    challenge: LegacyWormholeChallenge;
+    activatedSeals?: Record<number, boolean>;
+    discoveredWalls?: Obstacle[];
+}
+export interface DiceWormholeRunState extends WormholeRunStateBase {
+    challenge: DiceWormholeChallenge;
+    orientation: DiceOrientationId;
+    actionsTaken: number;
+}
+export type WormholeRunState = LegacyWormholeRunState | DiceWormholeRunState;
 export interface GameRuleSnapshot {
     version: number;
     wallBudget: number;
@@ -162,3 +182,4 @@ export interface Room {
     status?: 'waiting' | 'playing' | 'ended';
     lastActivity?: number | null;
 }
+export {};
