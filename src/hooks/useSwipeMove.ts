@@ -18,7 +18,9 @@ interface SwipeMoveOptions {
 export function useSwipeMove(
   targetRef: React.RefObject<HTMLElement | null>,
   onMove: (direction: Direction) => void,
-  { enabled = true, minDistance = 28, maxDuration = 1500 }: SwipeMoveOptions = {}
+  // maxDuration은 "누르고 한참 있다 떼는" 오입력만 거르면 된다. 저사양
+  // 기기에서는 렌더 부하로 포인터 이벤트 전달 자체가 늦어지므로 여유를 둔다.
+  { enabled = true, minDistance = 28, maxDuration = 2600 }: SwipeMoveOptions = {}
 ) {
   const onMoveRef = useRef(onMove);
   onMoveRef.current = onMove;
@@ -39,7 +41,9 @@ export function useSwipeMove(
       if (origin?.closest('button, a, input, textarea, select, [data-no-swipe]')) return;
       const board = origin?.closest('[data-player-board][data-my-player="true"]');
       if (!board || !element.contains(board)) return;
-      start = { x: event.clientX, y: event.clientY, time: performance.now(), pointerId: event.pointerId };
+      // event.timeStamp는 입력이 실제 발생한 시각이라 렌더 부하로 핸들러
+      // 실행이 늦어져도 빠른 플릭이 "느린 드래그"로 오판되지 않는다.
+      start = { x: event.clientX, y: event.clientY, time: event.timeStamp, pointerId: event.pointerId };
       // 빠른 플릭이 HUD 등 겹친 요소 위에서 끝나도 up 이벤트를 놓치지 않도록 캡처
       try {
         element.setPointerCapture(event.pointerId);
@@ -52,7 +56,7 @@ export function useSwipeMove(
       if (!start || event.pointerId !== start.pointerId) return;
       const dx = event.clientX - start.x;
       const dy = event.clientY - start.y;
-      const elapsed = performance.now() - start.time;
+      const elapsed = event.timeStamp - start.time;
       start = null;
 
       if (elapsed > maxDuration) return;

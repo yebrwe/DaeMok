@@ -16,7 +16,7 @@ if (process.env.EMULATOR !== '1') {
 const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'e2e-artifacts');
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3215';
-const EXPECTED_MAZE_TOON_VERSION = 'inked-toy-v2';
+const EXPECTED_MAZE_TOON_VERSION = 'inked-toy-v3';
 const STAMP = Date.now();
 const ROOM_NAME = `권위완주-${String(STAMP).slice(-6)}`;
 const ACCOUNTS = {

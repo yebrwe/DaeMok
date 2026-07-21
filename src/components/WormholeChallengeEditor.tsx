@@ -518,7 +518,11 @@ const WormholeChallengeEditor: React.FC<WormholeChallengeEditorProps> = ({
         aria-label={`${cellLabel(position)} · ${markerLabel} · ${cellInstruction(draft.step)}`}
         onFocus={() => setActiveGridCoordinate(gridCoordinate)}
         onKeyDown={(event) => moveGridFocus(event, gridCoordinate)}
-        onClick={() => handleCell(position)}
+        onClick={() => {
+          // 포인터 포커스를 막았으므로 클릭이 직접 로빙 좌표를 옮긴다.
+          setActiveGridCoordinate(gridCoordinate);
+          handleCell(position);
+        }}
       >
         {marker && (
           <span
@@ -569,7 +573,10 @@ const WormholeChallengeEditor: React.FC<WormholeChallengeEditorProps> = ({
         }`}
         onFocus={() => setActiveGridCoordinate({ row: gridRow, col: gridCol })}
         onKeyDown={(event) => moveGridFocus(event, { row: gridRow, col: gridCol })}
-        onClick={() => toggleWall(obstacle)}
+        onClick={() => {
+          setActiveGridCoordinate({ row: gridRow, col: gridCol });
+          toggleWall(obstacle);
+        }}
       >
         {installed && (
           <span
@@ -717,6 +724,14 @@ const WormholeChallengeEditor: React.FC<WormholeChallengeEditorProps> = ({
             gridTemplateColumns: `repeat(${GRID_LENGTH}, auto)`,
             gridTemplateRows: `repeat(${GRID_LENGTH}, auto)`,
           }}
+          onPointerDownCapture={(event) => {
+            // 포인터 클릭이 셀/벽 버튼에 포커스를 주며 스크롤 컨테이너를
+            // 튕기지 않게 막는다 (키보드 로빙 포커스는 그대로 동작한다).
+            const target = event.target as HTMLElement | null;
+            if (target?.closest?.('[data-challenge-cell], [data-challenge-wall]')) {
+              event.preventDefault();
+            }
+          }}
           onClickCapture={(event) => {
             if (gridMode !== 'walls' || event.detail === 0) return;
 
@@ -729,6 +744,9 @@ const WormholeChallengeEditor: React.FC<WormholeChallengeEditorProps> = ({
               'data-challenge-wall'
             );
             if (!target) return;
+            setActiveGridCoordinate(target.direction === 'right'
+              ? { row: target.position.row * 2, col: target.position.col * 2 + 1 }
+              : { row: target.position.row * 2 + 1, col: target.position.col * 2 });
             toggleWall({ position: target.position, direction: target.direction });
           }}
         >

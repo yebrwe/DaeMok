@@ -160,6 +160,7 @@ function testMaterialLifecycle(toon) {
       actorMaterialCount: 1,
       environmentMaterialCount: 1,
       effectMaterialCount: 1,
+      outlineMeshCount: 2,
     });
 
     assert.ok(actor.material instanceof THREE.MeshStandardMaterial);
@@ -244,8 +245,8 @@ function testGameBoardSourceContract() {
   );
   assert.match(
     source,
-    /const\s+maximumDpr\s*=\s*compact\s*\?\s*1\.25\s*:\s*size\.width\s*<=\s*700\s*\?\s*1\.5\s*:\s*2/,
-    'mobile full-quality DPR remains capped at 1.5'
+    /const\s+maximumDpr\s*=\s*compact\s*\?\s*1\.5\s*:\s*size\.width\s*<=\s*700\s*\?\s*1\.5\s*:\s*2/,
+    'compact boards keep a sharpness-preserving DPR cap while full quality stays at 1.5 on mobile'
   );
   assert.match(
     source,
@@ -441,7 +442,7 @@ function testGameBoardSourceContract() {
 
 function main() {
   const toon = loadTypeScript('src/lib/mazeToonRendering.ts', { three: THREE });
-  assert.equal(toon.MAZE_TOON_RENDER_CONTRACT.version, 'inked-toy-v2');
+  assert.equal(toon.MAZE_TOON_RENDER_CONTRACT.version, 'inked-toy-v3');
   assert.ok(
     toon.MAZE_TOON_RENDER_CONTRACT.profiles.environment.darkestBand <= 0.5,
     'environment keeps a dark shadow band instead of a washed-out pastel minimum'

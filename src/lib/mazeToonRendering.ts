@@ -21,35 +21,35 @@ interface MazeToonProfileContract {
  * visible silhouettes. This prevents the maze from washing out under warm lighting.
  */
 export const MAZE_TOON_RENDER_CONTRACT = Object.freeze({
-  version: 'inked-toy-v2',
+  version: 'inked-toy-v3',
   profiles: Object.freeze({
     actor: Object.freeze({
       shadeSteps: 3,
-      darkestBand: 0.48,
-      brightestBand: 1.12,
-      quantizeStrength: 0.88,
-      rimStrength: 0.12,
+      darkestBand: 0.36,
+      brightestBand: 1.1,
+      quantizeStrength: 0.9,
+      rimStrength: 0.08,
       rimPower: 2.6,
-      outlineStrength: 0.52,
-      outlineWidth: 0.24,
+      outlineStrength: 0.6,
+      outlineWidth: 0.26,
       minimumRoughness: 0.68,
       maximumMetalness: 0.18,
     }),
     environment: Object.freeze({
       shadeSteps: 4,
-      darkestBand: 0.46,
-      brightestBand: 1.05,
-      quantizeStrength: 0.86,
-      rimStrength: 0.04,
+      darkestBand: 0.32,
+      brightestBand: 1.04,
+      quantizeStrength: 0.88,
+      rimStrength: 0.03,
       rimPower: 3.2,
-      outlineStrength: 0.32,
-      outlineWidth: 0.22,
+      outlineStrength: 0.46,
+      outlineWidth: 0.24,
       minimumRoughness: 0.76,
       maximumMetalness: 0.12,
     }),
     effect: Object.freeze({
       shadeSteps: 3,
-      darkestBand: 0.58,
+      darkestBand: 0.55,
       brightestBand: 1.18,
       quantizeStrength: 0.78,
       rimStrength: 0.18,
@@ -80,6 +80,68 @@ const persistedStates = globalRegistry[GLOBAL_STATE_KEY];
 const materialStates: WeakMap<ToonMaterial, MazeToonMaterialState> =
   persistedStates instanceof WeakMap ? persistedStates as WeakMap<ToonMaterial, MazeToonMaterialState> : new WeakMap();
 globalRegistry[GLOBAL_STATE_KEY] = materialStates;
+
+// ===== 마비노기식 실루엣 외곽선 (인버티드 헐) =====
+// 프레넬 잉크만으로는 직교 카메라에서 윤곽이 거의 보이지 않으므로,
+// 각 메시 뒤에 법선 방향으로 부풀린 뒷면 메시를 겹쳐 일정한 컨투어 선을 그린다.
+const OUTLINE_INK_COLOR = '#26201b';
+const OUTLINE_THICKNESS = 0.024; // 월드 단위 (타일 한 변 = 1)
+const OUTLINE_MINIMUM_RADIUS = 0.06; // 눈동자·콧구멍 같은 미세 장식은 외곽선 제외
+
+const OUTLINE_MATERIAL_KEY = Symbol.for('daemok.mazeToonOutlineMaterial');
+
+function getOutlineMaterial(): THREE.MeshBasicMaterial {
+  const existing = globalRegistry[OUTLINE_MATERIAL_KEY];
+  if (existing instanceof THREE.MeshBasicMaterial) return existing;
+
+  const material = new THREE.MeshBasicMaterial({
+    color: OUTLINE_INK_COLOR,
+    side: THREE.BackSide,
+  });
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `vec3 transformed = position + normalize(normal) * ${shaderFloat(OUTLINE_THICKNESS)};`,
+    );
+  };
+  material.customProgramCacheKey = () => `maze-toon-outline|${MAZE_TOON_RENDER_CONTRACT.version}`;
+  globalRegistry[OUTLINE_MATERIAL_KEY] = material;
+  return material;
+}
+
+function isOutlineEligible(mesh: THREE.Mesh, profile: MazeToonProfile): boolean {
+  if (profile === 'effect') return false;
+  // 바닥 타일처럼 수가 많고 실루엣 가치가 낮은 메시는 명시적으로 제외해
+  // 저사양 기기에서 드로우콜이 배로 늘어나는 것을 막는다.
+  if (mesh.userData?.mazeToonNoOutline === true) return false;
+  const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+  if (!material || !isToonMaterial(material)) return false;
+  // 반투명/와이어프레임 재질 뒤의 검은 껍질은 실루엣이 아니라 얼룩으로 보인다.
+  if (material.transparent || material.wireframe) return false;
+
+  const geometry = mesh.geometry;
+  if (!geometry?.getAttribute('normal')) return false;
+  if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+  const radius = (geometry.boundingSphere?.radius ?? 0) *
+    Math.max(mesh.scale.x, mesh.scale.y, mesh.scale.z);
+  return radius >= OUTLINE_MINIMUM_RADIUS;
+}
+
+function installOutline(mesh: THREE.Mesh) {
+  const existing = mesh.children.find((child) => child.userData?.mazeToonOutline === true);
+  if (existing instanceof THREE.Mesh) {
+    if (existing.geometry !== mesh.geometry) existing.geometry = mesh.geometry;
+    return;
+  }
+
+  const outline = new THREE.Mesh(mesh.geometry, getOutlineMaterial());
+  outline.name = 'maze-toon-outline';
+  outline.userData.mazeToonOutline = true;
+  outline.raycast = () => {};
+  outline.castShadow = false;
+  outline.receiveShadow = false;
+  mesh.add(outline);
+}
 
 function shaderFloat(value: number) {
   return value.toFixed(4);
@@ -178,18 +240,22 @@ export interface MazeToonDiagnostics {
   actorMaterialCount: number;
   environmentMaterialCount: number;
   effectMaterialCount: number;
+  outlineMeshCount: number;
 }
 
 export function applyMazeToonRendering(root: THREE.Object3D): MazeToonDiagnostics {
   const materials = new Map<ToonMaterial, MazeToonProfile>();
+  const outlineTargets: THREE.Mesh[] = [];
   root.traverse((object) => {
     const mesh = object as THREE.Mesh;
     if (!mesh.isMesh || !mesh.material) return;
+    if (mesh.userData?.mazeToonOutline === true) return;
     const profile = profileForObject(object);
     const source = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     for (const material of source) {
       if (isToonMaterial(material)) materials.set(material, profile);
     }
+    if (isOutlineEligible(mesh, profile)) outlineTargets.push(mesh);
   });
 
   const diagnostics: MazeToonDiagnostics = {
@@ -197,21 +263,30 @@ export function applyMazeToonRendering(root: THREE.Object3D): MazeToonDiagnostic
     actorMaterialCount: 0,
     environmentMaterialCount: 0,
     effectMaterialCount: 0,
+    outlineMeshCount: outlineTargets.length,
   };
   for (const [material, profile] of materials) {
     installMaterial(material, profile);
     diagnostics[`${profile}MaterialCount`] += 1;
   }
+  // traverse 도중 자식을 추가하면 순회가 흔들리므로 수집 후 설치한다.
+  for (const mesh of outlineTargets) installOutline(mesh);
   return diagnostics;
 }
 
 export function uninstallMazeToonRendering(root: THREE.Object3D) {
+  const outlines: THREE.Object3D[] = [];
   root.traverse((object) => {
     const mesh = object as THREE.Mesh;
     if (!mesh.isMesh || !mesh.material) return;
+    if (mesh.userData?.mazeToonOutline === true) {
+      outlines.push(mesh);
+      return;
+    }
     const source = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     for (const material of source) {
       if (isToonMaterial(material)) uninstallMaterial(material);
     }
   });
+  for (const outline of outlines) outline.removeFromParent();
 }

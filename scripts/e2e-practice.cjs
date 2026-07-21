@@ -9,7 +9,7 @@ const path = require('path');
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 const OUT = path.join(__dirname, '..', 'e2e-artifacts');
-const EXPECTED_MAZE_TOON_VERSION = 'inked-toy-v2';
+const EXPECTED_MAZE_TOON_VERSION = 'inked-toy-v3';
 fs.mkdirSync(OUT, { recursive: true });
 
 function ok(message) {

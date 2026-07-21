@@ -30,8 +30,23 @@ const WALL_THICKNESS = 0.16;
 const CENTER = ((BOARD_SIZE - 1) * SPACING) / 2;
 
 // 고정 직교 카메라: 방향 조작과 화면 방향이 항상 일치하는 토이 디오라마 시점
+// 가로 화면은 디오라마 앙각, 세로 화면(모바일)은 사선 왜곡이 덜한 부감 앙각을 쓴다.
 const SPAN = BOARD_SIZE * SPACING;
-const ORTHO_CAMERA_POS: [number, number, number] = [CENTER, SPAN * 1.35, CENTER + SPAN * 1.45];
+const CAMERA_DISTANCE = SPAN * 2;
+const CAMERA_ELEVATION_WIDE_DEG = 43;
+const CAMERA_ELEVATION_PORTRAIT_DEG = 57;
+const CAMERA_CONTENT_HEIGHT = 1.2; // 벽/말/깃발이 차지하는 수직 여유
+
+function cameraPositionForElevation(elevationRad: number): [number, number, number] {
+  return [
+    CENTER,
+    Math.sin(elevationRad) * CAMERA_DISTANCE,
+    CENTER + Math.cos(elevationRad) * CAMERA_DISTANCE,
+  ];
+}
+
+const ORTHO_CAMERA_POS: [number, number, number] =
+  cameraPositionForElevation((CAMERA_ELEVATION_WIDE_DEG * Math.PI) / 180);
 const BOARD_BACKGROUND = 'radial-gradient(circle at 50% 4%, #3f7377 0%, #24515b 48%, #112f3a 100%)';
 
 // 색상 팔레트
@@ -484,6 +499,7 @@ function Tile({
         radius={0.065}
         smoothness={3}
         receiveShadow
+        userData={{ mazeToonNoOutline: true }}
         onClick={handleClick}
         onPointerOver={(e) => {
           if (!selectable) return;
@@ -600,10 +616,89 @@ function GoalFlag({ reducedMotion = false, locked = false }: { reducedMotion?: b
   );
 }
 
+// 봉인 주사위: 마주보는 면의 합이 7인 실제 주사위 규격으로 눈을 그린다.
+const DIE_SIZE = 0.3;
+const DIE_HALF = DIE_SIZE / 2;
+const DIE_PIP_SPREAD = DIE_SIZE * 0.26;
+const DIE_PIP_RADIUS = DIE_SIZE * 0.105;
+
+const DIE_PIP_LAYOUTS: Record<number, Array<[number, number]>> = {
+  1: [[0, 0]],
+  2: [[-1, -1], [1, 1]],
+  3: [[-1, -1], [0, 0], [1, 1]],
+  4: [[-1, -1], [-1, 1], [1, -1], [1, 1]],
+  5: [[-1, -1], [-1, 1], [0, 0], [1, -1], [1, 1]],
+  6: [[-1, -1], [-1, 0], [-1, 1], [1, -1], [1, 0], [1, 1]],
+};
+
+interface DieFaceSpec {
+  value: number;
+  normal: [number, number, number];
+  // 납작하게 누른 눈(로컬 z축)을 면 법선 방향으로 돌리는 회전
+  rotation: [number, number, number];
+  // 면 위에서 눈을 배치할 두 축
+  axisU: [number, number, number];
+  axisV: [number, number, number];
+}
+
+const DIE_FACES: DieFaceSpec[] = [
+  { value: 1, normal: [0, 1, 0], rotation: [-Math.PI / 2, 0, 0], axisU: [1, 0, 0], axisV: [0, 0, 1] },
+  { value: 6, normal: [0, -1, 0], rotation: [Math.PI / 2, 0, 0], axisU: [1, 0, 0], axisV: [0, 0, 1] },
+  { value: 2, normal: [0, 0, 1], rotation: [0, 0, 0], axisU: [1, 0, 0], axisV: [0, 1, 0] },
+  { value: 5, normal: [0, 0, -1], rotation: [0, Math.PI, 0], axisU: [1, 0, 0], axisV: [0, 1, 0] },
+  { value: 3, normal: [1, 0, 0], rotation: [0, Math.PI / 2, 0], axisU: [0, 0, 1], axisV: [0, 1, 0] },
+  { value: 4, normal: [-1, 0, 0], rotation: [0, -Math.PI / 2, 0], axisU: [0, 0, 1], axisV: [0, 1, 0] },
+];
+
+function SealDie({ activated }: { activated: boolean }) {
+  const bodyColor = activated ? '#bfe8d2' : '#fdf6e3';
+  const pipColor = activated ? '#1f6b4c' : '#33281f';
+  return (
+    <group rotation={[0, Math.PI / 5, 0]}>
+      <RoundedBox
+        args={[DIE_SIZE, DIE_SIZE, DIE_SIZE]}
+        radius={DIE_SIZE * 0.2}
+        smoothness={3}
+        castShadow={!activated}
+        receiveShadow
+      >
+        <meshStandardMaterial
+          color={bodyColor}
+          emissive={activated ? '#10b981' : '#d946ef'}
+          emissiveIntensity={activated ? 0.16 : 0.1}
+          roughness={0.62}
+        />
+      </RoundedBox>
+      {DIE_FACES.map((face) => (
+        <group key={`face-${face.value}`}>
+          {DIE_PIP_LAYOUTS[face.value].map(([u, v], pipIndex) => {
+            const pipPosition: [number, number, number] = [
+              face.normal[0] * DIE_HALF + face.axisU[0] * u * DIE_PIP_SPREAD + face.axisV[0] * v * DIE_PIP_SPREAD,
+              face.normal[1] * DIE_HALF + face.axisU[1] * u * DIE_PIP_SPREAD + face.axisV[1] * v * DIE_PIP_SPREAD,
+              face.normal[2] * DIE_HALF + face.axisU[2] * u * DIE_PIP_SPREAD + face.axisV[2] * v * DIE_PIP_SPREAD,
+            ];
+            return (
+              <mesh
+                key={`pip-${face.value}-${pipIndex}`}
+                position={pipPosition}
+                rotation={face.rotation}
+                scale={[1, 1, 0.42]}
+              >
+                <sphereGeometry args={[DIE_PIP_RADIUS, 10, 8]} />
+                <meshStandardMaterial color={pipColor} roughness={0.8} />
+              </mesh>
+            );
+          })}
+        </group>
+      ))}
+    </group>
+  );
+}
+
 function WormholeSealMarker({ position, activated }: { position: Position; activated: boolean }) {
   const [x, , z] = cellToWorld(position);
   return (
-    <group position={[x, 0.26, z]}>
+    <group position={[x, 0.26, z]} name={`wormhole-seal-die:${activated ? 'activated' : 'sealed'}`}>
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <torusGeometry args={[0.24, 0.045, 10, 28]} />
         <meshStandardMaterial
@@ -614,16 +709,9 @@ function WormholeSealMarker({ position, activated }: { position: Position; activ
           opacity={activated ? 0.52 : 0.94}
         />
       </mesh>
-      <mesh position={[0, 0.08, 0]} rotation={[0, Math.PI / 4, 0]} castShadow={!activated}>
-        <octahedronGeometry args={[0.15, 0]} />
-        <meshStandardMaterial
-          color={activated ? '#a7f3d0' : '#f5d0fe'}
-          emissive={activated ? '#10b981' : '#d946ef'}
-          emissiveIntensity={activated ? 0.2 : 0.75}
-          transparent
-          opacity={activated ? 0.45 : 1}
-        />
-      </mesh>
+      <group position={[0, 0.09, 0]}>
+        <SealDie activated={activated} />
+      </group>
     </group>
   );
 }
@@ -1625,8 +1713,17 @@ function FixedBoardCamera({ compact }: { compact: boolean }) {
   useEffect(() => {
     if (!(camera instanceof THREE.OrthographicCamera)) return;
 
+    // 세로형 캔버스(폰 세로 화면)는 더 위에서 내려다보게 해 사선 왜곡을 줄인다.
+    const portrait = size.width < size.height * 1.05;
+    const elevationDeg = portrait ? CAMERA_ELEVATION_PORTRAIT_DEG : CAMERA_ELEVATION_WIDE_DEG;
+    const elevation = (elevationDeg * Math.PI) / 180;
+
     const boardWidth = BOARD_SIZE * SPACING - GAP + (compact ? 1.25 : 1.5);
-    const projectedBoardHeight = (BOARD_SIZE * SPACING - GAP) * 0.72 + (compact ? 1.45 : 1.7);
+    const boardDepth = BOARD_SIZE * SPACING - GAP;
+    const projectedBoardHeight =
+      boardDepth * Math.sin(elevation) +
+      CAMERA_CONTENT_HEIGHT * Math.cos(elevation) +
+      (compact ? 1.2 : 1.45);
     const usableWidth = size.width * (compact ? 0.9 : 0.88);
     const usableHeight = size.height * (compact ? 0.88 : 0.84);
     const nextZoom = Math.max(
@@ -1634,7 +1731,7 @@ function FixedBoardCamera({ compact }: { compact: boolean }) {
       Math.min(usableWidth / boardWidth, usableHeight / projectedBoardHeight),
     );
 
-    camera.position.set(...ORTHO_CAMERA_POS);
+    camera.position.set(...cameraPositionForElevation(elevation));
     camera.lookAt(CENTER, 0, CENTER);
     camera.zoom = nextZoom;
     camera.near = 0.1;
@@ -1642,11 +1739,13 @@ function FixedBoardCamera({ compact }: { compact: boolean }) {
     camera.updateProjectionMatrix();
     gl.domElement.dataset.mazeCamera = 'fixed-orthographic';
     gl.domElement.dataset.mazeCameraZoom = nextZoom.toFixed(2);
+    gl.domElement.dataset.mazeCameraElevation = String(elevationDeg);
   }, [camera, compact, gl, size.height, size.width]);
 
   useEffect(() => () => {
     delete gl.domElement.dataset.mazeCamera;
     delete gl.domElement.dataset.mazeCameraZoom;
+    delete gl.domElement.dataset.mazeCameraElevation;
   }, [gl]);
 
   return null;
@@ -1659,7 +1758,9 @@ function ResponsiveBoardQuality({ compact }: { compact: boolean }) {
 
   useEffect(() => {
     const deviceDpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio;
-    const maximumDpr = compact ? 1.25 : size.width <= 700 ? 1.5 : 2;
+    // compact 1.25 상한은 고해상도 폰에서 보드를 뿌옇게 만들었다.
+    // 모바일 풀퀄리티와 같은 1.5 상한까지 올려 선명도를 확보한다.
+    const maximumDpr = compact ? 1.5 : size.width <= 700 ? 1.5 : 2;
     const dpr = Math.max(1, Math.min(deviceDpr || 1, maximumDpr));
     setDpr(dpr);
     gl.domElement.dataset.mazeRenderDpr = dpr.toFixed(2);
@@ -1944,7 +2045,7 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
         onCreated={({ gl }) => {
           gl.outputColorSpace = THREE.SRGBColorSpace;
           gl.toneMapping = THREE.ACESFilmicToneMapping;
-          gl.toneMappingExposure = 0.98;
+          gl.toneMappingExposure = 1.0;
           gl.shadowMap.type = THREE.PCFShadowMap;
         }}
       >
@@ -1953,7 +2054,7 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
         <MazeToonRenderController />
 
         {/* 선명한 명암 밴드와 따뜻한 키라이트를 함께 쓰는 잉크드 토이 조명 */}
-        <ambientLight intensity={0.52} color="#fff0d0" />
+        <ambientLight intensity={0.42} color="#fff2d8" />
         <directionalLight
           position={[CENTER + 6, 10, CENTER - 5]}
           color="#ffd18a"
@@ -1969,7 +2070,7 @@ const GameBoard3D: React.FC<GameBoard3DProps> = (props) => {
           shadow-radius={compact ? 2 : 4}
         />
         <directionalLight position={[CENTER - 5, 5, CENTER + 6]} color="#76bcc2" intensity={0.24} />
-        <hemisphereLight args={['#dff6ef', '#557568', 0.32]} />
+        <hemisphereLight args={['#dff6ef', '#557568', 0.26]} />
 
         <BoardContents {...props} reducedMotion={reducedMotion} />
       </Canvas>

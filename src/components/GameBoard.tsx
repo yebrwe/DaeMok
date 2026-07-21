@@ -914,6 +914,13 @@ const GameBoard: React.FC<GameBoardProps> = ({
           ));
         }}
         onPointerDownCapture={(event) => {
+          // tabIndex가 있는 벽/칸을 포인터로 누르면 브라우저가 포커스 대상을
+          // 스크롤 컨테이너 안으로 끌어당겨 보드가 튀었다. 포인터 조작에서는
+          // 포커스 기본 동작을 막는다 (키보드 탐색은 그대로 동작한다).
+          const target = event.target as HTMLElement | null;
+          if (target?.closest?.('[data-wall-segment], [data-cell]')) {
+            event.preventDefault();
+          }
           if (!canRouteWallPointer || event.pointerType === 'mouse') return;
           setHoveredWallTarget(findNearestWallPointerTarget(
             event.currentTarget,
