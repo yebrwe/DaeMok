@@ -7,6 +7,7 @@ import {
 import {
   GamePhase,
   type GameMap,
+  type MapItem,
   type MazeSkillId,
   type Position,
 } from '../vendor/maze-engine/dist/types/game';
@@ -28,6 +29,14 @@ const THIRD = 'third-user-001';
 const FOURTH = 'fourth-user-001';
 const REPLACEMENT = 'replacement-user-001';
 const ROOM_ID = 'room-authority-001';
+const RETIRED_NEW_MAP_ITEMS: readonly MapItem[] = [
+  { type: 'radar' },
+  { type: 'steelWall', wallPosition: { row: 2, col: 2 }, wallDirection: 'right' },
+  { type: 'collapseWall', wallPosition: { row: 2, col: 2 }, wallDirection: 'right' },
+  { type: 'phaseWall', wallPosition: { row: 2, col: 2 }, wallDirection: 'right' },
+  { type: 'mirrorWall', wallPosition: { row: 2, col: 2 }, wallDirection: 'right' },
+  { type: 'crystalWall', wallPosition: { row: 2, col: 2 }, wallDirection: 'right' },
+];
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -387,61 +396,23 @@ test('create, join, and submitMap apply exact generation/revision CAS without mu
     'server-time-regression',
   );
 
-  expectDomainError(
-    () => reduceMazeAuthorityCommand(joined, OWNER, {
-      type: 'submitMap',
-      commandId: 'command-retired-collapse',
-      roomId: ROOM_ID,
-      expectedGeneration: joined.meta.generation,
-      expectedRevision: joined.meta.revision,
-      map: {
-        ...simpleMap(),
-        items: [{
-          type: 'collapseWall',
-          wallPosition: { row: 2, col: 2 },
-          wallDirection: 'right',
-        }],
-      },
-    }, 1_200),
-    'failed-precondition',
-    'retired-wall-item',
-  );
-
-  expectDomainError(
-    () => reduceMazeAuthorityCommand(joined, OWNER, {
-      type: 'submitMap',
-      commandId: 'command-retired-mirror',
-      roomId: ROOM_ID,
-      expectedGeneration: joined.meta.generation,
-      expectedRevision: joined.meta.revision,
-      map: {
-        ...simpleMap(),
-        items: [{
-          type: 'mirrorWall',
-          wallPosition: { row: 2, col: 2 },
-          wallDirection: 'right',
-        }],
-      },
-    }, 1_200),
-    'failed-precondition',
-    'retired-wall-item',
-  );
-
-  expectDomainError(
-    () => reduceMazeAuthorityCommand(joined, OWNER, {
-      type: 'submitMap',
-      commandId: 'command-retired-radar',
-      roomId: ROOM_ID,
-      expectedGeneration: joined.meta.generation,
-      expectedRevision: joined.meta.revision,
-      map: {
-        ...simpleMap(),
-        items: [{ type: 'radar' }],
-      },
-    }, 1_200),
-    'failed-precondition',
-    'retired-wall-item',
-  );
+  for (const retiredItem of RETIRED_NEW_MAP_ITEMS) {
+    expectDomainError(
+      () => reduceMazeAuthorityCommand(joined, OWNER, {
+        type: 'submitMap',
+        commandId: `command-retired-${retiredItem.type}`,
+        roomId: ROOM_ID,
+        expectedGeneration: joined.meta.generation,
+        expectedRevision: joined.meta.revision,
+        map: {
+          ...simpleMap(),
+          items: [cloneJson(retiredItem)],
+        },
+      }, 1_200),
+      'failed-precondition',
+      'retired-wall-item',
+    );
+  }
 
   for (const skillLoadout of ['breach', 'anchor', 'dash'] as const) {
     expectDomainError(
@@ -709,11 +680,11 @@ test('startMatch preserves the current V3 relay assignment and initialization co
       legacy.gameState.maps![GUEST].skillLoadout = 'dash';
       return legacy;
     })(),
-    (() => {
+    ...RETIRED_NEW_MAP_ITEMS.map((retiredItem) => {
       const legacy = cloneJson(setup);
-      legacy.gameState.maps![GUEST].items = [{ type: 'radar' }];
+      legacy.gameState.maps![GUEST].items = [cloneJson(retiredItem)];
       return legacy;
-    })(),
+    }),
   ];
   legacySetups.forEach((legacy, index) => {
     assert.deepEqual(

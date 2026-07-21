@@ -107,7 +107,14 @@ const ITEM_TYPES: readonly ItemType[] = [
   'thornWall',
   'crystalWall',
 ];
-const RETIRED_NEW_MAP_ITEM_TYPES = new Set<ItemType>(['radar', 'collapseWall', 'mirrorWall']);
+const RETIRED_NEW_MAP_ITEM_TYPES = new Set<ItemType>([
+  'radar',
+  'steelWall',
+  'collapseWall',
+  'phaseWall',
+  'mirrorWall',
+  'crystalWall',
+]);
 const NEW_MAP_ITEM_TYPES = ITEM_TYPES.filter((itemType) => !RETIRED_NEW_MAP_ITEM_TYPES.has(itemType));
 const WALL_ITEM_TYPES = new Set<ItemType>([
   'oneTimeWall',

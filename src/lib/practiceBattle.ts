@@ -119,6 +119,7 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
       wall(3, 2, 'right'),
       wall(4, 3, 'right'),
       wall(3, 4, 'down'),
+      wall(0, 2, 'right'),
     ],
     items: [
       oneTimeWall(5, 2, 'right'),
@@ -128,7 +129,6 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
       specialWall('poisonWall', 2, 3, 'right'),
       specialWall('iceWall', 4, 1, 'right'),
       specialWall('thornWall', 2, 5, 'down'),
-      specialWall('crystalWall', 0, 2, 'right'),
     ],
   },
   {
@@ -142,23 +142,24 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
       wall(3, 2, 'right'),
       wall(2, 3, 'down'),
       wall(1, 4, 'left'),
+      wall(5, 1, 'up'),
+      wall(1, 2, 'right'),
     ],
     items: [
       wormhole({ row: 2, col: 0 }, { row: 4, col: 1 }),
-      specialWall('steelWall', 5, 1, 'up'),
       specialWall('windWall', 4, 3, 'up', 'right'),
-      specialWall('crystalWall', 1, 2, 'right'),
     ],
   },
   {
     skillLoadout: 'scoutPulse',
     startPosition: { row: 0, col: 5 },
     endPosition: { row: 5, col: 0 },
-    obstacles: [],
+    obstacles: [
+      wall(0, 4, 'down'),
+      wall(3, 3, 'down'),
+    ],
     items: [
       oneTimeWall(5, 3, 'left'),
-      specialWall('phaseWall', 0, 4, 'down'),
-      specialWall('steelWall', 3, 3, 'down'),
     ],
   },
   {
@@ -173,13 +174,13 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
       wall(2, 2, 'down'),
       wall(1, 2, 'left'),
       wall(1, 1, 'down'),
+      wall(2, 3, 'left'),
     ],
     items: [
       oneTimeWall(0, 3, 'left'),
       mine(3, 4),
       smoke(4, 5),
       specialWall('thornWall', 4, 4, 'up'),
-      specialWall('crystalWall', 2, 3, 'left'),
     ],
   },
 ];

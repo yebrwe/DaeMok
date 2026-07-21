@@ -23,6 +23,7 @@ import {
   getMapItems,
   getNewPosition,
   getNextTurnPlayerId,
+  getOppositeDirection,
   isPositionInBoard,
   isSamePosition,
   isSameWallSegment,
@@ -667,7 +668,7 @@ function resolveMove(
   let consumedChanged = false;
   let activeWallsChanged = false;
   let phaseOpenChanged = false;
-  const moves = (player.moves || 0) + 1;
+  let moves = (player.moves || 0) + 1;
   let position = origin;
   let effect: TurnMoveEffect = 'move';
   let consumedItemIndex: number | null = null;
@@ -848,7 +849,7 @@ function resolveMove(
       case 'thornWall':
         blocked = true;
         consumeItem(matchingIndex);
-        message = '가시벽에 막혀 2턴 전 위치로 밀려났습니다.';
+        message = '가시벽에 막혀 반대 방향으로 튕겨납니다.';
         break;
       case 'crystalWall':
         blocked = true;
@@ -857,11 +858,15 @@ function resolveMove(
         message = '수정벽이 부서지며 주변의 진짜 벽을 드러냈습니다.';
         break;
       case 'iceWall':
-        message = '빙결벽을 통과했습니다.';
+        blocked = true;
+        consumeItem(matchingIndex);
+        moves += 1;
+        message = '빙결벽에 막혀 얼어붙었습니다. 행동 수가 1 추가됩니다.';
         break;
       case 'windWall':
+        blocked = true;
         consumeItem(matchingIndex);
-        message = '바람벽을 통과했지만 밀릴 칸이 막혀 벽만 소멸했습니다.';
+        message = '바람벽에 막혀 지정 방향으로 튕겨납니다.';
         break;
       case 'mirrorWall':
         consumeItem(matchingIndex);
@@ -873,15 +878,33 @@ function resolveMove(
   if (blocked) {
     effect = 'bump';
     if (!wallItem) message = `${player.displayName || '플레이어'}가 벽에 부딪혔습니다.`;
-    if (wallItem?.type === 'thornWall') {
-      const rewind = getMineRollbackPosition(player.positionHistory, origin);
-      const canRewind = !isSamePosition(rewind, origin) &&
-        hasGoalPath(rewind, playedMap, mapItems, activeWalls);
-      if (canRewind) {
-        position = rewind;
+    if (wallItem?.type === 'thornWall' || wallItem?.type === 'windWall') {
+      const reboundDirection = wallItem.type === 'thornWall'
+        ? getOppositeDirection(direction)
+        : wallItem.effectDirection || direction;
+      const rebound = getNewPosition(origin, reboundDirection);
+      const canRebound = isPositionInBoard(rebound) &&
+        !isSamePosition(rebound, playedMap.endPosition) &&
+        !isBlockedForForcedStep(
+          origin,
+          reboundDirection,
+          playedMap,
+          mapItems,
+          consumed,
+          activeWalls,
+          matchingIndex
+        ) &&
+        hasGoalPath(rebound, playedMap, mapItems, activeWalls);
+      if (canRebound) {
+        position = rebound;
         needsFinalLandingTrapCheck = true;
+        message = wallItem.type === 'thornWall'
+          ? '가시벽에 막혀 반대 방향으로 한 칸 튕겨났습니다.'
+          : `바람벽에 막혀 ${DIRECTION_LABELS[reboundDirection]}으로 한 칸 튕겨났습니다.`;
       } else {
-        message = '가시벽이 부서졌지만 안전한 되감기 경로가 없어 제자리에 남았습니다.';
+        message = wallItem.type === 'thornWall'
+          ? '가시벽이 부서졌지만 뒤 칸이 막혀 제자리에 남았습니다.'
+          : '바람벽이 사라졌지만 밀릴 칸이 막혀 제자리에 남았습니다.';
       }
     }
   }
@@ -891,31 +914,7 @@ function resolveMove(
     const cellEffectTriggered = applyLandingTrap(attempted, origin);
 
     if (!cellEffectTriggered && wallItem && !isSamePosition(attempted, playedMap.endPosition)) {
-      let forcedDirection: Direction | null = null;
-      if (wallItem.type === 'iceWall') forcedDirection = direction;
-      if (wallItem.type === 'windWall') forcedDirection = wallItem.effectDirection || direction;
-
-      if (forcedDirection) {
-        const forcedTarget = getNewPosition(attempted, forcedDirection);
-        const canForce = isPositionInBoard(forcedTarget) &&
-          !isBlockedForForcedStep(
-            attempted,
-            forcedDirection,
-            playedMap,
-            mapItems,
-            consumed,
-            activeWalls,
-            matchingIndex
-          ) &&
-          hasGoalPath(forcedTarget, playedMap, mapItems, activeWalls);
-        if (canForce) {
-          position = forcedTarget;
-          needsFinalLandingTrapCheck = true;
-          if (wallItem.type === 'windWall') {
-            message = '바람벽을 통과해 지정 방향으로 밀려난 뒤 벽이 소멸했습니다.';
-          }
-        }
-      } else if (wallItem.type === 'mirrorWall') {
+      if (wallItem.type === 'mirrorWall') {
         const mirrorTarget = {
           row: BOARD_SIZE - 1 - attempted.row,
           col: BOARD_SIZE - 1 - attempted.col,

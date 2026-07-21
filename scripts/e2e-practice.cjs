@@ -440,8 +440,8 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
   await page.locator('[data-cell="0,1"]').click();
 
   await page.getByRole('tab', { name: '특수벽' }).click();
-  if (await page.getByRole('button', { name: /붕괴벽|거울벽/ }).count() !== 0) {
-    throw new Error('은퇴한 붕괴벽/거울벽이 신규 맵 제작 팔레트에 노출됨');
+  if (await page.getByRole('button', { name: /강철벽|붕괴벽|위상벽|거울벽|수정벽/ }).count() !== 0) {
+    throw new Error('은퇴한 강철/붕괴/위상/거울/수정벽이 신규 맵 제작 팔레트에 노출됨');
   }
   const budgetBeforeGuide = await page.locator('[data-testid=setup-budget]').innerText();
   await page.getByRole('button', { name: /화염벽/ }).click();
@@ -516,6 +516,14 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
           ['S', 'E'].includes(destinationCell?.textContent?.trim() || ''),
         animation: avatar ? getComputedStyle(avatar).animationName : '',
         ashWalls: element.querySelectorAll('[data-preview-ash-wall]').length,
+        source: element.getAttribute('data-preview-source'),
+        approachStep: element.querySelector('[data-preview-step=approach]')?.textContent?.trim(),
+        triggerStep: board?.querySelector('[data-wall-guide=fireWall] [data-preview-step=trigger]')
+          ?.textContent?.trim(),
+        resultStep: element.querySelector('[data-preview-step=result]')?.textContent?.trim(),
+        result: element.getAttribute('data-preview-result'),
+        actionCost: element.getAttribute('data-preview-action-cost'),
+        wallConsumed: element.getAttribute('data-preview-wall-consumed'),
       };
     });
     if (
@@ -525,7 +533,11 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
       !actionContract.segment || actionContract.segment !== actionContract.guideSegment ||
       actionContract.occupied !== 'false' || !actionContract.origin || !actionContract.destination ||
       actionContract.originHasMarker || actionContract.destinationHasMarker ||
-      !actionContract.animation.includes('wall-shadow-fire-map') || actionContract.ashWalls !== 3
+      !actionContract.animation.includes('wall-shadow-fire-map') || actionContract.ashWalls !== 3 ||
+      actionContract.source !== 'suggested' || !actionContract.approachStep?.includes('추천 · ①') ||
+      actionContract.triggerStep !== '②' || !actionContract.resultStep?.startsWith('③') ||
+      actionContract.result !== actionContract.origin || actionContract.actionCost !== '1' ||
+      actionContract.wallConsumed !== 'true'
     ) {
       throw new Error(`화염벽 그림자 분신 계약 오류: ${JSON.stringify(actionContract)}`);
     }
@@ -554,6 +566,71 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
       !poisonContract.destinationAnimation.includes('wall-shadow-poison-random')
     ) {
       throw new Error(`독벽 100% 방향 전환 분신 계약 오류: ${JSON.stringify(poisonContract)}`);
+    }
+
+    await page.getByRole('button', { name: /빙결벽/ }).click();
+    const icePreview = page.locator('[data-testid=wall-action-preview][data-preview-wall=iceWall]');
+    await icePreview.waitFor();
+    const iceContract = await icePreview.evaluate((element) => ({
+      from: element.getAttribute('data-preview-from'),
+      result: element.getAttribute('data-preview-result'),
+      blocked: element.getAttribute('data-preview-effect-blocked'),
+      actionCost: element.getAttribute('data-preview-action-cost'),
+      wallConsumed: element.getAttribute('data-preview-wall-consumed'),
+      source: element.getAttribute('data-preview-source'),
+      approach: element.querySelector('[data-preview-step=approach]')?.textContent?.trim(),
+      trigger: element.closest('[data-maze-board-grid]')
+        ?.querySelector('[data-wall-guide=iceWall] [data-preview-step=trigger]')?.textContent?.trim(),
+      resultLabel: element.querySelector('[data-preview-step=result]')?.textContent?.trim(),
+    }));
+    if (
+      !iceContract.from || iceContract.result !== iceContract.from || iceContract.blocked !== 'true' ||
+      iceContract.actionCost !== '2' || iceContract.wallConsumed !== 'true' ||
+      iceContract.source !== 'suggested' || !iceContract.approach?.includes('추천 · ①') ||
+      iceContract.trigger !== '②' || !iceContract.resultLabel?.includes('행동 2회 소모')
+    ) {
+      throw new Error(`빙결벽 차단/추가행동 3단계 예시 오류: ${JSON.stringify(iceContract)}`);
+    }
+
+    await page.getByRole('button', { name: /가시벽/ }).click();
+    const thornPreview = page.locator('[data-testid=wall-action-preview][data-preview-wall=thornWall]');
+    await thornPreview.waitFor();
+    const thornContract = await thornPreview.evaluate((element) => {
+      const parse = (value) => value?.split(',').map(Number) || [];
+      const from = parse(element.getAttribute('data-preview-from'));
+      const to = parse(element.getAttribute('data-preview-to'));
+      const result = parse(element.getAttribute('data-preview-result'));
+      const input = to[0] < from[0] ? 'up' : to[0] > from[0] ? 'down' : to[1] < from[1] ? 'left' : 'right';
+      const opposite = { up: 'down', down: 'up', left: 'right', right: 'left' }[input];
+      const delta = opposite === 'up' ? [-1, 0]
+        : opposite === 'down' ? [1, 0]
+          : opposite === 'left' ? [0, -1] : [0, 1];
+      const expectedResult = [from[0] + delta[0], from[1] + delta[1]];
+      return {
+        from,
+        to,
+        result,
+        opposite,
+        expectedResult,
+        effectDirection: element.getAttribute('data-preview-effect-direction'),
+        blocked: element.getAttribute('data-preview-effect-blocked'),
+        actionCost: element.getAttribute('data-preview-action-cost'),
+        wallConsumed: element.getAttribute('data-preview-wall-consumed'),
+        resultLabel: element.closest('[data-maze-board-grid]')
+          ?.querySelector('[data-wall-action-preview-companion=thornWall] [data-preview-step=result], [data-testid=wall-action-preview][data-preview-wall=thornWall] [data-preview-step=result]')
+          ?.textContent?.trim(),
+      };
+    });
+    const thornStayed = thornContract.blocked === 'true';
+    if (
+      thornContract.effectDirection !== thornContract.opposite ||
+      thornContract.actionCost !== '1' || thornContract.wallConsumed !== 'true' ||
+      (thornStayed
+        ? thornContract.result.join(',') !== thornContract.from.join(',')
+        : thornContract.result.join(',') !== thornContract.expectedResult.join(',')) ||
+      !thornContract.resultLabel?.startsWith('③')
+    ) {
+      throw new Error(`가시벽 반대방향 튕김 3단계 예시 오류: ${JSON.stringify(thornContract)}`);
     }
 
     await page.getByRole('tab', { name: '함정' }).click();
@@ -600,6 +677,28 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
     }
     const windButton = page.getByRole('button', { name: /바람벽/ }).first();
     await windButton.click();
+    const windActionPreview = page.locator('[data-testid=wall-action-preview][data-preview-wall=windWall]');
+    await windActionPreview.waitFor();
+    const windPreviewContract = await windActionPreview.evaluate((element) => ({
+      source: element.getAttribute('data-preview-source'),
+      effectDirection: element.getAttribute('data-preview-effect-direction'),
+      actionCost: element.getAttribute('data-preview-action-cost'),
+      wallConsumed: element.getAttribute('data-preview-wall-consumed'),
+      approachStep: element.querySelector('[data-preview-step=approach]')?.textContent?.trim(),
+      resultStep: element.closest('[data-maze-board-grid]')
+        ?.querySelector('[data-wall-action-preview-companion=windWall] [data-preview-step=result], [data-testid=wall-action-preview][data-preview-wall=windWall] [data-preview-step=result]')
+        ?.textContent?.trim(),
+    }));
+    if (
+      windPreviewContract.source !== 'suggested' || windPreviewContract.effectDirection !== 'right' ||
+      windPreviewContract.actionCost !== '1' || windPreviewContract.wallConsumed !== 'true' ||
+      !windPreviewContract.approachStep?.includes('추천 · ①') ||
+      !windPreviewContract.resultStep?.startsWith('③')
+    ) {
+      throw new Error(`바람벽 3단계 그림자 예시 계약 오류: ${JSON.stringify(windPreviewContract)}`);
+    }
+    const windSuggestedSegment = await windActionPreview.getAttribute('data-preview-segment');
+    if (!windSuggestedSegment) throw new Error('바람벽 추천 미리보기 벽선을 찾지 못함');
     const occupiedFireSlot = page.locator('[data-wall-segment="0,0:right"]');
     await occupiedFireSlot.focus();
     await occupiedFireSlot.locator('[data-wall-conflict=true]').waitFor();
@@ -630,7 +729,7 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
     if (await occupiedFireSlot.locator('[data-wall-guide]').count() !== 0) {
       throw new Error('기존 화염벽 위에 바람벽 고스트가 겹쳐짐');
     }
-    const windGuideSlot = page.locator('[data-wall-segment][data-wall-occupied=false]').first();
+    const windGuideSlot = page.locator(`[data-wall-segment="${windSuggestedSegment}"]`);
     const windGuideRect = await windGuideSlot.boundingBox();
     if (!windGuideRect) throw new Error('빈 바람벽 터치 좌표를 계산하지 못함');
     await windGuideSlot.dispatchEvent('pointerdown', {
@@ -645,6 +744,20 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
     await windGuideSlot.waitFor();
     if (await windGuideSlot.getAttribute('data-wall-occupied') !== 'false') {
       throw new Error('바람벽 자동 가이드가 점유된 벽을 선택함');
+    }
+    await page.waitForFunction(() =>
+      document.querySelector('[data-testid=wall-action-preview][data-preview-wall=windWall]')
+        ?.getAttribute('data-preview-source') === 'pointer'
+    );
+    const selectedWindSource = await windActionPreview.evaluate((element) => ({
+      source: element.getAttribute('data-preview-source'),
+      approach: element.querySelector('[data-preview-step=approach]')?.textContent?.trim(),
+    }));
+    if (
+      selectedWindSource.source !== 'pointer' ||
+      !selectedWindSource.approach?.includes('선택 · ①')
+    ) {
+      throw new Error(`바람벽 선택 위치 그림자 예시 오류: ${JSON.stringify(selectedWindSource)}`);
     }
     const windLayout = await page.evaluate(() => {
       const description = document.querySelector('[data-testid=active-palette-description]');

@@ -55,7 +55,14 @@ export const WALL_ITEM_TYPES: WallItemType[] = ['oneTimeWall', ...SPECIAL_WALL_T
 
 // New maps may no longer place these items. Runtime/type support remains so
 // an already-running legacy room can finish without corrupting its match.
-export const RETIRED_NEW_MAP_ITEM_TYPES: readonly ItemType[] = ['radar', 'collapseWall', 'mirrorWall'];
+export const RETIRED_NEW_MAP_ITEM_TYPES: readonly ItemType[] = [
+  'radar',
+  'steelWall',
+  'collapseWall',
+  'phaseWall',
+  'mirrorWall',
+  'crystalWall',
+];
 
 export function isRetiredNewMapItemType(value: unknown): value is ItemType {
   return typeof value === 'string'
@@ -71,7 +78,7 @@ export const ITEM_COSTS: Record<ItemType, number> = {
   smoke: 1,
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 3,
+  poisonWall: 2,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,

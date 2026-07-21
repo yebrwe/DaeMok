@@ -34,6 +34,7 @@ import {
   practiceWallKey,
 } from '@/lib/practiceBattle';
 import { getNewPosition, isPositionInBoard, isSamePosition } from '@/lib/gameUtils';
+import { getWallReboundOutcomeVia } from '@/lib/liveBoardVisuals';
 
 interface RacerVisualState {
   fx: BoardFx | null;
@@ -56,6 +57,7 @@ interface PracticeBattleProps {
 }
 
 function outcomeVisual(outcome: MoveTurnOutcome, key: number): RacerVisualState {
+  const reboundVia = getWallReboundOutcomeVia(outcome);
   if (outcome.reachedGoal) {
     return {
       fx: { key, type: 'goal', at: outcome.position },
@@ -70,16 +72,13 @@ function outcomeVisual(outcome: MoveTurnOutcome, key: number): RacerVisualState 
         at: outcome.origin,
         dir: outcome.direction,
       },
-      via:
-        outcome.wallEffect === 'thornWall' && !isSamePosition(outcome.position, outcome.origin)
-          ? [outcome.origin]
-          : null,
+      via: reboundVia,
     };
   }
   if (outcome.effect === 'mine') {
     return {
       fx: { key, type: 'mine', at: outcome.itemPosition, delay: 0.35 },
-      via: [outcome.attempted, outcome.origin],
+      via: reboundVia || [outcome.attempted, outcome.origin],
     };
   }
   if (outcome.effect === 'wormhole') {
@@ -94,9 +93,10 @@ function outcomeVisual(outcome: MoveTurnOutcome, key: number): RacerVisualState 
           ? { wormholeTransition: outcome.wormholeTransition }
           : {}),
       },
-      via: [outcome.attempted],
+      via: reboundVia || [outcome.attempted],
     };
   }
+  if (reboundVia) return { fx: null, via: reboundVia };
   if (
     (outcome.wallEffect === 'iceWall' ||
       outcome.wallEffect === 'windWall' ||

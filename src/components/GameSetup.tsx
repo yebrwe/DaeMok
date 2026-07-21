@@ -13,14 +13,11 @@ import {
   CloudFog,
   Flame,
   FlaskConical,
-  Gem,
   LucideIcon,
-  Shield,
   ShieldAlert,
   Snowflake,
   Redo2,
   Undo2,
-  Waves,
   Wind,
   X,
 } from 'lucide-react';
@@ -36,6 +33,7 @@ import {
   ITEM_LIMITS,
   ITEM_LABELS,
   cloneMapItem,
+  getMapItems,
   getWormholeExitSafetyError,
   isWallItemType,
   isSameWallSegment,
@@ -119,7 +117,10 @@ function cloneEditorSnapshot(snapshot: MapEditorSnapshot): MapEditorSnapshot {
   };
 }
 
-type PlaceableItemType = Exclude<ItemType, 'radar' | 'collapseWall' | 'mirrorWall'>;
+type PlaceableItemType = Exclude<
+  ItemType,
+  'radar' | 'steelWall' | 'collapseWall' | 'phaseWall' | 'mirrorWall' | 'crystalWall'
+>;
 type PlaceMode = 'wall' | PlaceableItemType;
 
 const ITEM_ICONS: Record<PlaceableItemType, LucideIcon> = {
@@ -127,26 +128,20 @@ const ITEM_ICONS: Record<PlaceableItemType, LucideIcon> = {
   mine: Bomb,
   wormhole: Aperture,
   smoke: CloudFog,
-  steelWall: Shield,
   fireWall: Flame,
   poisonWall: FlaskConical,
   iceWall: Snowflake,
   windWall: Wind,
-  phaseWall: Waves,
   thornWall: ShieldAlert,
-  crystalWall: Gem,
 };
 
 const TRAP_ITEMS: PlaceableItemType[] = ['oneTimeWall', 'mine', 'wormhole', 'smoke'];
 const SPECIAL_WALL_ITEMS: PlaceableItemType[] = [
-  'steelWall',
   'fireWall',
   'poisonWall',
   'iceWall',
   'windWall',
-  'phaseWall',
   'thornWall',
-  'crystalWall',
 ];
 
 const ITEM_DESCRIPTIONS: Record<PlaceableItemType, string> = {
@@ -154,14 +149,11 @@ const ITEM_DESCRIPTIONS: Record<PlaceableItemType, string> = {
   mine: '밟으면 실제 2턴 전 위치로 되돌림',
   wormhole: '4×4 방에서 주사위를 굴려 출구의 목표 윗면을 맞춰야 복귀',
   smoke: '상대의 다음 행동 동안 보드를 가림',
-  steelWall: '어떤 벽 효과로도 통과할 수 없는 영구벽',
   fireWall: '처음 막고 불을 붙여 발견한 벽을 지우고 4행동 동안 새 벽 기억도 태움',
   poisonWall: '통과 후 4행동의 방향을 매번 상·하·좌·우 중 하나로 무작위 변환',
-  iceWall: '통과 후 진행 방향으로 한 칸 더 미끄러짐',
-  windWall: '첫 통과 후 가능하면 지정 방향으로 한 칸 밀고 소멸',
-  phaseWall: '막힘과 통과 상태가 시도할 때마다 교대',
-  thornWall: '처음 막고 실제 2턴 전 위치로 되돌림',
-  crystalWall: '처음 막고 주변의 진짜 벽을 노출',
+  iceWall: '첫 충돌을 막고 소멸하며 이번 행동 수를 1 추가',
+  windWall: '첫 충돌을 막고 원래 칸에서 지정 방향으로 한 칸 튕긴 뒤 소멸',
+  thornWall: '첫 충돌을 막고 입력 반대 방향으로 한 칸 튕긴 뒤 소멸',
 };
 
 const ITEM_SHORT_LABELS: Record<PlaceableItemType, string> = {
@@ -169,15 +161,67 @@ const ITEM_SHORT_LABELS: Record<PlaceableItemType, string> = {
   mine: '지뢰',
   wormhole: '웜홀',
   smoke: '연막',
-  steelWall: '강철',
   fireWall: '화염',
   poisonWall: '독',
   iceWall: '빙결',
   windWall: '바람',
-  phaseWall: '위상',
   thornWall: '가시',
-  crystalWall: '수정',
 };
+
+const RETIRED_EDITOR_ITEM_TYPES: readonly ItemType[] = [
+  'radar',
+  'steelWall',
+  'collapseWall',
+  'phaseWall',
+  'mirrorWall',
+  'crystalWall',
+];
+
+const RETIRED_WALLS_TO_ORDINARY: readonly ItemType[] = [
+  'steelWall',
+  'phaseWall',
+  'crystalWall',
+];
+
+function prepareInitialEditorMap(initialMap: GameMap | null): {
+  obstacles: Obstacle[];
+  items: MapItem[];
+} {
+  if (!initialMap) return { obstacles: [], items: [] };
+
+  const sourceItems = getMapItems(initialMap);
+  const obstacles = (initialMap.obstacles || []).map((entry) => ({
+    position: { ...entry.position },
+    direction: entry.direction,
+  }));
+
+  for (const item of sourceItems) {
+    if (
+      !RETIRED_WALLS_TO_ORDINARY.includes(item.type) ||
+      !item.wallPosition ||
+      !item.wallDirection ||
+      obstacles.some((wall) => isSameWallSegment(
+        wall.position,
+        wall.direction,
+        item.wallPosition!,
+        item.wallDirection!
+      ))
+    ) continue;
+    obstacles.push({ position: { ...item.wallPosition }, direction: item.wallDirection });
+  }
+
+  const retainedItems = sourceItems.filter(
+    (item) => !RETIRED_EDITOR_ITEM_TYPES.includes(item.type)
+  );
+  return {
+    obstacles,
+    items: retainedItems.map((item, _index, siblings) => upgradeLegacyWormholeItem(
+      item,
+      obstacles,
+      siblings
+    )),
+  };
+}
 
 const DIRECTIONS: Array<{ direction: Direction; label: string; Icon: LucideIcon }> = [
   { direction: 'up', label: '위', Icon: ArrowUp },
@@ -201,6 +245,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
   initialMap = null,
   requireFullBudget = false,
 }) => {
+  const [initialEditorMap] = useState(() => prepareInitialEditorMap(initialMap));
   const [startPosition, setStartPosition] = useState<Position | undefined>(() =>
     initialMap?.startPosition ? { ...initialMap.startPosition } : undefined
   );
@@ -208,7 +253,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
     initialMap?.endPosition ? { ...initialMap.endPosition } : undefined
   );
   const [obstacles, setObstacles] = useState<Obstacle[]>(() =>
-    (initialMap?.obstacles || []).map((entry) => ({
+    initialEditorMap.obstacles.map((entry) => ({
       position: { ...entry.position },
       direction: entry.direction,
     }))
@@ -220,15 +265,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
   // 아이템 배치 (공용 벽 예산과 종류별 최대 수량 적용)
   const [placeMode, setPlaceMode] = useState<PlaceMode>('wall');
   const [items, setItems] = useState<MapItem[]>(() =>
-    (initialMap?.items || [])
-      .filter((item) =>
-        item.type !== 'collapseWall' && item.type !== 'mirrorWall' && item.type !== 'radar'
-      )
-      .map((item, _index, siblings) => upgradeLegacyWormholeItem(
-        item,
-        initialMap?.obstacles || [],
-        siblings
-      ))
+    cloneMapItems(initialEditorMap.items)
   );
   const [wormholeEntrance, setWormholeEntrance] = useState<Position | null>(null);
   const [paletteTab, setPaletteTab] = useState<'traps' | 'walls'>('traps');
@@ -787,8 +824,12 @@ const GameSetup: React.FC<GameSetupProps> = ({
             aria-live="polite"
           >
             <ActiveItemIcon className="shrink-0 text-cyan-300" size={16} aria-hidden="true" />
-            <span className="min-w-0 truncate text-[10px] font-black">
-              {ITEM_LABELS[activeWallGuide]} · 점선 예시를 따라 빈 벽선을 누르세요
+            <span
+              className="min-w-0 text-[9px] font-black leading-tight"
+              title={`${ITEM_LABELS[activeWallGuide]}: 점선은 추천 위치이며 그림자는 ① 접근, ② 발동, ③ 최종 결과를 보여줍니다. 다른 벽선을 가리키면 그 위치 기준으로 바뀝니다.`}
+            >
+              <span className="block truncate">{ITEM_LABELS[activeWallGuide]} · 점선=추천 · 직접 가리키면 선택 위치</span>
+              <span className="block truncate text-cyan-200">그림자 ① 접근 → ② 발동 → ③ 최종 결과</span>
             </span>
           </div>
         )}
@@ -826,6 +867,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
               pendingCell={wormholeEntrance}
               validTargetCells={wormholeExitCandidates}
               placeMode={placeMode}
+              previewEffectDirection={windDirection}
               compact
               onCellClick={handleCellClick}
               onDirectionClick={handleDirectionClick}
@@ -925,7 +967,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
             </div>
 
             <div
-              className={`mt-1 grid h-9 gap-1 ${paletteTab === 'traps' ? 'grid-cols-4' : 'grid-cols-8'}`}
+              className={`mt-1 grid h-9 gap-1 ${paletteTab === 'traps' ? 'grid-cols-4' : 'grid-cols-5'}`}
               role="tabpanel"
               data-testid="setup-palette-options"
             >
@@ -943,7 +985,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
                     onClick={() => handleSelectItemMode(type)}
                     disabled={!canAffordItem(type) || !hasItemCapacity(type)}
                     title={`${ITEM_LABELS[type]}: ${ITEM_DESCRIPTIONS[type]}`}
-                    aria-label={`${ITEM_LABELS[type]} 선택 · 비용 ${ITEM_COSTS[type]}`}
+                    aria-label={`${ITEM_LABELS[type]} 선택 · 비용 ${ITEM_COSTS[type]} · ${ITEM_DESCRIPTIONS[type]}`}
                   >
                     <Icon className="hidden shrink-0 min-[520px]:block" size={12} aria-hidden="true" />
                     <span className="truncate">{ITEM_SHORT_LABELS[type]}</span>
@@ -990,7 +1032,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
             {items.length > 0 && (
               <div className="mt-1 flex h-10 gap-1 overflow-x-auto" aria-label="배치된 아이템">
                 {items.map((item, index) => {
-                  const Icon = ITEM_ICONS[item.type];
+                  const Icon = ITEM_ICONS[item.type as PlaceableItemType] || BrickWall;
                   return (
                     <span
                       key={`${item.type}-${index}`}

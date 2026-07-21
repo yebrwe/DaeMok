@@ -24,20 +24,17 @@ const DEFAULT_SEED = 'daemok-special-walls-v1';
 const MAX_MOVES = 500;
 const STRATEGIC_MIRROR_TRIAL_LIMIT = 5_000;
 const POLICIES = ['believer', 'adaptive', 'skeptic'];
-const PERSISTENT_EFFECTS = new Set(['ice']);
-const FORCED_EFFECTS = new Set(['ice', 'wind', 'mirror']);
+const PERSISTENT_EFFECTS = new Set();
+const FORCED_EFFECTS = new Set(['wind', 'thorn', 'mirror']);
 
 const SPECIALS = [
-  { kind: 'steel', initialCost: 1 },
   { kind: 'fire', initialCost: 1 },
-  { kind: 'poison', initialCost: 3 },
+  { kind: 'poison', initialCost: 2 },
   { kind: 'ice', initialCost: 1 },
   { kind: 'wind', initialCost: 1 },
   { kind: 'collapse', initialCost: 1 },
-  { kind: 'phase', initialCost: 1 },
   { kind: 'mirror', initialCost: 5 },
   { kind: 'thorn', initialCost: 1 },
-  { kind: 'crystal', initialCost: 1 },
 ];
 
 function parseArgs(argv) {
@@ -278,26 +275,20 @@ function safeDestination(map, destination, special, runtime) {
 }
 
 function effectDestination(kind, map, special, from, target, runtime) {
-  if (kind === 'ice') {
-    const direction = directionBetween(from, target);
-    const extra = neighborInDirection(target, direction);
-    if (extra >= 0) {
-      const edge = EDGE_INDEX[target][extra];
-      if (!isBlocked(map.walls, edge, effectiveExtraBlock(special, runtime)) && safeDestination(map, extra, special, runtime)) {
-        return extra;
+  if (kind === 'ice') return from;
+  if (kind === 'wind' || kind === 'thorn') {
+    const attemptedDirection = directionBetween(from, target);
+    const reboundDirection = kind === 'wind'
+      ? special.effectDirection
+      : attemptedDirection ^ 1;
+    const rebound = neighborInDirection(from, reboundDirection);
+    if (rebound >= 0 && rebound !== map.goal) {
+      const edge = EDGE_INDEX[from][rebound];
+      if (!isBlocked(map.walls, edge, effectiveExtraBlock(special, runtime)) && safeDestination(map, rebound, special, runtime)) {
+        return rebound;
       }
     }
-    return target;
-  }
-  if (kind === 'wind') {
-    const pushed = neighborInDirection(target, special.effectDirection);
-    if (pushed >= 0) {
-      const edge = EDGE_INDEX[target][pushed];
-      if (!isBlocked(map.walls, edge, effectiveExtraBlock(special, runtime)) && safeDestination(map, pushed, special, runtime)) {
-        return pushed;
-      }
-    }
-    return target;
+    return from;
   }
   if (kind === 'mirror') {
     const mirrored = cellId(SIZE - 1 - rowOf(target), SIZE - 1 - colOf(target));
@@ -451,7 +442,7 @@ function phaseGraphAudit(map, special) {
 }
 
 function oneUseForcedGraphAudit(map, special) {
-  // mode 1 means the wind/mirror effect is still armed; mode 0 is consumed.
+  // mode 1 means the one-use wall is armed; mode 0 is consumed.
   const stateCount = CELLS * 2;
   const reachable = new Uint8Array(stateCount);
   const reverse = Array.from({ length: stateCount }, () => []);
@@ -469,9 +460,7 @@ function oneUseForcedGraphAudit(map, special) {
       if (!map.walls[neighbor.edge]) {
         destination = neighbor.target;
         if (active && neighbor.edge === special.edge) {
-          if (neighbor.target !== map.goal) {
-            destination = effectDestination(special.kind, map, special, cell, neighbor.target, { active: true });
-          }
+          destination = effectDestination(special.kind, map, special, cell, neighbor.target, { active: true });
           nextActive = 0;
         }
       }
@@ -506,21 +495,11 @@ function oneUseForcedGraphAudit(map, special) {
 
 function safetyAudit(map, special) {
   if (PERSISTENT_EFFECTS.has(special.kind)) return persistentGraphAudit(map, special);
-  if (special.kind === 'wind' || special.kind === 'mirror') return oneUseForcedGraphAudit(map, special);
+  if (['ice', 'wind', 'thorn', 'mirror'].includes(special.kind)) {
+    return oneUseForcedGraphAudit(map, special);
+  }
   if (special.kind === 'collapse') return collapseGraphAudit(map, special);
   if (special.kind === 'phase') return phaseGraphAudit(map, special);
-  if (special.kind === 'thorn') {
-    const fromStart = bfsDistances(map.start, map.walls);
-    const fromGoal = bfsDistances(map.goal, map.walls);
-    let unsafeStates = 0;
-    let reachableStates = 0;
-    for (let cell = 0; cell < CELLS; cell += 1) {
-      if (fromStart[cell] < 0) continue;
-      reachableStates += 1;
-      if (fromGoal[cell] < 0) unsafeStates += 1;
-    }
-    return { ok: unsafeStates === 0, reachableStates, unsafeStates };
-  }
   return { ok: true, reachableStates: 0, unsafeStates: 0 };
 }
 
@@ -536,11 +515,11 @@ function edgeStrength(map, edge) {
 function windDirections(map, edge) {
   const [a, b] = EDGES[edge];
   const fromStart = bfsDistances(map.start, map.walls);
-  const target = fromStart[a] <= fromStart[b] ? b : a;
+  const origin = fromStart[a] <= fromStart[b] ? a : b;
   const fromGoal = bfsDistances(map.goal, map.walls);
   return [0, 1, 2, 3].sort((left, right) => {
-    const leftCell = neighborInDirection(target, left);
-    const rightCell = neighborInDirection(target, right);
+    const leftCell = neighborInDirection(origin, left);
+    const rightCell = neighborInDirection(origin, right);
     const leftScore = leftCell < 0 || fromGoal[leftCell] < 0 ? -1 : fromGoal[leftCell];
     const rightScore = rightCell < 0 || fromGoal[rightCell] < 0 ? -1 : fromGoal[rightCell];
     return rightScore - leftScore;
@@ -589,11 +568,7 @@ function knownTransition(map, special, runtime, from, neighbor) {
     if (phaseOpen) return { destination, phaseOpen: false };
     return { destination: from, phaseOpen: true };
   }
-  if (
-    neighbor.target !== map.goal &&
-    FORCED_EFFECTS.has(special.kind) &&
-    (special.kind === 'ice' || runtime.active)
-  ) {
+  if (runtime.active && (special.kind === 'ice' || FORCED_EFFECTS.has(special.kind))) {
     destination = effectDestination(special.kind, map, special, from, neighbor.target, runtime);
   }
   return { destination, phaseOpen };
@@ -787,13 +762,12 @@ function runGame(map, policy, special = null) {
         pendingRetry = null;
         continue;
       }
-      if (special.kind === 'thorn') {
+      if (special.kind === 'ice' || special.kind === 'wind' || special.kind === 'thorn') {
         runtime.active = false;
-        const rollback = history.length >= 2 ? history[history.length - 2] : history[0];
-        runtime.position = safeDestination(map, rollback, special, runtime) ? rollback : origin;
+        runtime.position = effectDestination(special.kind, map, special, origin, target, runtime);
         if (!safeDestination(map, runtime.position, special, runtime)) safetyFailure = true;
-        record(runtime.position, 1);
-        learnCollision(edge, origin, target, runtime.position);
+        record(runtime.position, special.kind === 'ice' ? 2 : 1);
+        pendingRetry = null;
         continue;
       }
       if (special.kind === 'crystal') {
@@ -819,7 +793,7 @@ function runGame(map, policy, special = null) {
       onSpecial &&
       target !== map.goal &&
       FORCED_EFFECTS.has(special.kind) &&
-      (special.kind === 'ice' || runtime.active)
+      runtime.active
     ) {
       activated = true;
       runtime.knownSpecial = true;

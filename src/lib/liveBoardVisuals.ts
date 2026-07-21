@@ -1,5 +1,6 @@
 import type { BoardFx } from '@/components/three/GameBoard3D';
 import type { CollisionWall, Direction, GameState, MapItem, MazeSkillId, Position } from '@/types/game';
+import type { MoveTurnOutcome } from '@/lib/gameTurn';
 import { getMapItems, getNewPosition, isSamePosition, isSameWallSegment } from '@/lib/gameUtils';
 
 export type LiveBoardVisualAction = 'move' | 'bump' | 'fire' | 'poison' | 'mine' | 'wormhole' | 'radar' | 'goal';
@@ -38,6 +39,51 @@ export function getActiveLocalBoardVia(
   return route && route.moves === moves && isSamePosition(route.destination, position)
     ? route.via
     : null;
+}
+
+function appendDistinctWaypoint(route: Position[], position: Position | null | undefined): void {
+  if (!position || (route.length > 0 && isSamePosition(route[route.length - 1], position))) return;
+  route.push({ ...position });
+}
+
+function wallReboundVia(
+  origin: Position,
+  attempted: Position,
+  position: Position,
+  landingPosition?: Position | null
+): Position[] | null {
+  const landing = landingPosition || position;
+  if (isSamePosition(position, origin) && isSamePosition(landing, origin)) return null;
+
+  const route: Position[] = [];
+  appendDistinctWaypoint(route, attempted);
+  // A sideways/backward rebound must visibly return to the origin side of the
+  // collided segment before travelling to its result cell. This also prevents
+  // the pawn renderer from treating the two-cell gap as a teleport.
+  if (!isSamePosition(landing, attempted)) appendDistinctWaypoint(route, origin);
+  if (!isSamePosition(landing, position)) appendDistinctWaypoint(route, landing);
+  return route.length > 0 ? route : null;
+}
+
+/**
+ * Builds presentation-only waypoints from the authoritative move outcome.
+ * New wind/thorn walls are blocking rebounds, while legacy pass-through wind
+ * and the other forced walls retain their existing attempted-cell route.
+ */
+export function getWallReboundOutcomeVia(outcome: MoveTurnOutcome): Position[] | null {
+  if (outcome.wallEffect !== 'windWall' && outcome.wallEffect !== 'thornWall') return null;
+
+  const landedOnTrap = outcome.effect === 'smoke' ||
+    outcome.effect === 'mine' ||
+    outcome.effect === 'wormhole';
+  if (outcome.effect !== 'bump' && !landedOnTrap) return null;
+
+  return wallReboundVia(
+    outcome.origin,
+    outcome.attempted,
+    outcome.position,
+    landedOnTrap ? outcome.itemPosition : null
+  );
 }
 
 const DIRECTIONS: Direction[] = ['up', 'down', 'left', 'right'];
@@ -112,6 +158,67 @@ function crossedDirection(origin: Position, item: MapItem): Direction | null {
   )) || null;
 }
 
+interface SnapshotWallImpact {
+  direction: Direction;
+  via: Position[] | null;
+}
+
+function oppositeDirection(direction: Direction): Direction {
+  if (direction === 'up') return 'down';
+  if (direction === 'down') return 'up';
+  if (direction === 'left') return 'right';
+  return 'left';
+}
+
+function wallImpactFromSnapshots(
+  origin: Position,
+  position: Position,
+  collision: CollisionWall | null,
+  newlyConsumed: Array<{ item: MapItem }>
+): SnapshotWallImpact | null {
+  const wall = newlyConsumed.find(({ item }) => (
+    item.type === 'iceWall' || item.type === 'windWall' || item.type === 'thornWall'
+  ))?.item;
+  if (!wall) return null;
+  const crossed = crossedDirection(origin, wall);
+  if (!crossed || (collision && crossed !== collision.direction)) return null;
+
+  if (wall.type === 'iceWall') {
+    // The redesigned ice wall always consumes itself and leaves the pawn at
+    // the origin. Legacy pass-through ice remains distinguishable by movement.
+    return isSamePosition(position, origin) ? { direction: crossed, via: null } : null;
+  }
+
+  const landingItem = newlyConsumed.find(({ item }) => (
+    item.type === 'mine' || item.type === 'smoke' || item.type === 'wormhole'
+  ))?.item;
+  const landingPosition = landingItem?.type === 'wormhole'
+    ? landingItem.entrance
+    : landingItem?.position;
+  const reboundDirection = wall.type === 'thornWall'
+    ? oppositeDirection(crossed)
+    : wall.effectDirection || crossed;
+  const expectedLanding = getNewPosition(origin, reboundDirection);
+  const actualLanding = landingPosition || position;
+
+  // Authority projections can intentionally omit a consumed special-wall
+  // collision. Geometry still distinguishes the redesigned origin-based
+  // rebound from legacy pass-through wind (which pushes from attempted).
+  if (!collision &&
+    !isSamePosition(actualLanding, expectedLanding) &&
+    !(!landingPosition && isSamePosition(position, origin))) return null;
+
+  return {
+    direction: crossed,
+    via: wallReboundVia(
+      origin,
+      getNewPosition(origin, crossed),
+      position,
+      landingPosition
+    ),
+  };
+}
+
 function forcedMoveVia(
   origin: Position,
   position: Position,
@@ -157,6 +264,11 @@ export function deriveLiveBoardVisualTransition(
   const items = getMapItems(map);
   const consumedOnPlayedMap = newlyConsumedItems(previous, next, mapOwnerId, items);
   const anchorStoppedForcedMove = consumedSkill(previous, next, runnerId, 'anchor');
+  const collision = newCollision(previous, next, runnerId, mapOwnerId, origin);
+  const wallImpact = anchorStoppedForcedMove
+    ? null
+    : wallImpactFromSnapshots(origin, position, collision, consumedOnPlayedMap);
+  const reboundVia = wallImpact?.via || null;
 
   if (!beforeRunner.finished && afterRunner.finished) {
     const via = forcedMoveVia(origin, position, consumedOnPlayedMap);
@@ -177,7 +289,7 @@ export function deriveLiveBoardVisualTransition(
       action: 'mine',
       sequence,
       fx: { key: sequence, type: 'mine', at: mine.position, delay: 0.35 },
-      via: [...(route.length > 0 ? route : [mine.position]), origin],
+      via: reboundVia || [...(route.length > 0 ? route : [mine.position]), origin],
     };
   }
 
@@ -199,7 +311,7 @@ export function deriveLiveBoardVisualTransition(
         delay: 0.35,
         ...(enteredInternalRoom ? { wormholeTransition: 'entered' as const } : {}),
       },
-      via: route.length > 0 ? route : [wormhole.entrance],
+      via: reboundVia || (route.length > 0 ? route : [wormhole.entrance]),
     };
   }
 
@@ -214,13 +326,13 @@ export function deriveLiveBoardVisualTransition(
     };
   }
 
-  const collision = newCollision(previous, next, runnerId, mapOwnerId, origin);
-  if (collision) {
+  if (collision || wallImpact) {
+    const impactDirection = collision?.direction || wallImpact!.direction;
     return {
       action: 'bump',
       sequence,
-      fx: { key: sequence, type: 'bump', at: origin, dir: collision.direction },
-      via: isSamePosition(position, origin) ? null : [origin],
+      fx: { key: sequence, type: 'bump', at: origin, dir: impactDirection },
+      via: reboundVia || (isSamePosition(position, origin) ? null : [origin]),
     };
   }
 

@@ -125,7 +125,7 @@ assert.notStrictEqual(
 const specialWallCosts = {
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 3,
+  poisonWall: 2,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,
@@ -218,6 +218,28 @@ assert.equal(
   false,
   'new radar map is rejected while the compatibility validator remains readable'
 );
+for (const retiredWallType of [
+  'steelWall',
+  'collapseWall',
+  'phaseWall',
+  'mirrorWall',
+  'crystalWall',
+]) {
+  const legacyMap = baseMap({
+    skillLoadout: 'scoutPulse',
+    items: [specialWall(retiredWallType, 1, 1)],
+  });
+  assert.equal(
+    utils.isValidMap(legacyMap),
+    true,
+    `legacy ${retiredWallType} map remains readable`
+  );
+  assert.equal(
+    utils.isValidNewMap(legacyMap),
+    false,
+    `new ${retiredWallType} map is rejected`
+  );
+}
 const normalizedNewMap = utils.normalizeNewMapForSubmission(
   baseMap({ skillLoadout: 'anchor' })
 );
@@ -850,14 +872,21 @@ assert.equal(poisonMainBoundary.state.players.a.moves, 2);
 assert.equal(poisonMainBoundary.state.turnNumber, poisonMainBoundaryState.turnNumber + 1);
 
 const icePass = resolveSpecial(baseMap({ items: [specialWall('iceWall', 0, 0)] }));
-assert.deepEqual(icePass.outcome.position, pos(0, 2), 'ice safely slides one extra cell');
+assert.equal(icePass.outcome.effect, 'bump', 'ice blocks the triggering crossing');
+assert.deepEqual(icePass.outcome.position, pos(0, 0), 'ice keeps the runner at the origin');
+assert.equal(icePass.outcome.moves, 2, 'ice makes the triggering input cost two moves total');
+assert.equal(icePass.state.itemState.b.consumed[0], true, 'ice is consumed on its first collision');
 
 const iceMineLanding = resolveSpecial(baseMap({
   items: [specialWall('iceWall', 0, 0), mine(0, 2)],
 }));
-assert.equal(iceMineLanding.outcome.effect, 'mine', 'ice final landing triggers a mine');
-assert.deepEqual(iceMineLanding.outcome.position, pos(0, 0), 'ice landing mine applies rollback');
-assert.equal(iceMineLanding.state.itemState.b.consumed[1], true, 'ice landing mine is consumed');
+assert.equal(iceMineLanding.outcome.effect, 'bump', 'ice no longer force-lands on a distant mine');
+assert.deepEqual(iceMineLanding.outcome.position, pos(0, 0), 'ice collision remains at origin');
+assert.equal(
+  iceMineLanding.state.itemState.b.consumed[1],
+  undefined,
+  'a mine beyond ice remains armed'
+);
 
 const iceBlockedByCollapse = resolveSpecial(baseMap({
   items: [
@@ -867,15 +896,35 @@ const iceBlockedByCollapse = resolveSpecial(baseMap({
 }), 'right', { itemState: { activeWalls: { 1: true } } });
 assert.deepEqual(
   iceBlockedByCollapse.outcome.position,
-  pos(0, 1),
-  'ice does not cross an active collapsed wall'
+  pos(0, 0),
+  'ice never crosses its own triggering segment'
 );
+const afterIceDissipates = turns.resolveTurnAction(
+  icePass.state,
+  'a',
+  { type: 'move', direction: 'right' },
+  101
+);
+assert.ok(afterIceDissipates, 'movement resolves after ice dissipates');
+assert.deepEqual(afterIceDissipates.outcome.position, pos(0, 1), 'consumed ice is passable');
+assert.equal(afterIceDissipates.outcome.moves, 3, 'the next ordinary input costs one more move');
 
 const windPass = resolveSpecial(baseMap({
   items: [specialWall('windWall', 0, 0, 'right', { effectDirection: 'down' })],
 }));
-assert.deepEqual(windPass.outcome.position, pos(1, 1), 'wind pushes in selected direction');
-assert.equal(windPass.state.itemState.b.consumed[0], true, 'wind wall is consumed after its first push');
+assert.equal(windPass.outcome.effect, 'bump', 'wind blocks the triggering crossing');
+assert.deepEqual(windPass.outcome.position, pos(1, 0), 'wind rebounds from origin in its selected direction');
+assert.equal(windPass.state.itemState.b.consumed[0], true, 'wind wall is consumed after its first collision');
+
+const windDefaultsToInput = resolveSpecial(baseMap({
+  items: [specialWall('windWall', 0, 0)],
+}));
+assert.equal(windDefaultsToInput.outcome.effect, 'bump', 'wind remains a collision when direction is omitted');
+assert.deepEqual(
+  windDefaultsToInput.outcome.position,
+  pos(0, 1),
+  'wind defaults to the attempted direction and rebounds from origin'
+);
 
 const windReverse = resolveSpecial(baseMap({
   items: [specialWall('windWall', 0, 0, 'right', { effectDirection: 'left' })],
@@ -883,7 +932,7 @@ const windReverse = resolveSpecial(baseMap({
 assert.deepEqual(
   windReverse.outcome.position,
   pos(0, 0),
-  'reverse wind crosses its own triggering segment instead of blocking itself'
+  'wind stays at origin when its rebound leaves the board'
 );
 const windAfterDissipating = turns.resolveTurnAction(
   windReverse.state,
@@ -895,20 +944,46 @@ assert.ok(windAfterDissipating, 'movement resolves after reverse wind dissipates
 assert.deepEqual(windAfterDissipating.outcome.position, pos(0, 1), 'consumed wind no longer pushes');
 
 const blockedWindPush = resolveSpecial(baseMap({
-  items: [specialWall('windWall', 0, 0, 'right', { effectDirection: 'up' })],
+  obstacles: [{ position: pos(0, 0), direction: 'down' }],
+  items: [specialWall('windWall', 0, 0, 'right', { effectDirection: 'down' })],
 }));
-assert.deepEqual(blockedWindPush.outcome.position, pos(0, 1), 'wind stays on the crossed cell when push leaves the board');
+assert.deepEqual(blockedWindPush.outcome.position, pos(0, 0), 'wind stays at origin when a static wall blocks its rebound');
 assert.match(blockedWindPush.state.turnMessage, /밀릴 칸이 막혀/, 'blocked wind message describes the actual outcome');
-assert.equal(blockedWindPush.state.itemState.b.consumed[0], true, 'blocked wind still dissipates after crossing');
+assert.equal(blockedWindPush.state.itemState.b.consumed[0], true, 'blocked wind still dissipates after collision');
+
+const dynamicallyBlockedWindPush = resolveSpecial(baseMap({
+  items: [
+    specialWall('windWall', 0, 0, 'right', { effectDirection: 'down' }),
+    specialWall('collapseWall', 0, 0, 'down'),
+  ],
+}), 'right', { itemState: { activeWalls: { 1: true } } });
+assert.deepEqual(
+  dynamicallyBlockedWindPush.outcome.position,
+  pos(0, 0),
+  'wind stays at origin when an active dynamic wall blocks its rebound'
+);
+assert.equal(dynamicallyBlockedWindPush.state.itemState.b.consumed[0], true, 'blocked wind is consumed');
+assert.equal(
+  dynamicallyBlockedWindPush.state.itemState.b.consumed[1],
+  undefined,
+  'the blocking dynamic wall is not consumed by the rebound'
+);
+
+const windGoalFallback = resolveSpecial(baseMap({
+  endPosition: pos(1, 0),
+  items: [specialWall('windWall', 0, 0, 'right', { effectDirection: 'down' })],
+}));
+assert.deepEqual(windGoalFallback.outcome.position, pos(0, 0), 'wind cannot rebound directly onto the goal');
+assert.equal(windGoalFallback.outcome.reachedGoal, false, 'a wind rebound cannot finish the run');
 
 const windSmokeLanding = resolveSpecial(baseMap({
   items: [
     specialWall('windWall', 0, 0, 'right', { effectDirection: 'down' }),
-    smoke(1, 1),
+    smoke(1, 0),
   ],
 }));
 assert.equal(windSmokeLanding.outcome.effect, 'smoke', 'wind final landing triggers smoke');
-assert.deepEqual(windSmokeLanding.outcome.position, pos(1, 1), 'smoke keeps the wind landing cell');
+assert.deepEqual(windSmokeLanding.outcome.position, pos(1, 0), 'smoke keeps the wind rebound cell');
 assert.equal(windSmokeLanding.state.itemState.b.consumed[1], true, 'wind landing smoke is consumed');
 assert.equal(
   windSmokeLanding.state.visionEffectsByPlayer.a.type,
@@ -919,7 +994,7 @@ assert.equal(
 const windWormholeLanding = resolveSpecial(baseMap({
   items: [
     specialWall('windWall', 0, 0, 'right', { effectDirection: 'down' }),
-    wormhole(pos(1, 1), pos(3, 3)),
+    wormhole(pos(1, 0), pos(3, 3)),
   ],
 }));
 assert.equal(windWormholeLanding.outcome.effect, 'wormhole', 'wind final landing triggers a wormhole');
@@ -1042,10 +1117,10 @@ const thornHit = resolveSpecial(
   'right',
   {
     position: pos(0, 2),
-    history: [pos(0, 0), pos(0, 1), pos(0, 2)],
+    history: [pos(5, 5), pos(4, 5), pos(0, 2)],
   }
 );
-assert.deepEqual(thornHit.outcome.position, pos(0, 1), 'thorn uses actual two-turn history');
+assert.deepEqual(thornHit.outcome.position, pos(0, 1), 'thorn rebounds one cell opposite the attempted input');
 assert.equal(thornHit.state.itemState.b.consumed[0], true, 'thorn is consumed');
 
 const thornSmokeLanding = resolveSpecial(
@@ -1056,34 +1131,72 @@ const thornSmokeLanding = resolveSpecial(
     history: [pos(0, 0), pos(0, 1), pos(0, 2)],
   }
 );
-assert.equal(thornSmokeLanding.outcome.effect, 'smoke', 'thorn rewind final landing triggers smoke');
-assert.deepEqual(thornSmokeLanding.outcome.position, pos(0, 1), 'thorn landing smoke keeps rewind cell');
+assert.equal(thornSmokeLanding.outcome.effect, 'smoke', 'thorn rebound landing triggers smoke');
+assert.deepEqual(thornSmokeLanding.outcome.position, pos(0, 1), 'thorn landing smoke keeps rebound cell');
 assert.equal(thornSmokeLanding.state.itemState.b.consumed[0], true, 'thorn remains consumed');
 assert.equal(thornSmokeLanding.state.itemState.b.consumed[1], true, 'thorn landing smoke is consumed');
 
 const thornSafeFallback = resolveSpecial(
   baseMap({
-    obstacles: [
-      { position: pos(1, 0), direction: 'right' },
-      { position: pos(1, 0), direction: 'down' },
-    ],
+    obstacles: [{ position: pos(0, 0), direction: 'right' }],
     items: [
       specialWall('thornWall', 0, 1),
-      specialWall('collapseWall', 1, 0, 'up'),
     ],
   }),
   'right',
   {
     position: pos(0, 1),
-    history: [pos(1, 0), pos(0, 1)],
-    itemState: { activeWalls: { 1: true } },
+    history: [pos(1, 1), pos(0, 1)],
   }
 );
 assert.deepEqual(
   thornSafeFallback.outcome.position,
   pos(0, 1),
-  'thorn stays at origin when active walls isolate rewind position'
+  'thorn stays at origin when a static wall blocks the opposite step'
 );
+
+const thornDynamicFallback = resolveSpecial(
+  baseMap({
+    items: [
+      specialWall('thornWall', 0, 1),
+      specialWall('collapseWall', 0, 0),
+    ],
+  }),
+  'right',
+  {
+    position: pos(0, 1),
+    history: [pos(1, 1), pos(0, 1)],
+    itemState: { activeWalls: { 1: true } },
+  }
+);
+assert.deepEqual(
+  thornDynamicFallback.outcome.position,
+  pos(0, 1),
+  'thorn stays at origin when an active dynamic wall blocks the opposite step'
+);
+assert.equal(thornDynamicFallback.state.itemState.b.consumed[0], true, 'dynamically blocked thorn is consumed');
+assert.equal(
+  thornDynamicFallback.state.itemState.b.consumed[1],
+  undefined,
+  'the dynamic rebound blocker remains active'
+);
+
+const thornBoundaryFallback = resolveSpecial(
+  baseMap({ items: [specialWall('thornWall', 0, 0)] })
+);
+assert.deepEqual(thornBoundaryFallback.outcome.position, pos(0, 0), 'thorn stays at origin at the board edge');
+assert.equal(thornBoundaryFallback.state.itemState.b.consumed[0], true, 'boundary thorn is consumed');
+
+const thornGoalFallback = resolveSpecial(
+  baseMap({
+    endPosition: pos(0, 1),
+    items: [specialWall('thornWall', 0, 2)],
+  }),
+  'right',
+  { position: pos(0, 2), history: [pos(0, 2)] }
+);
+assert.deepEqual(thornGoalFallback.outcome.position, pos(0, 2), 'thorn cannot rebound directly onto the goal');
+assert.equal(thornGoalFallback.outcome.reachedGoal, false, 'a thorn rebound cannot finish the run');
 const anchoredThornSafeFallback = turns.resolveTurnAction(
   skillRuntimeState(
     'anchor',
@@ -1624,17 +1737,21 @@ assert.ok(collapsed, 'unsafe legacy wormhole turn resolves');
 assert.deepEqual(collapsed.state.players.a.position, pos(0, 0), 'unsafe wormhole returns to origin');
 assert.match(collapsed.outcome.message, /붕괴/, 'unsafe wormhole reports collapse');
 
-const terminalGoalMap = baseMap({
-  endPosition: pos(0, 2),
-  items: [specialWall('iceWall', 0, 0), mine(0, 2)],
+const forcedGoalFallbackMap = baseMap({
+  endPosition: pos(5, 4),
+  items: [specialWall('mirrorWall', 0, 0), mine(5, 4)],
 });
-const terminalGoal = resolveSpecial(terminalGoalMap);
-assert.equal(terminalGoal.outcome.reachedGoal, true, 'forced movement checks the final goal cell');
-assert.deepEqual(terminalGoal.outcome.position, pos(0, 2), 'goal arrival wins before malformed goal trap');
+const forcedGoalFallback = resolveSpecial(forcedGoalFallbackMap);
+assert.equal(forcedGoalFallback.outcome.reachedGoal, false, 'forced movement cannot finish on the goal');
+assert.deepEqual(
+  forcedGoalFallback.outcome.position,
+  pos(0, 1),
+  'a goal-targeted forced effect falls back to the ordinary crossed cell'
+);
 assert.equal(
-  terminalGoal.state.itemState?.b?.consumed?.[1],
+  forcedGoalFallback.state.itemState?.b?.consumed?.[1],
   undefined,
-  'goal-terminal ordering does not consume a trap on the goal'
+  'a trap on the rejected forced destination remains armed'
 );
 
 const finalTurnState = {
@@ -1774,12 +1891,18 @@ const ordinaryIceWall = turns.resolveTurnAction(
   { type: 'move', direction: 'right' },
   206
 );
-assert.ok(ordinaryIceWall, 'legacy anchor map resolves forced wall movement');
-assert.deepEqual(ordinaryIceWall.outcome.position, pos(0, 2), 'retired anchor cannot cancel ice sliding');
+assert.ok(ordinaryIceWall, 'legacy anchor map resolves ice wall movement');
+assert.deepEqual(ordinaryIceWall.outcome.position, pos(0, 0), 'retired anchor cannot cancel an ice block');
+assert.equal(ordinaryIceWall.outcome.moves, 2, 'retired anchor cannot cancel the ice move penalty');
 
 const practiceAiItemTypes = new Set();
 for (const [index, map] of practice.PRACTICE_MAP_TEMPLATES.entries()) {
   assert.equal(utils.isValidMap(map), true, `practice template ${index + 1} remains valid`);
+  assert.equal(
+    utils.isValidNewMap(map),
+    true,
+    `practice template ${index + 1} uses only the active new-map catalog`
+  );
   assert.equal(
     utils.getMapBudgetUsed(map),
     utils.MAX_OBSTACLES,
@@ -1796,11 +1919,13 @@ for (const [index, map] of practice.PRACTICE_MAP_TEMPLATES.entries()) {
     utils.DEFAULT_MAZE_SKILL,
     `practice template ${index + 1} keeps only the inert V3 compatibility loadout`
   );
-  assert.equal(
-    (map.items || []).some((item) => item.type === 'radar'),
-    false,
-    `practice template ${index + 1} does not include the retired radar`
-  );
+  for (const retiredItemType of utils.RETIRED_NEW_MAP_ITEM_TYPES) {
+    assert.equal(
+      (map.items || []).some((item) => item.type === retiredItemType),
+      false,
+      `practice template ${index + 1} does not include retired ${retiredItemType}`
+    );
+  }
 }
 for (let index = 0; index < 3; index += 1) {
   for (const item of practice.createAiPracticeMap(index).items || []) {
@@ -1810,9 +1935,9 @@ for (let index = 0; index < 3; index += 1) {
 assert.deepEqual(
   [...practiceAiItemTypes].sort(),
   Object.keys(utils.ITEM_COSTS)
-    .filter((itemType) => itemType !== 'radar' && !utils.isRetiredNewMapItemType(itemType))
+    .filter((itemType) => !utils.isRetiredNewMapItemType(itemType))
     .sort(),
-  'the three AI maps use every currently available trap and special wall except radar'
+  'the three AI maps use every currently available trap and special wall'
 );
 
 function simulatePracticeState(initialState, label) {

@@ -54,7 +54,7 @@ const ITEM_COSTS = {
   smoke: 1,
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 3,
+  poisonWall: 2,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,
@@ -555,7 +555,13 @@ async function main() {
     (error) => error?.code === 'invalid-command',
     'new Authority maps reject radar',
   );
-  for (const retiredWall of ['collapseWall', 'mirrorWall']) {
+  for (const retiredWall of [
+    'steelWall',
+    'collapseWall',
+    'phaseWall',
+    'mirrorWall',
+    'crystalWall',
+  ]) {
     assert.throws(
       () => client.buildMazeAuthoritySubmitMapCommand({
         ...fence,
@@ -1212,7 +1218,14 @@ async function main() {
   assert.equal(endedView.gameState.maps[OWNER].items[0].type, 'collapseWall');
   assert.equal(endedView.gameState.maps[OWNER].items[1].type, 'mirrorWall');
   assert.equal(endedView.gameState.maps[OWNER].items[2].type, 'radar');
-  for (const retiredWall of ['radar', 'collapseWall', 'mirrorWall']) {
+  for (const retiredWall of [
+    'radar',
+    'steelWall',
+    'collapseWall',
+    'phaseWall',
+    'mirrorWall',
+    'crystalWall',
+  ]) {
     assert.ok(
       Object.prototype.hasOwnProperty.call(endedView.ruleSnapshot.itemCosts, retiredWall),
       `the legacy V3 rule snapshot keeps ${retiredWall} on the wire`,

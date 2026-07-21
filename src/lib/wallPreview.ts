@@ -12,10 +12,18 @@ export type WallActionPreviewType = WallItemType | 'wormhole';
 export interface WallActionPreviewPlan {
   type: WallActionPreviewType;
   kind: 'wall' | 'wormhole';
+  // `to` is the cell across the triggering wall. `result` is where the pawn
+  // actually ends after the wall effect; the new ice/wind/thorn rules can keep
+  // it on `from` or redirect it somewhere other than `to`.
   from: Position;
   to: Position;
+  result: Position;
   direction: Direction;
   resultDirection?: Direction;
+  effectDirection?: Direction;
+  effectBlocked?: boolean;
+  actionCost: 1 | 2;
+  wallConsumed: boolean;
   orientation?: 'horizontal' | 'vertical';
   wall?: WallPointerTarget;
   segment?: string;
@@ -25,6 +33,9 @@ export interface WallPreviewContext {
   obstacles: readonly Obstacle[];
   items: readonly MapItem[];
   reservedPositions?: readonly (Position | null | undefined)[];
+  goalPosition?: Position | null;
+  itemActiveWalls?: Readonly<Record<number, boolean>>;
+  previewEffectDirection?: Direction;
 }
 
 interface RankedWallCandidate {
@@ -55,6 +66,51 @@ function adjacentPosition(position: Position, direction: Direction): Position {
   if (direction === 'down') return { row: position.row + 1, col: position.col };
   if (direction === 'left') return { row: position.row, col: position.col - 1 };
   return { row: position.row, col: position.col + 1 };
+}
+
+function oppositeDirection(direction: Direction): Direction {
+  if (direction === 'up') return 'down';
+  if (direction === 'down') return 'up';
+  if (direction === 'left') return 'right';
+  return 'left';
+}
+
+function hasPermanentGoalPath(start: Position, context: WallPreviewContext): boolean {
+  const goal = context.goalPosition;
+  if (!goal) return true;
+
+  const permanentWalls = new Set<string>();
+  for (const obstacle of context.obstacles) {
+    const key = wallPreviewSegmentKey(obstacle, context.boardSize);
+    if (key) permanentWalls.add(key);
+  }
+  for (let index = 0; index < context.items.length; index += 1) {
+    const item = context.items[index];
+    const permanent = item.type === 'steelWall' ||
+      (item.type === 'collapseWall' && !!context.itemActiveWalls?.[index]);
+    if (!permanent || !item.wallPosition || !item.wallDirection) continue;
+    const key = wallPreviewSegmentKey(
+      { position: item.wallPosition, direction: item.wallDirection },
+      context.boardSize,
+    );
+    if (key) permanentWalls.add(key);
+  }
+
+  const queue: Position[] = [{ ...start }];
+  const visited = new Set([positionKey(start)]);
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const current = queue[cursor];
+    if (samePosition(current, goal)) return true;
+    for (const direction of DIRECTIONS) {
+      const next = adjacentPosition(current, direction);
+      if (!isInsideBoard(next, context.boardSize) || visited.has(positionKey(next))) continue;
+      const segment = wallPreviewSegmentKey({ position: current, direction }, context.boardSize);
+      if (!segment || permanentWalls.has(segment)) continue;
+      visited.add(positionKey(next));
+      queue.push(next);
+    }
+  }
+  return false;
 }
 
 function canonicalWall(
@@ -185,19 +241,97 @@ function resultDirectionFor(candidate: RankedWallCandidate, context: WallPreview
   ) || candidate.wall.direction;
 }
 
+function redirectedResult(
+  from: Position,
+  direction: Direction,
+  context: WallPreviewContext,
+): { position: Position; blocked: boolean } {
+  const destination = adjacentPosition(from, direction);
+  if (!isInsideBoard(destination, context.boardSize)) {
+    return { position: { ...from }, blocked: true };
+  }
+  if (context.goalPosition && samePosition(destination, context.goalPosition)) {
+    return { position: { ...from }, blocked: true };
+  }
+
+  const redirectSegment = wallPreviewSegmentKey({ position: from, direction }, context.boardSize);
+  if (
+    !redirectSegment ||
+    occupiedWallKeys(context).has(redirectSegment)
+  ) {
+    return { position: { ...from }, blocked: true };
+  }
+  // The triggering wall is consumed before the forced step, so it is
+  // intentionally not part of `context`. A same-direction wind may cross that
+  // just-removed segment. Static walls, other live wall items, bounds, goal,
+  // and loss of every permanent route still prevent the redirect.
+  if (!hasPermanentGoalPath(destination, context)) {
+    return { position: { ...from }, blocked: true };
+  }
+
+  return { position: destination, blocked: false };
+}
+
 function wallPlan(
   type: WallItemType,
   candidate: RankedWallCandidate,
   context: WallPreviewContext
 ): WallActionPreviewPlan {
   const direction = candidate.wall.direction;
+  const acrossWall = { ...candidate.to };
+  let result = acrossWall;
+  let effectDirection: Direction | undefined;
+  let effectBlocked: boolean | undefined;
+  let actionCost: 1 | 2 = 1;
+  const wallConsumed = [
+    'oneTimeWall',
+    'fireWall',
+    'poisonWall',
+    'iceWall',
+    'windWall',
+    'mirrorWall',
+    'thornWall',
+    'crystalWall',
+  ].includes(type);
+
+  if (type === 'iceWall') {
+    // The collision itself is blocked, and the penalty charges one additional
+    // action: one button press is represented as two actions total.
+    result = { ...candidate.from };
+    effectBlocked = true;
+    actionCost = 2;
+  } else if (type === 'windWall') {
+    effectDirection = context.previewEffectDirection || 'right';
+    const redirected = redirectedResult(candidate.from, effectDirection, context);
+    result = redirected.position;
+    effectBlocked = redirected.blocked;
+  } else if (type === 'thornWall') {
+    effectDirection = oppositeDirection(direction);
+    const rebounded = redirectedResult(candidate.from, effectDirection, context);
+    result = rebounded.position;
+    effectBlocked = rebounded.blocked;
+  } else if (
+    type === 'oneTimeWall' ||
+    type === 'steelWall' ||
+    type === 'fireWall' ||
+    type === 'crystalWall'
+  ) {
+    result = { ...candidate.from };
+    effectBlocked = true;
+  }
+
   return {
     type,
     kind: 'wall',
     from: candidate.from,
     to: candidate.to,
+    result,
     direction,
     ...(type === 'poisonWall' ? { resultDirection: resultDirectionFor(candidate, context) } : {}),
+    ...(effectDirection ? { effectDirection } : {}),
+    ...(effectBlocked !== undefined ? { effectBlocked } : {}),
+    actionCost,
+    wallConsumed,
     orientation: direction === 'right' ? 'vertical' : 'horizontal',
     wall: candidate.wall,
     segment: wallPreviewSegmentKey(candidate.wall, context.boardSize) || undefined,
@@ -299,7 +433,10 @@ function findWormholeActionPreviewPlan(context: WallPreviewContext): WallActionP
     kind: 'wormhole',
     from,
     to,
+    result: { ...to },
     direction: 'right',
+    actionCost: 1,
+    wallConsumed: false,
   };
 }
 

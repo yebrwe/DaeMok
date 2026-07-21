@@ -249,16 +249,34 @@ assert.equal(
   'the supported-wall catalog must feed the rendered palette',
 );
 assert.match(setupSource, /paletteItems\.map\(/u, 'GameSetup must render the guarded palette catalog');
-for (const retiredType of ['radar', 'collapseWall', 'mirrorWall']) {
+const retiredEditorTypes = [
+  'radar',
+  'steelWall',
+  'collapseWall',
+  'phaseWall',
+  'mirrorWall',
+  'crystalWall',
+];
+assert.deepEqual(
+  new Set(arrayStringValues(setupSourceFile, 'RETIRED_EDITOR_ITEM_TYPES')),
+  new Set(retiredEditorTypes),
+  'restored drafts must use the complete retired-item catalog',
+);
+assert.match(
+  setupSource,
+  /!RETIRED_EDITOR_ITEM_TYPES\.includes\(item\.type\)/u,
+  'restored drafts must strip the retired-item catalog before editing',
+);
+assert.deepEqual(
+  new Set(arrayStringValues(setupSourceFile, 'RETIRED_WALLS_TO_ORDINARY')),
+  new Set(['steelWall', 'phaseWall', 'crystalWall']),
+  'retired wall-only items must preserve their segment as ordinary walls',
+);
+for (const retiredType of retiredEditorTypes) {
   assert.equal(
     newMapCatalog.includes(retiredType),
     false,
     `${retiredType} must not be exposed in the new-map palette`,
-  );
-  assert.match(
-    setupSource,
-    new RegExp(`item\\.type\\s*!==\\s*['"]${retiredType}['"]`, 'u'),
-    `${retiredType} must be stripped from a restored editable draft`,
   );
 }
 
@@ -270,8 +288,15 @@ const retiredTypes = findDeclaration(
 assert.ok(retiredTypes, 'the Authority submit boundary must declare retired map types');
 assert.deepEqual(
   new Set(literalTextsIn(retiredTypes)),
-  new Set(['radar', 'collapseWall', 'mirrorWall']),
-  'radar, collapseWall, and mirrorWall are retired from new submissions',
+  new Set([
+    'radar',
+    'steelWall',
+    'collapseWall',
+    'phaseWall',
+    'mirrorWall',
+    'crystalWall',
+  ]),
+  'the complete retired item catalog is rejected from new submissions',
 );
 const submittedMapParser = findDeclaration(
   clientSourceFile,

@@ -347,14 +347,18 @@ function deterministicFixtures() {
     {
       type: 'iceWall',
       verify(resolved) {
-        assert.deepEqual(resolved.outcome.position, position(0, 2));
+        assert.equal(resolved.outcome.effect, 'bump');
+        assert.deepEqual(resolved.outcome.position, position(0, 0));
+        assert.equal(resolved.outcome.moves, 2);
+        assert.equal(resolved.state.itemState.b.consumed[0], true);
       },
     },
     {
       type: 'windWall',
       extra: { effectDirection: 'down' },
       verify(resolved) {
-        assert.deepEqual(resolved.outcome.position, position(1, 1));
+        assert.equal(resolved.outcome.effect, 'bump');
+        assert.deepEqual(resolved.outcome.position, position(1, 0));
         assert.equal(resolved.state.itemState.b.consumed[0], true);
       },
     },
@@ -604,10 +608,10 @@ function deterministicFixtures() {
       },
     },
     {
-      name: 'thorn rewind transcript',
+      name: 'thorn opposite-direction rebound transcript',
       state: runtimeState(gameMap({ items: [wallItem('thornWall', 0, 1)] }), {
         position: position(0, 1),
-        history: [position(0, 0), position(0, 1)],
+        history: [position(5, 5), position(0, 1)],
       }),
       steps: [{ action: { type: 'move', direction: 'right' } }],
       verify(run) {

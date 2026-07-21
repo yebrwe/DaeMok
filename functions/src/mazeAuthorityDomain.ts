@@ -2093,7 +2093,12 @@ function reduceSubmitMap(
     );
   }
   if (getMapItems(command.map).some(
-    (item) => item.type === 'radar' || item.type === 'collapseWall' || item.type === 'mirrorWall',
+    (item) => item.type === 'radar'
+      || item.type === 'steelWall'
+      || item.type === 'collapseWall'
+      || item.type === 'phaseWall'
+      || item.type === 'mirrorWall'
+      || item.type === 'crystalWall',
   )) {
     fail(
       'failed-precondition',

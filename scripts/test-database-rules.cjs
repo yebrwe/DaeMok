@@ -264,9 +264,29 @@ async function main() {
   );
   assert.match(
     rulesDocument.rules.rooms.$roomId.ruleSnapshot.itemCosts.poisonWall['.validate'],
-    /newData\.val\(\) === 3/,
-    'database rules pin poison wall to cost 3'
+    /newData\.val\(\) === 2/,
+    'database rules pin poison wall to cost 2'
   );
+  const mapRules = rulesDocument.rules.rooms.$roomId.maps.$ownerId;
+  for (const retiredItemType of [
+    'radar',
+    'steelWall',
+    'collapseWall',
+    'phaseWall',
+    'mirrorWall',
+    'crystalWall',
+  ]) {
+    assert.match(
+      mapRules.item.type['.validate'],
+      new RegExp(`newData\\.val\\(\\) !== '${retiredItemType}'`, 'u'),
+      `legacy single-item writes reject ${retiredItemType}`
+    );
+    assert.match(
+      mapRules.items.$itemIndex.type['.validate'],
+      new RegExp(`newData\\.val\\(\\) !== '${retiredItemType}'`, 'u'),
+      `item-list writes reject ${retiredItemType}`
+    );
+  }
 
   const [owner, outsider, drawTarget] = await Promise.all([
     signUp('rules-owner'),
@@ -294,7 +314,7 @@ async function main() {
     )
   );
   const canonical = gameRules.createCanonicalGameRuleSnapshot();
-  assert.equal(canonical.itemCosts.poisonWall, 3, 'canonical poison wall cost is 3');
+  assert.equal(canonical.itemCosts.poisonWall, 2, 'canonical poison wall cost is 2');
   assert.equal(
     diceWormhole.isValidDiceWormholeChallenge(validWormholeChallenge()),
     true,
@@ -505,28 +525,25 @@ async function main() {
       items: [{ type: 'mine', position: { row: 2, col: 2 } }],
     })
   );
-  await expectDenied(
-    'retired collapse wall cannot be submitted to a legacy setup room',
-    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
-      ...validMap(),
-      items: [{
-        type: 'collapseWall',
-        wallPosition: { row: 2, col: 2 },
-        wallDirection: 'right',
-      }],
-    })
-  );
-  await expectDenied(
-    'retired mirror wall cannot be submitted to a legacy setup room',
-    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
-      ...validMap(),
-      items: [{
-        type: 'mirrorWall',
-        wallPosition: { row: 2, col: 2 },
-        wallDirection: 'right',
-      }],
-    })
-  );
+  for (const retiredWall of [
+    'steelWall',
+    'collapseWall',
+    'phaseWall',
+    'mirrorWall',
+    'crystalWall',
+  ]) {
+    await expectDenied(
+      `retired ${retiredWall} cannot be submitted to a legacy setup room`,
+      databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
+        ...validMap(),
+        items: [{
+          type: retiredWall,
+          wallPosition: { row: 2, col: 2 },
+          wallDirection: 'right',
+        }],
+      })
+    );
+  }
   await expectDenied(
     'retired radar cannot be submitted in an item list',
     databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
@@ -1539,9 +1556,9 @@ async function main() {
   );
 
   const tampered = clone(canonical);
-  tampered.itemCosts.poisonWall = 1;
+  tampered.itemCosts.poisonWall = 3;
   await expectDenied(
-    'room snapshot cannot restore the retired poison-wall cost',
+    'room snapshot cannot restore the previous poison-wall cost',
     databaseRequest(
       `rooms/tampered-${Date.now()}`,
       owner.token,

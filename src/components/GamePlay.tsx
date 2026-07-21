@@ -21,6 +21,7 @@ import {
   createLocalBoardVisualRoute,
   deriveLiveBoardVisualTransition,
   getActiveLocalBoardVia,
+  getWallReboundOutcomeVia,
   LocalBoardVisualRoute,
   LiveBoardVisualTransition,
 } from '@/lib/liveBoardVisuals';
@@ -273,12 +274,11 @@ const GamePlay: React.FC<GamePlayProps> = ({
             : false
       );
       setMessage(committed.message);
+      const reboundVia = getWallReboundOutcomeVia(committed);
 
       if (committed.effect === 'bump') {
         setLocalVisualRoute(createLocalBoardVisualRoute(
-          committed.wallEffect === 'thornWall' && !isSamePosition(committed.position, committed.origin)
-            ? [committed.origin]
-            : null,
+          reboundVia,
           committed.position,
           committed.moves
         ));
@@ -289,13 +289,17 @@ const GamePlay: React.FC<GamePlayProps> = ({
         });
       } else if (committed.effect === 'mine') {
         setLocalVisualRoute(createLocalBoardVisualRoute(
-          [committed.attempted, committed.origin],
+          reboundVia || [committed.attempted, committed.origin],
           committed.position,
           committed.moves
         ));
         fireFx({ type: 'mine', at: committed.itemPosition, delay: 0.35 });
       } else if (committed.effect === 'wormhole') {
-        setLocalVisualRoute(null);
+        setLocalVisualRoute(createLocalBoardVisualRoute(
+          reboundVia,
+          committed.position,
+          committed.moves
+        ));
         fireFx({
           type: 'wormhole',
           at: committed.itemPosition,
@@ -305,6 +309,12 @@ const GamePlay: React.FC<GamePlayProps> = ({
             ? { wormholeTransition: committed.wormholeTransition }
             : {}),
         });
+      } else if (reboundVia) {
+        setLocalVisualRoute(createLocalBoardVisualRoute(
+          reboundVia,
+          committed.position,
+          committed.moves
+        ));
       } else if (
         (committed.wallEffect === 'iceWall' ||
           committed.wallEffect === 'windWall' ||

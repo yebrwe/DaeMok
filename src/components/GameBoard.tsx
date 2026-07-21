@@ -132,6 +132,7 @@ interface GameBoardProps {
   validTargetCells?: Position[]; // 아이템 배치 시 안전하게 선택 가능한 셀
   revealedWalls?: Obstacle[]; // 탐지기로 밝혀낸 벽들 (일반 벽처럼 노란색으로 표시)
   placeMode?: 'wall' | ItemType;
+  previewEffectDirection?: Direction; // 바람벽 제작 방향 등 설치 미리보기 전용
   compact?: boolean; // 좁은 편집 화면에서 보드 전체가 팔레트 위에 보이도록 최대 셀 크기 제한
 }
 
@@ -157,6 +158,7 @@ const GameBoard: React.FC<GameBoardProps> = ({
   validTargetCells = [],
   revealedWalls = [],
   placeMode = 'wall',
+  previewEffectDirection,
   compact = false,
 }) => {
   // 탐지기로 밝혀진 벽인지 (1회성 벽도 일반 벽으로 위장되어 포함됨)
@@ -371,7 +373,10 @@ const GameBoard: React.FC<GameBoardProps> = ({
     obstacles: obstacles || [],
     items: items || [],
     reservedPositions: [startPosition, endPosition, pendingCell],
-  }), [endPosition, items, obstacles, pendingCell, startPosition]);
+    goalPosition: endPosition,
+    itemActiveWalls: itemActiveWalls || undefined,
+    previewEffectDirection,
+  }), [endPosition, itemActiveWalls, items, obstacles, pendingCell, previewEffectDirection, startPosition]);
   const suggestedActionPreview = useMemo<WallActionPreviewPlan | null>(() =>
     selectedPreviewType
       ? findSafeWallActionPreviewPlan(selectedPreviewType, wallPreviewContext)
@@ -388,6 +393,9 @@ const GameBoard: React.FC<GameBoardProps> = ({
   const activeActionPreview = hoveredWall && selectedWallType
     ? pointerActionPreview
     : suggestedActionPreview;
+  const activeActionPreviewSource = hoveredWall && selectedWallType
+    ? 'pointer'
+    : 'suggested';
   const suggestedGuideWall = selectedWallType && suggestedActionPreview?.wall
     ? suggestedActionPreview.wall
     : null;
@@ -432,22 +440,16 @@ const GameBoard: React.FC<GameBoardProps> = ({
         aria-hidden="true"
       >
         <ItemWallVisual type={selectedWallType} orientation={orientation} preview />
-        {(!activeActionPreview?.wall || !isSameWallSegment(
-          position,
-          direction,
-          activeActionPreview.wall.position,
-          activeActionPreview.wall.direction
-        )) && (
-          <span
-            className={`wall-guide-badge absolute rounded-full border border-cyan-100/80 bg-slate-950/90 px-1 py-px text-[7px] font-black leading-none text-cyan-100 shadow-sm ${
-              orientation === 'horizontal'
-                ? '-top-[9px] left-1/2 -translate-x-1/2'
-                : '-right-[16px] top-1/2 -translate-y-1/2'
-            }`}
-          >
-            예시
-          </span>
-        )}
+        <span
+          className={`wall-guide-badge absolute flex size-[13px] items-center justify-center rounded-full border border-cyan-100/80 bg-slate-950/90 text-[7px] font-black leading-none text-cyan-100 shadow-sm ${
+            orientation === 'horizontal'
+              ? '-top-[10px] left-1/2 -translate-x-1/2'
+              : '-right-[11px] top-1/2 -translate-y-1/2'
+          }`}
+          data-preview-step="trigger"
+        >
+          ②
+        </span>
       </div>
     );
   };
@@ -575,7 +577,11 @@ const GameBoard: React.FC<GameBoardProps> = ({
 
         {/* 선택한 벽/웜홀의 효과를 실제 맵 상태와 분리된 그림자 분신으로 재현 */}
         {gamePhase === GamePhase.SETUP && activeActionPreview && (
-          <WallActionPreview plan={activeActionPreview} position={position} />
+          <WallActionPreview
+            plan={activeActionPreview}
+            position={position}
+            source={activeActionPreviewSource}
+          />
         )}
       </div>
     );

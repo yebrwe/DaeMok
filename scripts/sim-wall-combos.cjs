@@ -7,8 +7,8 @@
  *   node scripts/sim-wall-combos.cjs --cost-sensitivity
  *   node scripts/sim-wall-combos.cjs --final-cost-sensitivity
  *
- * Main loadouts run on every trial. The 66 unordered pairs of ten special
- * walls plus fake wall and wormhole are assigned round-robin for synergy.
+ * Main loadouts run on every trial. Unordered pairs from the current simulated
+ * catalog are assigned round-robin for synergy.
  */
 
 'use strict';
@@ -31,16 +31,13 @@ const LOADOUT_SCENARIOS = [
 ];
 
 const COSTS = {
-  steel: 1,
   fire: 1,
-  poison: 1,
+  poison: 2,
   ice: 1,
   wind: 1,
   collapse: 1,
-  phase: 1,
   mirror: 5,
   thorn: 1,
-  crystal: 1,
   fake: 7,
   wormhole: 7,
 };
@@ -50,20 +47,20 @@ const COST_SENSITIVITY_BASE_COSTS = {
   fake: 5,
 };
 const WALL_KINDS = new Set(Object.keys(COSTS).filter((kind) => kind !== 'wormhole'));
-const PERSISTENT_EFFECTS = new Set(['ice', 'wind', 'mirror']);
+const PERSISTENT_EFFECTS = new Set(['mirror']);
 const ALL_KINDS = Object.keys(COSTS);
 
 const LOADOUTS = [
-  { id: 'special-3-balanced', kinds: ['steel', 'phase', 'thorn'] },
+  { id: 'special-3-balanced', kinds: ['fire', 'poison', 'thorn'] },
   { id: 'special-5-dynamic', kinds: ['fire', 'ice', 'wind', 'collapse', 'mirror'] },
-  { id: 'special-10-all', kinds: ['steel', 'fire', 'poison', 'ice', 'wind', 'collapse', 'phase', 'mirror', 'thorn', 'crystal'] },
-  { id: 'mixed-fake-3', kinds: ['fake', 'fire', 'crystal'] },
+  { id: 'special-7-active', kinds: ['fire', 'poison', 'ice', 'wind', 'collapse', 'mirror', 'thorn'] },
+  { id: 'mixed-fake-3', kinds: ['fake', 'fire', 'thorn'] },
   { id: 'mixed-wormhole-3', kinds: ['wormhole', 'ice', 'collapse'] },
-  { id: 'mixed-both-5', kinds: ['fake', 'wormhole', 'wind', 'phase', 'mirror'] },
+  { id: 'mixed-both-5', kinds: ['fake', 'wormhole', 'wind', 'collapse', 'mirror'] },
 ];
 const COST_SENSITIVITY_PAIRS = [
   ['collapse', 'fake'],
-  ['mirror', 'crystal'],
+  ['mirror', 'poison'],
   ['mirror', 'thorn'],
 ];
 const COST_INCREMENTS = [0, 1, 2];
@@ -337,11 +334,12 @@ function bestWindDirection(map, edge) {
   const [a, b] = EDGES[edge];
   const startDistances = bfsDistances(map.start, map.walls);
   const goalDistances = bfsDistances(map.goal, map.walls);
-  const expectedTarget = startDistances[a] <= startDistances[b] ? b : a;
-  let bestDirection = directionBetween(expectedTarget, startDistances[a] <= startDistances[b] ? a : b);
+  const expectedOrigin = startDistances[a] <= startDistances[b] ? a : b;
+  const expectedTarget = expectedOrigin === a ? b : a;
+  let bestDirection = directionBetween(expectedOrigin, expectedTarget) ^ 1;
   let bestScore = -1;
   for (let direction = 0; direction < 4; direction += 1) {
-    const target = neighborInDirection(expectedTarget, direction);
+    const target = neighborInDirection(expectedOrigin, direction);
     if (target >= 0 && goalDistances[target] > bestScore) {
       bestScore = goalDistances[target];
       bestDirection = direction;
@@ -401,14 +399,20 @@ function forcedStepBlocked(map, items, state, from, to, ignoredIndex = -1) {
 }
 
 function forcedDestination(map, items, state, item, from, target) {
-  let destination = target;
-  if (item.kind === 'ice' || item.kind === 'wind') {
-    const direction = item.kind === 'ice' ? directionBetween(from, target) : item.effectDirection;
-    const forced = neighborInDirection(target, direction);
+  let destination = ['ice', 'wind', 'thorn'].includes(item.kind) ? from : target;
+  if (item.kind === 'wind' || item.kind === 'thorn') {
+    const attemptedDirection = directionBetween(from, target);
+    const direction = item.kind === 'wind' ? item.effectDirection : attemptedDirection ^ 1;
+    const forced = neighborInDirection(from, direction);
     const triggeringIndex = items.indexOf(item);
-    if (forced >= 0 && !forcedStepBlocked(map, items, state, target, forced, triggeringIndex) && hasGoalPath(map, forced, items, state)) {
+    if (
+      forced >= 0 &&
+      forced !== map.goal &&
+      !forcedStepBlocked(map, items, state, from, forced, triggeringIndex) &&
+      hasGoalPath(map, forced, items, state)
+    ) {
       destination = forced;
-    }
+    } else destination = from;
   } else if (item.kind === 'mirror') {
     const mirrored = cellId(SIZE - 1 - rowOf(target), SIZE - 1 - colOf(target));
     if (hasGoalPath(map, mirrored, items, state)) destination = mirrored;
@@ -438,16 +442,22 @@ function plannerHasGoalPath(map, items, state, believed, position) {
 }
 
 function plannerForcedDestination(map, items, state, believed, item, from, target) {
-  let destination = target;
-  if (item.kind === 'ice' || item.kind === 'wind') {
-    const direction = item.kind === 'ice' ? directionBetween(from, target) : item.effectDirection;
-    const forced = neighborInDirection(target, direction);
+  let destination = ['ice', 'wind', 'thorn'].includes(item.kind) ? from : target;
+  if (item.kind === 'wind' || item.kind === 'thorn') {
+    const attemptedDirection = directionBetween(from, target);
+    const direction = item.kind === 'wind' ? item.effectDirection : attemptedDirection ^ 1;
+    const forced = neighborInDirection(from, direction);
     if (forced >= 0) {
-      const edge = EDGE_INDEX[target][forced];
+      const edge = EDGE_INDEX[from][forced];
       const triggeringIndex = items.indexOf(item);
       const predictedBlocked = believed[edge] ||
         matchingKnownWallIndex(items, state, edge, triggeringIndex) >= 0;
-      if (!predictedBlocked && plannerHasGoalPath(map, items, state, believed, forced)) destination = forced;
+      if (
+        forced !== map.goal &&
+        !predictedBlocked &&
+        plannerHasGoalPath(map, items, state, believed, forced)
+      ) destination = forced;
+      else destination = from;
     }
   } else if (item.kind === 'mirror') {
     const mirrored = cellId(SIZE - 1 - rowOf(target), SIZE - 1 - colOf(target));
@@ -650,10 +660,8 @@ function runGame(map, policy, sourceItems, options = {}) {
         blocked = true;
       } else if (item.kind === 'fire') {
         blocked = true;
-        actionCost = 2;
         state.consumed[itemIndex] = 1;
       } else if (item.kind === 'poison') {
-        actionCost = 3;
         state.consumed[itemIndex] = 1;
       } else if (item.kind === 'collapse') {
         blocked = !!state.activeCollapse[itemIndex];
@@ -663,7 +671,11 @@ function runGame(map, policy, sourceItems, options = {}) {
           blocked = true;
           state.phaseOpen[itemIndex] = 1;
         }
-      } else if (item.kind === 'thorn') {
+      } else if (item.kind === 'ice') {
+        blocked = true;
+        actionCost = 2;
+        state.consumed[itemIndex] = 1;
+      } else if (item.kind === 'wind' || item.kind === 'thorn') {
         blocked = true;
         state.consumed[itemIndex] = 1;
       } else if (item.kind === 'crystal') {
@@ -675,12 +687,18 @@ function runGame(map, policy, sourceItems, options = {}) {
 
     if (blocked) {
       position = origin;
-      if (item?.kind === 'thorn') {
-        const rewind = history.length >= 2 ? history[history.length - 2] : history[0];
-        const canRewind = rewind !== origin && hasGoalPath(map, rewind, items, state);
-        if (canRewind) {
-          if (anchorEnabled && !state.anchorUsed) state.anchorUsed = true;
-          else position = rewind;
+      if (item?.kind === 'wind' || item?.kind === 'thorn') {
+        position = forcedDestination(map, items, state, item, origin, attempted);
+      }
+      if (position !== origin) {
+        const wormholeIndex = items.findIndex((entry, index) =>
+          entry.kind === 'wormhole' && !state.consumed[index] && entry.entrance === position);
+        if (wormholeIndex >= 0) {
+          state.consumed[wormholeIndex] = 1;
+          state.known[wormholeIndex] = 1;
+          activatedKinds.add('wormhole');
+          position = items[wormholeIndex].exit;
+          cellEffect = true;
         }
       }
       if (

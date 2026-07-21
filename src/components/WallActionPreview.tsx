@@ -7,8 +7,9 @@ import type { WallActionPreviewPlan } from '@/lib/wallPreview';
 interface WallActionPreviewProps {
   plan: WallActionPreviewPlan;
   position: Position;
+  source: 'suggested' | 'pointer';
 }
-type PreviewBehavior = 'block' | 'pass' | 'fire' | 'poison' | 'ice' | 'wind' | 'phase';
+type PreviewBehavior = 'block' | 'pass' | 'fire' | 'poison' | 'ice' | 'wind' | 'phase' | 'thorn';
 
 const BEHAVIORS: Record<WallItemType, PreviewBehavior> = {
   oneTimeWall: 'block',
@@ -20,7 +21,7 @@ const BEHAVIORS: Record<WallItemType, PreviewBehavior> = {
   collapseWall: 'pass',
   phaseWall: 'phase',
   mirrorWall: 'pass',
-  thornWall: 'block',
+  thornWall: 'thorn',
   crystalWall: 'block',
 };
 
@@ -67,7 +68,7 @@ function ShadowAvatar({
       className={`wall-shadow-clone ${className}`}
       data-shadow-clone={role}
       data-preview-animation={className}
-      style={motionStyle(plan.direction, plan.resultDirection)}
+      style={motionStyle(plan.direction, plan.effectDirection || plan.resultDirection)}
     >
       <span className="wall-shadow-head" />
       <span className="wall-shadow-body" />
@@ -81,7 +82,6 @@ function OriginPreview({ plan }: { plan: WallActionPreviewPlan }) {
       <>
         <span className="wall-preview-portal" data-preview-effect="dice-wormhole" />
         <ShadowAvatar className="wall-shadow-wormhole-enter" role="origin" plan={plan} />
-        <span className="wall-preview-caption wall-preview-caption-wormhole">굴려서 탈출</span>
       </>
     );
   }
@@ -91,10 +91,8 @@ function OriginPreview({ plan }: { plan: WallActionPreviewPlan }) {
     ? 'wall-shadow-fire-map'
     : behavior === 'poison'
       ? 'wall-shadow-pass-out'
-      : behavior === 'ice'
-        ? 'wall-shadow-pass-out'
-        : behavior === 'wind'
-          ? 'wall-shadow-pass-out'
+      : behavior === 'ice' || behavior === 'wind' || behavior === 'thorn'
+        ? 'wall-shadow-bump'
           : behavior === 'phase'
             ? 'wall-shadow-phase-origin'
             : behavior === 'pass'
@@ -121,42 +119,76 @@ function OriginPreview({ plan }: { plan: WallActionPreviewPlan }) {
           </span>
         </span>
       )}
-      {behavior === 'ice' && <span className="wall-preview-caption">한 칸 더</span>}
-      {behavior === 'wind' && <span className="wall-preview-caption">밀려남</span>}
-      {behavior === 'phase' && <span className="wall-preview-caption">막힘 ↔ 통과</span>}
     </>
   );
 }
 
+function resultLabel(plan: WallActionPreviewPlan): string {
+  if (plan.type === 'wormhole') return '③ 주사위 방';
+  if (plan.type === 'iceWall') return '③ 제자리 · 행동 2회 소모';
+  if (plan.type === 'windWall') {
+    return plan.effectBlocked
+      ? '③ 막힘 · 제자리'
+      : `③ ${DIRECTION_ARROWS[plan.effectDirection || plan.direction]} 1칸 재지정`;
+  }
+  if (plan.type === 'thornWall') {
+    return plan.effectBlocked
+      ? '③ 막힘 · 제자리'
+      : `③ ${DIRECTION_ARROWS[plan.effectDirection || plan.direction]} 1칸 튕김`;
+  }
+  if (plan.type === 'poisonWall') return '③ 방향 무작위';
+  if (plan.type === 'fireWall') return '③ 벽 기억 소각';
+  if (plan.type === 'phaseWall') return '③ 통과/차단 교대';
+  if (plan.type === 'crystalWall') return '③ 주변 벽 공개';
+  if (plan.type === 'steelWall') return '③ 항상 차단';
+  if (plan.type === 'oneTimeWall') return '③ 1회 차단';
+  return '③ 통과';
+}
+
 function DestinationPreview({ plan }: { plan: WallActionPreviewPlan }) {
+  const label = resultLabel(plan);
   if (plan.type === 'wormhole') {
     return (
-      <span className="wall-preview-dice" data-preview-effect="dice-roll" aria-hidden="true">
-        <span>●</span><span>●</span><span>●</span>
-      </span>
+      <>
+        <span className="wall-preview-dice" data-preview-effect="dice-roll" aria-hidden="true">
+          <span>●</span><span>●</span><span>●</span>
+        </span>
+        <span className="wall-preview-result-label" data-preview-step="result">{label}</span>
+      </>
     );
   }
 
   const behavior = BEHAVIORS[plan.type];
-  if (!['pass', 'poison', 'ice', 'wind', 'phase'].includes(behavior)) return null;
-
-  const destinationClass = behavior === 'poison'
+  const destinationClass = plan.effectBlocked
+    ? plan.type === 'iceWall'
+      ? 'wall-shadow-ice-penalty'
+      : 'wall-shadow-result-stay'
+    : behavior === 'poison'
     ? 'wall-shadow-poison-random'
-    : behavior === 'ice'
-      ? 'wall-shadow-ice-slide'
-      : behavior === 'wind'
-        ? 'wall-shadow-wind-push'
+    : behavior === 'wind' || behavior === 'thorn'
+      ? 'wall-shadow-redirect-in'
         : behavior === 'phase'
           ? 'wall-shadow-phase-destination'
           : 'wall-shadow-pass-in';
 
-  return <ShadowAvatar className={destinationClass} role="destination" plan={plan} />;
+  return (
+    <>
+      <ShadowAvatar className={destinationClass} role="destination" plan={plan} />
+      <span
+        className="wall-preview-result-label"
+        data-preview-step="result"
+        data-preview-result-label={label}
+      >
+        {label}
+      </span>
+    </>
+  );
 }
 
-export default function WallActionPreview({ plan, position }: WallActionPreviewProps) {
+export default function WallActionPreview({ plan, position, source }: WallActionPreviewProps) {
   const isOrigin = samePosition(position, plan.from);
-  const isDestination = samePosition(position, plan.to);
-  if (!isOrigin && !isDestination) return null;
+  const isResult = samePosition(position, plan.result);
+  if (!isOrigin && !isResult) return null;
 
   if (isOrigin) {
     return (
@@ -168,11 +200,21 @@ export default function WallActionPreview({ plan, position }: WallActionPreviewP
         data-preview-segment={plan.segment}
         data-preview-from={`${plan.from.row},${plan.from.col}`}
         data-preview-to={`${plan.to.row},${plan.to.col}`}
+        data-preview-result={`${plan.result.row},${plan.result.col}`}
+        data-preview-source={source}
+        data-preview-effect-direction={plan.effectDirection}
+        data-preview-effect-blocked={plan.effectBlocked === undefined ? undefined : String(plan.effectBlocked)}
+        data-preview-action-cost={plan.actionCost}
+        data-preview-wall-consumed={String(plan.wallConsumed)}
         data-preview-safe="true"
         data-preview-interactive="false"
         aria-hidden="true"
       >
+        <span className="wall-preview-stage-origin" data-preview-step="approach">
+          {source === 'pointer' ? '선택' : '추천'} · ① 접근
+        </span>
         <OriginPreview plan={plan} />
+        {isResult && <DestinationPreview plan={plan} />}
       </div>
     );
   }
@@ -181,6 +223,7 @@ export default function WallActionPreview({ plan, position }: WallActionPreviewP
     <div
       className="wall-action-preview-layer pointer-events-none absolute inset-0 z-20"
       data-wall-action-preview-companion={plan.type}
+      data-preview-result={`${plan.result.row},${plan.result.col}`}
       aria-hidden="true"
     >
       <DestinationPreview plan={plan} />

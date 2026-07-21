@@ -83,6 +83,22 @@ function advance(previous, position, moves = 1) {
   return next;
 }
 
+function moveOutcome(overrides = {}) {
+  return {
+    type: 'move',
+    direction: 'right',
+    origin: pos(1, 1),
+    attempted: pos(1, 2),
+    position: pos(1, 1),
+    moves: 1,
+    effect: 'bump',
+    consumedItemIndex: 0,
+    reachedGoal: false,
+    message: '',
+    ...overrides,
+  };
+}
+
 {
   const previous = stateWithPlayedItems();
   const next = advance(previous, pos(0, 1));
@@ -127,6 +143,41 @@ function advance(previous, position, moves = 1) {
 }
 
 {
+  assert.deepEqual(
+    visuals.getWallReboundOutcomeVia(moveOutcome({
+      wallEffect: 'windWall',
+      position: pos(2, 1),
+    })),
+    [pos(1, 2), pos(1, 1)],
+    'a blocking wind rebound approaches the collision and returns through its origin'
+  );
+  assert.deepEqual(
+    visuals.getWallReboundOutcomeVia(moveOutcome({
+      wallEffect: 'thornWall',
+      effect: 'mine',
+      itemPosition: pos(1, 0),
+      position: pos(0, 1),
+    })),
+    [pos(1, 2), pos(1, 1), pos(1, 0)],
+    'a rebound-triggered mine preserves collision, rebound landing, and rollback ordering'
+  );
+  assert.equal(
+    visuals.getWallReboundOutcomeVia(moveOutcome({ wallEffect: 'iceWall' })),
+    null,
+    'ice remains an origin bump without a synthetic movement route'
+  );
+  assert.equal(
+    visuals.getWallReboundOutcomeVia(moveOutcome({
+      wallEffect: 'windWall',
+      effect: 'move',
+      position: pos(2, 2),
+    })),
+    null,
+    'a legacy pass-through wind outcome keeps its existing forced-move route'
+  );
+}
+
+{
   const previous = stateWithPlayedItems();
   const next = advance(previous, pos(0, 0));
   next.collisionWalls.turn_1_runner_a = {
@@ -140,6 +191,74 @@ function advance(previous, position, moves = 1) {
   assert.equal(visual.action, 'bump');
   assert.deepEqual(visual.fx, { key: 2, type: 'bump', at: pos(0, 0), dir: 'right' });
   assert.equal(visual.via, null);
+}
+
+{
+  const previous = stateWithPlayedItems([
+    {
+      type: 'windWall',
+      wallPosition: pos(1, 1),
+      wallDirection: 'right',
+      effectDirection: 'down',
+    },
+    { type: 'smoke', position: pos(2, 1) },
+  ]);
+  previous.players['runner-a'].position = pos(1, 1);
+  const next = advance(previous, pos(2, 1));
+  next.itemState['runner-b'].consumed[0] = true;
+  next.itemState['runner-b'].consumed[1] = true;
+  const visual = visuals.deriveLiveBoardVisualTransition(previous, next, 'runner-a', 21);
+  assert.equal(visual.action, 'bump');
+  assert.deepEqual(visual.fx, {
+    key: 21,
+    type: 'bump',
+    at: pos(1, 1),
+    dir: 'right',
+  });
+  assert.deepEqual(
+    visual.via,
+    [pos(1, 2), pos(1, 1)],
+    'a projected consumed wind wall reconstructs its rebound even without a collision record'
+  );
+}
+
+{
+  const previous = stateWithPlayedItems([{
+    type: 'iceWall',
+    wallPosition: pos(1, 1),
+    wallDirection: 'right',
+  }]);
+  previous.players['runner-a'].position = pos(1, 1);
+  const next = advance(previous, pos(1, 1), 2);
+  next.itemState['runner-b'].consumed[0] = true;
+  const visual = visuals.deriveLiveBoardVisualTransition(previous, next, 'runner-a', 22);
+  assert.equal(visual.action, 'bump');
+  assert.deepEqual(visual.fx, {
+    key: 22,
+    type: 'bump',
+    at: pos(1, 1),
+    dir: 'right',
+  });
+  assert.equal(visual.via, null, 'ice never invents a rebound waypoint');
+}
+
+{
+  const previous = stateWithPlayedItems([{
+    type: 'windWall',
+    wallPosition: pos(1, 1),
+    wallDirection: 'right',
+    effectDirection: 'down',
+  }]);
+  previous.players['runner-a'].position = pos(1, 1);
+  const next = advance(previous, pos(2, 2));
+  next.itemState['runner-b'].consumed[0] = true;
+  const visual = visuals.deriveLiveBoardVisualTransition(previous, next, 'runner-a', 23);
+  assert.equal(visual.action, 'move');
+  assert.deepEqual(
+    visual.via,
+    [pos(1, 2)],
+    'legacy pass-through wind geometry remains compatible'
+  );
 }
 
 {

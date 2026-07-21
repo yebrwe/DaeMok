@@ -94,7 +94,7 @@ const EXPECTED_COSTS = {
   smoke: 1,
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 3,
+  poisonWall: 2,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,

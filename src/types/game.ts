@@ -108,7 +108,7 @@ export interface MapItem {
   // oneTimeWall: 일반 벽과 똑같이 한 번 막은 뒤, 다음 시도부터 통과되는 위장 벽 (벽 7개 소모)
   wallPosition?: Position;
   wallDirection?: Direction;
-  // windWall: 통과 뒤 밀려날 방향. 생략하면 벽을 통과한 이동 방향을 사용한다.
+  // windWall: 충돌한 원래 칸에서 튕겨날 방향. 생략하면 입력 방향을 사용한다.
   effectDirection?: Direction;
   // mine: 밟으면 2턴 전 위치로 되돌아감 (벽 1개 소모)
   // smoke: 밟으면 다음 유효 행동까지 주행 보드 시야가 가려짐 (벽 1개 소모)
