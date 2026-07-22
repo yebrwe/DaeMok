@@ -116,7 +116,7 @@ interface GameRoomProps {
 }
 
 const mapDraftStorageKey = (roomId: string, userId: string): string =>
-  `daemok:maze-map-draft:v4:${roomId}:${userId}`;
+  `daemok:maze-map-draft:v5:${roomId}:${userId}`;
 
 const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
   // 사용자 상태 확인

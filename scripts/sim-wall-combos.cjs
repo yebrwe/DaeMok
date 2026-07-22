@@ -38,13 +38,13 @@ const COSTS = {
   collapse: 1,
   mirror: 1,
   thorn: 1,
-  fake: 1,
+  fake: 7,
   wormhole: 7,
 };
 const COST_SENSITIVITY_BASE_COSTS = {
   ...COSTS,
   mirror: 2,
-  fake: 5,
+  fake: 7,
 };
 const WALL_KINDS = new Set(Object.keys(COSTS).filter((kind) => kind !== 'wormhole'));
 const PERSISTENT_EFFECTS = new Set(['mirror']);

@@ -37,7 +37,7 @@ function mapWithDetails(
   runnerGear: RunnerGear = 'none',
 ): GameMap {
   return {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition,
     endPosition,
     obstacles: [{ position: obstaclePosition, direction: 'right' }],
@@ -338,7 +338,7 @@ test('play projection publishes boundary-only public boards and only the member 
 
 test('illusion progress and its fixed return anchor stay hidden from every projection', () => {
   const ownerMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 5, col: 5 },
     obstacles: [],
@@ -347,7 +347,7 @@ test('illusion progress and its fixed return anchor stay hidden from every proje
     runnerGear: 'none',
   };
   const guestMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 2, col: 1 },
     endPosition: { row: 5, col: 5 },
     obstacles: [],
@@ -396,7 +396,7 @@ test('illusion progress and its fixed return anchor stay hidden from every proje
 
 test('poison projections expose status to the affected member but never serialize the private seed', () => {
   const ownerMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 5, col: 5 },
     obstacles: [],
@@ -405,7 +405,7 @@ test('poison projections expose status to the affected member but never serializ
     runnerGear: 'none',
   };
   const guestMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 2, col: 2 },
     endPosition: { row: 5, col: 5 },
     obstacles: [],
@@ -520,7 +520,7 @@ test('play wormhole projection exposes progress but never the hidden internal wa
   const state = startMatch(readyRoom(OWNER_DETAILED_MAP, GUEST_DETAILED_MAP));
   const entrance = { row: 0, col: 1 };
   state.gameState.maps![GUEST] = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 0, col: 3 },
     obstacles: [],
@@ -585,7 +585,7 @@ test('V2 wormhole projection exposes the complete dice puzzle only to its affect
   const state = startMatch(readyRoom(OWNER_DETAILED_MAP, GUEST_DETAILED_MAP));
   const entrance = { row: 5, col: 5 };
   state.gameState.maps![GUEST] = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: entrance,
     endPosition: { row: 5, col: 3 },
     obstacles: [],
@@ -638,7 +638,7 @@ test('V2 wormhole projection exposes the complete dice puzzle only to its affect
 
 test('collision projection keeps a consumed fake wall disguised as a discovered normal wall', () => {
   const ownerMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 0, col: 2 },
     obstacles: [],
@@ -651,7 +651,7 @@ test('collision projection keeps a consumed fake wall disguised as a discovered 
     runnerGear: 'none',
   };
   const guestMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 5, col: 5 },
     endPosition: { row: 4, col: 4 },
     obstacles: [{ position: { row: 5, col: 5 }, direction: 'left' }],
@@ -702,7 +702,7 @@ test('collision projection keeps a consumed fake wall disguised as a discovered 
 
 test('insight identifies a fake-wall collision only for its runner member view', () => {
   const ownerMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 0, col: 2 },
     obstacles: [],
@@ -711,7 +711,7 @@ test('insight identifies a fake-wall collision only for its runner member view',
     runnerGear: 'none',
   };
   const insightRunnerMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 5, col: 5 },
     endPosition: { row: 4, col: 4 },
     obstacles: [{ position: { row: 5, col: 5 }, direction: 'left' }],
@@ -720,7 +720,7 @@ test('insight identifies a fake-wall collision only for its runner member view',
     runnerGear: 'insight',
   };
   const fakeWallOwnerMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 2, col: 2 },
     endPosition: { row: 2, col: 4 },
     obstacles: [],
@@ -781,7 +781,7 @@ test('insight identifies a fake-wall collision only for its runner member view',
 
 test('end projection reveals every full map and final item state without reviving private history', () => {
   const ownerMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 0, col: 1 },
     obstacles: [{ position: { row: 4, col: 4 }, direction: 'right' }],
@@ -794,7 +794,7 @@ test('end projection reveals every full map and final item state without revivin
     runnerGear: 'insight',
   };
   const guestMap: GameMap = {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 0, col: 1 },
     obstacles: [{ position: { row: 3, col: 3 }, direction: 'right' }],

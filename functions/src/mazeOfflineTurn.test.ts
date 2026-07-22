@@ -22,7 +22,7 @@ const NOW = 1_000_000;
 
 function map(): GameMap {
   return {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 5, col: 5 },
     obstacles: [],

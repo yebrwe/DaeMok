@@ -1,3 +1,6 @@
+// GENERATED FILE. Edit the canonical source under src/ and regenerate.
+// Source: src/lib/gameTurn.ts
+
 import {
   CollisionWall,
   DiceWormholeRunState,
@@ -15,7 +18,7 @@ import {
   SpecialWallType,
   FireVisionEffect,
   WormholeRunState,
-} from '@/types/game';
+} from '../types/game';
 import {
   BOARD_SIZE,
   canMove,
@@ -32,13 +35,13 @@ import {
   isWallItemType,
   isValidWormholeChallenge,
   isWormholeExitSafe,
-} from '@/lib/gameUtils';
+} from './gameUtils';
 import {
   getDiceOrientationFaces,
   isDiceWormholePosition,
   isValidDiceWormholeChallenge,
   rollDiceOrientation,
-} from '@/lib/diceWormhole';
+} from './diceWormhole';
 
 function isLegacyWormholeRun(run: WormholeRunState): run is LegacyWormholeRunState {
   return run.challenge.version === 1 && isValidWormholeChallenge(run.challenge);

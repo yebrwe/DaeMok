@@ -115,7 +115,7 @@ export interface MazeSkillStateData {
 
 export interface MapItem {
   type: ItemType;
-  // oneTimeWall: 일반 벽과 똑같이 한 번 막은 뒤, 다음 시도부터 통과되는 위장 벽 (벽 1개 소모)
+  // oneTimeWall: 일반 벽과 똑같이 한 번 막은 뒤, 다음 시도부터 통과되는 위장 벽 (벽 7개 소모)
   wallPosition?: Position;
   wallDirection?: Direction;
   // windWall: 충돌한 원래 칸에서 튕겨날 방향. 생략하면 입력 방향을 사용한다.

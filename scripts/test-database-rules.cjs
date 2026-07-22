@@ -111,10 +111,10 @@ function createRoomPayload(ownerId, snapshot) {
     lastActivity: Date.now(),
     maxPlayers: 4,
     players: [ownerId],
-    rulesVersion: 4,
+    rulesVersion: 5,
     ruleSnapshot: snapshot,
     gameState: {
-      rulesVersion: 4,
+      rulesVersion: 5,
       matchNumber: 0,
       phase: 'setup',
       currentTurn: ownerId,
@@ -134,7 +134,7 @@ function createRoomPayload(ownerId, snapshot) {
 
 function validMap(skillLoadout = 'scoutPulse') {
   return {
-    rulesVersion: 4,
+    rulesVersion: 5,
     skillLoadout,
     runnerGear: 'none',
     startPosition: { row: 0, col: 0 },
@@ -272,7 +272,7 @@ async function main() {
     /https:\/\/lh3\.googleusercontent\.com/
   );
   const expectedWallCosts = {
-    oneTimeWall: 1,
+    oneTimeWall: 7,
     steelWall: 1,
     fireWall: 1,
     fogWall: 1,
@@ -503,12 +503,25 @@ async function main() {
   const missingBlockedCells = clone(mapWithWormholeChallenge);
   missingBlockedCells.items[0].challenge.blockedCells = [];
   await expectDenied(
-    'V2 wormhole challenge requires at least one blocked cell',
+    'new V5 wormhole challenge rejects an empty blocked-cell ledger',
     databaseRequest(
       `rooms/${roomId}/maps/${owner.uid}`,
       owner.token,
       'PUT',
       missingBlockedCells
+    )
+  );
+  const oneBlockedCell = clone(mapWithWormholeChallenge);
+  oneBlockedCell.items[0].challenge.blockedCells = [
+    oneBlockedCell.items[0].challenge.blockedCells[0],
+  ];
+  await expectDenied(
+    'new V5 wormhole challenge requires at least two blocked cells',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      oneBlockedCell
     )
   );
   const sparseBlockedCells = clone(mapWithWormholeChallenge);
@@ -526,15 +539,34 @@ async function main() {
       sparseBlockedCells
     )
   );
+  const fourBlockedCells = clone(mapWithWormholeChallenge);
+  fourBlockedCells.items[0].challenge.blockedCells.push({ row: 0, col: 0 });
+  assert.equal(
+    diceWormhole.isValidNewDiceWormholeChallenge(
+      fourBlockedCells.items[0].challenge
+    ),
+    true,
+    'four-blocked-cell database fixture must remain a valid V5 challenge'
+  );
+  await expectAllowed(
+    'V2 wormhole challenge allows four blocked cells',
+    databaseRequest(
+      `rooms/${roomId}/maps/${owner.uid}`,
+      owner.token,
+      'PUT',
+      fourBlockedCells
+    )
+  );
   const tooManyBlockedCells = clone(mapWithWormholeChallenge);
   tooManyBlockedCells.items[0].challenge.blockedCells = [
+    { row: 0, col: 0 },
     { row: 0, col: 1 },
     { row: 1, col: 0 },
-    { row: 2, col: 3 },
-    { row: 3, col: 2 },
+    { row: 1, col: 1 },
+    { row: 1, col: 2 },
   ];
   await expectDenied(
-    'V2 wormhole challenge rejects more than three blocked cells',
+    'V2 wormhole challenge rejects more than four blocked cells',
     databaseRequest(
       `rooms/${roomId}/maps/${owner.uid}`,
       owner.token,
@@ -697,8 +729,17 @@ async function main() {
     )
   );
   await expectDenied(
+    'V4 fake-wall cost cannot replace the V5 snapshot cost',
+    databaseRequest(
+      `rooms/${roomId}/ruleSnapshot/itemCosts/oneTimeWall`,
+      owner.token,
+      'PUT',
+      1
+    )
+  );
+  await expectDenied(
     'room rules version mutation',
-    databaseRequest(`rooms/${roomId}/rulesVersion`, owner.token, 'PUT', 5)
+    databaseRequest(`rooms/${roomId}/rulesVersion`, owner.token, 'PUT', 4)
   );
   await expectDenied(
     'match number cannot skip a room-local sequence',

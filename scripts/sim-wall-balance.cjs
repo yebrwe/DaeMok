@@ -41,7 +41,7 @@ const AGGRESSIVENESS = ['casual', 'adversarial'];
 const POLICIES = ['believer', 'adaptive', 'skeptic'];
 const PLACEMENT_MODES = ['strong', 'optimized'];
 const ITEM_DEFS = [
-  { id: 'fake', label: 'fake-wall', cost: 1 },
+  { id: 'fake', label: 'fake-wall', cost: 7 },
   { id: 'mine', label: 'mine', cost: 1 },
   { id: 'wormhole', label: 'wormhole', cost: 7 },
 ];

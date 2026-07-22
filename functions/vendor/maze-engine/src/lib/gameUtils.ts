@@ -1,3 +1,6 @@
+// GENERATED FILE. Edit the canonical source under src/ and regenerate.
+// Source: src/lib/gameUtils.ts
+
 import {
   CollisionWall,
   Direction,
@@ -13,11 +16,11 @@ import {
   SpecialWallType,
   WallItemType,
   WormholeChallenge,
-} from '@/types/game';
+} from '../types/game';
 import {
   getDiceWormholeChallengeError,
   isValidNewDiceWormholeChallenge,
-} from '@/lib/diceWormhole';
+} from './diceWormhole';
 
 // 보드 크기 상수
 export const BOARD_SIZE = 6;

@@ -1128,7 +1128,7 @@ test('receipt ledger stays bounded and a retained command remains replayable onl
   );
 });
 
-test('startMatch preserves the current V4 relay assignment and initialization contract', () => {
+test('startMatch preserves the current V5 relay assignment and initialization contract', () => {
   const ownerMap = simpleMap({ row: 0, col: 0 }, { row: 0, col: 1 }, 'scoutPulse');
   const guestMap = simpleMap({ row: 5, col: 5 }, { row: 5, col: 4 });
   const setup = readyTwoPlayerRoom(ownerMap, guestMap);
@@ -1225,7 +1225,7 @@ function applyTurnWithParity(
   now: number,
 ): MazeAuthorityState {
   const expected = resolveTurnAction(cloneJson(state.gameState), actorId, action, now);
-  assert.ok(expected, 'the canonical V4 engine must accept the parity action');
+  assert.ok(expected, 'the canonical V5 engine must accept the parity action');
   const reduction = reduceMazeAuthorityCommand(state, actorId, {
     type: 'turn',
     commandId,
@@ -1257,7 +1257,7 @@ function finishStartedRoomWithRealMoves(
   return state;
 }
 
-test('turn delegates to the generated V4 engine and preserves winner/end settlement parity', () => {
+test('turn delegates to the generated V5 engine and preserves winner/end settlement parity', () => {
   const finishMap = simpleMap({ row: 0, col: 0 }, { row: 0, col: 1 });
   let state = startMatch(readyTwoPlayerRoom(finishMap, finishMap));
 
@@ -1529,7 +1529,7 @@ test('V2 wormhole parsing keeps a strict run union while map validity stays cano
   expectDomainError(
     () => reduceMazeAuthorityCommand(setup, OWNER, command, 1_500),
     'failed-precondition',
-    'invalid-v4-map',
+    'invalid-v5-map',
   );
 });
 

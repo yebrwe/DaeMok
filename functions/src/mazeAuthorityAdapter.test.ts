@@ -141,7 +141,7 @@ function joinCommand(
 
 function simpleMap(): GameMap {
   return {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 0, col: 1 },
     obstacles: [],

@@ -421,9 +421,9 @@ async function poll(label, read, timeoutMs = 20_000) {
     const uidA = canonical.lobby.ownerId;
     const uidB = Object.keys(canonical.lobby.members).find((uid) => uid !== uidA);
     assert.ok(uidB, 'guest uid missing from canonical room');
-    assert.equal(canonical.gameState.maps[uidA].rulesVersion, 4);
+    assert.equal(canonical.gameState.maps[uidA].rulesVersion, 5);
     assert.equal(canonical.gameState.maps[uidA].runnerGear, 'wormholeEscapeKit');
-    assert.equal(canonical.gameState.maps[uidB].rulesVersion, 4);
+    assert.equal(canonical.gameState.maps[uidB].rulesVersion, 5);
     assert.equal(canonical.gameState.maps[uidB].runnerGear, 'insight');
     assert.equal(canonical.ruleSnapshot.wallBudget, 25);
     assert.equal(canonical.ruleSnapshot.runnerGearWallBudget, 15);

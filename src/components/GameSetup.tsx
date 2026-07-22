@@ -171,7 +171,7 @@ const SPECIAL_WALL_ITEMS: PlaceableItemType[] = [
 
 const ITEM_DESCRIPTIONS: Record<PlaceableItemType, string> = {
   oneTimeWall: '발동 전까지 무기한 정상벽으로 위장하고 처음 한 번만 막음',
-  wormhole: '4×4 방에서 주사위를 굴려 출구의 목표 윗면을 맞춰야 복귀',
+  wormhole: '장애물 2~4개의 4×4 방에서 주사위를 굴려 목표 윗면을 맞추는 최단 9~12행동 퍼즐',
   fireWall: '처음 막고 불을 붙여 발견한 벽을 지우고 4행동 동안 새 벽 기억도 태움',
   poisonWall: '통과 후 4행동의 방향을 매번 상·하·좌·우 중 하나로 무작위 변환',
   iceWall: '첫 충돌을 막고 소멸하며 이번 행동 수를 1 추가',

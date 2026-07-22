@@ -8,14 +8,14 @@ runtime evidence.
 
 ## Non-negotiable invariants
 
-- Game rules are V4: the board remains 6×6 and the base wall/item budget is 15.
+- Game rules are V5: the board remains 6×6 and the base wall/item budget is 15.
   Equipping no runner gear grants a 10-point bonus for a total budget of 25.
 - A runner equips at most one persistent match-long gear: `wormholeEscapeKit`
   skips the internal dice puzzle when a safe wormhole exit is available, while
   `insight` privately identifies a fake wall when that runner collides with it.
   Gear is not consumed and its selection remains secret from opponents and
   spectators during setup and play.
-- Outside the explicit V4 gear and budget changes, existing movement,
+- Outside the explicit V5 gear and budget changes, existing movement,
   collision, supported item/special-wall, finish, draw and 2–4-player relay
   assignment results remain byte-equivalent for the same input.
 - `collapseWall` and `mirrorWall` are retired for every newly submitted map.
@@ -100,7 +100,7 @@ runtime evidence.
 ## Delivery phases and evidence
 
 1. Engine foundation
-   - Generated Functions vendor is synchronized with canonical V4 sources.
+   - Generated Functions vendor is synchronized with canonical V5 sources.
    - Differential transcripts cover movement, every item/special wall, both
      persistent runner gears and terminal settlement.
 2. Server vertical slice

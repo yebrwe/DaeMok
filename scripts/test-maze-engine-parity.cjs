@@ -180,7 +180,7 @@ const LEGACY_WORMHOLE_CHALLENGE = {
 
 function gameMap(overrides = {}) {
   return {
-    rulesVersion: 4,
+    rulesVersion: 5,
     skillLoadout: 'scoutPulse',
     runnerGear: 'none',
     startPosition: position(0, 0),
@@ -207,7 +207,7 @@ function runtimeState(playedMap, options = {}) {
     items: options.ownItems || [],
   });
   return {
-    rulesVersion: 4,
+    rulesVersion: 5,
     matchNumber: 1,
     phase: 'play',
     currentTurn: 'a',
@@ -820,7 +820,7 @@ function assertCatalogParity(canonical, vendor) {
   assert.deepEqual(
     vendor.GameRules.createCanonicalGameRuleSnapshot(),
     canonical.GameRules.createCanonicalGameRuleSnapshot(),
-    'canonical V4 rule snapshot differs between browser and Functions vendor engines'
+    'canonical V5 rule snapshot differs between browser and Functions vendor engines'
   );
   for (const key of [
     'BOARD_SIZE',
@@ -848,6 +848,8 @@ function assertCatalogParity(canonical, vendor) {
   );
   for (const key of [
     'DICE_WORMHOLE_BOARD_SIZE',
+    'DICE_WORMHOLE_COMPAT_MIN_BLOCKED_CELLS',
+    'DICE_WORMHOLE_COMPAT_MAX_BLOCKED_CELLS',
     'DICE_WORMHOLE_MIN_BLOCKED_CELLS',
     'DICE_WORMHOLE_MAX_BLOCKED_CELLS',
     'DICE_WORMHOLE_MIN_STEPS',

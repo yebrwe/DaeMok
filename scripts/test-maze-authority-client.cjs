@@ -47,7 +47,7 @@ const gameUtils = loadTypeScript('src/lib/gameUtils.ts', {
 });
 
 const ITEM_COSTS = {
-  oneTimeWall: 1,
+  oneTimeWall: 7,
   mine: 1,
   wormhole: 7,
   radar: 4,
@@ -69,7 +69,7 @@ const ITEM_LIMITS = Object.fromEntries(Object.keys(ITEM_COSTS).map((key) => [key
 
 function ruleSnapshot() {
   return {
-    version: 4,
+    version: 5,
     wallBudget: 25,
     runnerGearWallBudget: 15,
     itemCosts: { ...ITEM_COSTS },
@@ -89,7 +89,7 @@ function isValidRuleSnapshot(value) {
 
 function isValidMapForRuleSnapshot(map, snapshot) {
   return isValidRuleSnapshot(snapshot)
-    && map?.rulesVersion === 4
+    && map?.rulesVersion === 5
     && ['none', 'wormholeEscapeKit', 'insight'].includes(map?.runnerGear)
     && ['scoutPulse', 'breach', 'anchor', 'dash'].includes(map?.skillLoadout)
     && Array.isArray(map?.obstacles)
@@ -104,7 +104,7 @@ function isValidNewMapForRuleSnapshot(map, snapshot) {
 
 function validMap(overrides = {}) {
   return {
-    rulesVersion: 4,
+    rulesVersion: 5,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 5, col: 5 },
     obstacles: [],
@@ -163,7 +163,7 @@ function baseView(audience, overrides = {}) {
     },
     ruleSnapshot: ruleSnapshot(),
     gameState: {
-      rulesVersion: 4,
+      rulesVersion: 5,
       matchNumber: 1,
       phase: 'play',
       players: {
@@ -183,7 +183,7 @@ function baseView(audience, overrides = {}) {
       maps: {
         [OWNER]: member
           ? {
-            rulesVersion: 4,
+            rulesVersion: 5,
             startPosition: { row: 0, col: 0 },
             endPosition: { row: 5, col: 5 },
             // Empty arrays are deliberately absent after RTDB persistence.
@@ -460,7 +460,7 @@ async function main() {
   assert.equal(
     normalizedSubmit.map.skillLoadout,
     'scoutPulse',
-    'the client normalizes stale skill drafts to the inert V4 compatibility value',
+    'the client normalizes stale skill drafts to the inert V5 compatibility value',
   );
   const insightSubmit = client.buildMazeAuthoritySubmitMapCommand({
     ...fence,
@@ -1343,7 +1343,7 @@ async function main() {
   endedLegacy.gameState.players[GUEST].finished = true;
   endedLegacy.gameState.maps = {
     [OWNER]: {
-      rulesVersion: 4,
+      rulesVersion: 5,
       startPosition: { row: 0, col: 0 },
       endPosition: { row: 5, col: 5 },
       skillLoadout: 'scoutPulse',
@@ -1365,7 +1365,7 @@ async function main() {
       },
     },
     [GUEST]: {
-      rulesVersion: 4,
+      rulesVersion: 5,
       startPosition: { row: 5, col: 5 },
       endPosition: { row: 0, col: 0 },
       skillLoadout: 'anchor',
@@ -1387,7 +1387,7 @@ async function main() {
   ]) {
     assert.ok(
       Object.prototype.hasOwnProperty.call(endedView.ruleSnapshot.itemCosts, retiredWall),
-      `the V4 read projection keeps ${retiredWall} on the wire`,
+      `the V5 read projection keeps ${retiredWall} on the wire`,
     );
   }
   const endedWithFullWormholeRun = clone(endedLegacy);
@@ -1439,7 +1439,7 @@ async function main() {
       status: 'closed',
     },
     gameState: {
-      rulesVersion: 4,
+      rulesVersion: 5,
       matchNumber: 1,
       phase: 'setup',
     },

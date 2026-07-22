@@ -1,6 +1,6 @@
 {
-  "name": "@daemok/maze-engine-v4",
-  "version": "4.0.0",
+  "name": "@daemok/maze-engine-v5",
+  "version": "5.0.0",
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts"

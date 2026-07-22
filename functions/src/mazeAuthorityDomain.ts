@@ -738,7 +738,7 @@ function parseWormholeChallenge(value: unknown, label: string): WormholeChalleng
     fail(
       'invalid-argument',
       `${label}-invalid`,
-      `The ${label} wormhole challenge violates the V4 rules.`,
+      `The ${label} wormhole challenge violates the V5 rules.`,
     );
   }
   return challenge;
@@ -947,7 +947,7 @@ function parseGameMap(value: unknown): GameMap {
     fail('invalid-argument', 'map-shape', 'The submitted map is malformed.');
   }
   if (value.rulesVersion !== GAME_RULES_VERSION) {
-    fail('invalid-argument', 'map-rules-version', 'The submitted map does not use V4 rules.');
+    fail('invalid-argument', 'map-rules-version', 'The submitted map does not use V5 rules.');
   }
   if (typeof value.skillLoadout !== 'string' || !MAZE_SKILLS.has(value.skillLoadout as MazeSkillId)) {
     fail('invalid-argument', 'map-skill', 'The submitted map skill is malformed.');
@@ -985,7 +985,7 @@ function parseGameMap(value: unknown): GameMap {
     && hasLegacyItem
     && Array.isArray(map.items)
     && map.item !== null) {
-    fail('invalid-argument', 'map-mixed-item-formats', 'A map cannot mix V4 and legacy item formats.');
+    fail('invalid-argument', 'map-mixed-item-formats', 'A map cannot mix V5 and legacy item formats.');
   }
   return map;
 }
@@ -2337,7 +2337,7 @@ function reduceSubmitMap(
     );
   }
   if (!isValidNewMapForRuleSnapshot(command.map, state.ruleSnapshot)) {
-    fail('failed-precondition', 'invalid-v4-map', 'The submitted map violates the room V4 rules.');
+    fail('failed-precondition', 'invalid-v5-map', 'The submitted map violates the room V5 rules.');
   }
   const next = withAdvancedMeta(cloneJson(state), now);
   const maps = next.gameState.maps || {};
@@ -2486,7 +2486,7 @@ function reduceTurn(
   }
   const resolution = resolveTurnAction(cloneJson(state.gameState), actorId, command.action, now);
   if (!resolution) {
-    fail('failed-precondition', 'turn-rejected', 'The V4 engine rejected the turn action.');
+    fail('failed-precondition', 'turn-rejected', 'The V5 engine rejected the turn action.');
   }
   const previousPoisonEffect = state.gameState.poisonEffectsByPlayer?.[actorId];
   const nextPoisonEffect = resolution.state.poisonEffectsByPlayer?.[actorId];

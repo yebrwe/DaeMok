@@ -226,7 +226,7 @@ assert.equal(utils.isValidMap(baseMap({ items: [radar(), radar()] })), false, 'r
 assert.equal(
   utils.isValidNewMap(baseMap({ skillLoadout: 'scoutPulse' })),
   true,
-  'new maps keep the inert V4 compatibility loadout'
+  'new maps keep the inert V5 compatibility loadout'
 );
 for (const retiredSkillLoadout of ['breach', 'anchor', 'dash']) {
   assert.equal(
@@ -375,9 +375,34 @@ assert.equal(
   'the fixed generator fallback is always a valid 4x4 dice challenge'
 );
 assert.equal(
+  diceWormhole.isValidNewDiceWormholeChallenge(diceWormhole.DICE_WORMHOLE_FALLBACK_CHALLENGE),
+  true,
+  'the fixed generator fallback satisfies the harder V5 authoring boundary'
+);
+assert.equal(
   diceWormhole.getDiceWormholeShortestSteps(diceWormhole.DICE_WORMHOLE_FALLBACK_CHALLENGE),
-  6,
-  'the fixed fallback has a six-action optimal solution'
+  10,
+  'the fixed fallback has a ten-action optimal solution'
+);
+
+const legacyDiceChallenge = {
+  version: 2,
+  boardSize: 4,
+  startPosition: pos(0, 0),
+  endPosition: pos(3, 3),
+  blockedCells: [pos(1, 1), pos(2, 2)],
+  initialOrientation: 0,
+  targetTop: 2,
+};
+assert.equal(
+  diceWormhole.isValidDiceWormholeChallenge(legacyDiceChallenge),
+  true,
+  'retained V4-difficulty challenge payloads remain readable in the V5 runtime'
+);
+assert.equal(
+  diceWormhole.isValidNewDiceWormholeChallenge(legacyDiceChallenge),
+  false,
+  'the easier V4 dice room cannot be submitted as a new V5 map'
 );
 
 for (let seed = 0; seed < 256; seed += 1) {
@@ -385,14 +410,14 @@ for (let seed = 0; seed < 256; seed += 1) {
   const repeated = diceWormhole.generateDiceWormholeChallenge(seed);
   assert.deepEqual(repeated, generated, `dice challenge seed ${seed} is deterministic`);
   assert.equal(
-    diceWormhole.isValidDiceWormholeChallenge(generated),
+    diceWormhole.isValidNewDiceWormholeChallenge(generated),
     true,
-    `dice challenge seed ${seed} satisfies the complete V2 contract`
+    `dice challenge seed ${seed} satisfies the harder V5 contract`
   );
   assert.equal(generated.boardSize, 4);
-  assert.ok(generated.blockedCells.length >= 1 && generated.blockedCells.length <= 3);
+  assert.ok(generated.blockedCells.length >= 2 && generated.blockedCells.length <= 4);
   const shortestSteps = diceWormhole.getDiceWormholeShortestSteps(generated);
-  assert.ok(shortestSteps >= 6 && shortestSteps <= 8, `seed ${seed} shortest route is 6-8 actions`);
+  assert.ok(shortestSteps >= 9 && shortestSteps <= 12, `seed ${seed} shortest route is 9-12 actions`);
 }
 
 const diceChallenge = diceWormhole.generateDiceWormholeChallenge(0xDAE0C);
@@ -401,7 +426,15 @@ assert.equal(utils.isValidWormholeChallenge(diceChallenge), true, 'generic valid
 assert.equal(
   utils.isValidNewMap(baseMap({ skillLoadout: 'scoutPulse', items: [diceWormholeItem] })),
   true,
-  'new maps accept an auto-generated V2 dice wormhole'
+  'new maps accept an auto-generated hard dice wormhole'
+);
+assert.equal(
+  utils.isValidNewMap(baseMap({
+    skillLoadout: 'scoutPulse',
+    items: [wormhole(pos(0, 1), pos(4, 4), legacyDiceChallenge)],
+  })),
+  false,
+  'new maps reject an easier persisted V4 dice challenge'
 );
 assert.equal(
   diceWormhole.getDiceWormholeChallengeError({ ...diceChallenge, boardSize: 6 }),
@@ -418,7 +451,7 @@ assert.equal(
 );
 
 const dicePath = diceWormhole.getDiceWormholeShortestPath(diceChallenge);
-assert.ok(dicePath && dicePath.length >= 6, 'generated challenge exposes an optimal orientation-aware route');
+assert.ok(dicePath && dicePath.length >= 9, 'generated challenge exposes a harder optimal orientation-aware route');
 const firstPathDirection = dicePath[0];
 const firstPathPosition = {
   row: diceChallenge.startPosition.row + (firstPathDirection === 'up' ? -1 : firstPathDirection === 'down' ? 1 : 0),

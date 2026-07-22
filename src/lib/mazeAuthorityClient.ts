@@ -17,8 +17,8 @@ import {
 } from '@/lib/gameUtils';
 import {
   DICE_WORMHOLE_BOARD_SIZE,
-  DICE_WORMHOLE_MAX_BLOCKED_CELLS,
-  DICE_WORMHOLE_MIN_BLOCKED_CELLS,
+  DICE_WORMHOLE_COMPAT_MAX_BLOCKED_CELLS,
+  DICE_WORMHOLE_COMPAT_MIN_BLOCKED_CELLS,
   isDiceOrientationId,
   isValidDiceWormholeChallenge,
 } from '@/lib/diceWormhole';
@@ -723,10 +723,10 @@ function parseDiceWormholeChallenge(value: unknown): DiceWormholeChallenge | nul
   const endPosition = parsePosition(value.endPosition, 0, DICE_WORMHOLE_BOARD_SIZE - 1);
   const rawBlockedCells = canonicalRtdbList(
     value.blockedCells,
-    DICE_WORMHOLE_MAX_BLOCKED_CELLS,
+    DICE_WORMHOLE_COMPAT_MAX_BLOCKED_CELLS,
   );
   if (!startPosition || !endPosition || !rawBlockedCells
-    || rawBlockedCells.length < DICE_WORMHOLE_MIN_BLOCKED_CELLS
+    || rawBlockedCells.length < DICE_WORMHOLE_COMPAT_MIN_BLOCKED_CELLS
     || !isDiceOrientationId(value.initialOrientation)
     || !integerInRange(value.targetTop, 1, 6)) return null;
   const blockedCells = rawBlockedCells.map((entry) => (
@@ -853,7 +853,7 @@ function parseSubmittedGameMap(value: unknown): GameMap | null {
 
 function canonicalRuleSnapshotForMapValidation(): GameRuleSnapshot {
   // The room projection is validated separately. This fixed snapshot prevents a
-  // caller from weakening V4 validation while constructing a submit command.
+  // caller from weakening V5 validation while constructing a submit command.
   return createCanonicalGameRuleSnapshot();
 }
 
@@ -1030,7 +1030,7 @@ export function buildMazeAuthoritySubmitMapCommand(
     ...fencedCommandInput(input),
     map: {
       ...input.map,
-      // V4 retains this compatibility field, but skills remain retired.
+      // V5 retains this compatibility field, but skills remain retired.
       skillLoadout: NEW_MAP_SKILL_LOADOUT,
       // Old local drafts predate runner gear; no gear is the safe compatible default.
       runnerGear: input.map.runnerGear ?? 'none',

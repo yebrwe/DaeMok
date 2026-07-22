@@ -1,10 +1,13 @@
+// GENERATED FILE. Edit the canonical source under src/ and regenerate.
+// Source: src/lib/diceWormhole.ts
+
 import type {
   DiceFace,
   DiceOrientationId,
   DiceWormholeChallenge,
   Direction,
   Position,
-} from '@/types/game';
+} from '../types/game';
 
 export const DICE_WORMHOLE_BOARD_SIZE = 4 as const;
 // V5 authored rooms are deliberately denser and require a substantially

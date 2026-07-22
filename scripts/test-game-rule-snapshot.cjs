@@ -63,7 +63,7 @@ function pos(row, col) {
 
 function baseMap(overrides = {}) {
   return {
-    rulesVersion: 4,
+    rulesVersion: 5,
     skillLoadout: 'scoutPulse',
     runnerGear: 'none',
     startPosition: pos(0, 0),
@@ -88,7 +88,7 @@ function safeWallCandidates() {
 }
 
 const EXPECTED_COSTS = {
-  oneTimeWall: 1,
+  oneTimeWall: 7,
   mine: 1,
   wormhole: 7,
   radar: 4,
@@ -118,10 +118,10 @@ const TOP_LEVEL_KEYS = [
 ];
 
 const canonical = rules.createCanonicalGameRuleSnapshot();
-assert.equal(canonical.version, 4, 'V4 snapshot');
-assert.equal(canonical.wallBudget, 25, 'V4 no-gear wall budget');
-assert.equal(canonical.runnerGearWallBudget, 15, 'V4 equipped runner-gear wall budget');
-assert.deepEqual(canonical.itemCosts, EXPECTED_COSTS, 'all 17 V4 item costs');
+assert.equal(canonical.version, 5, 'V5 snapshot');
+assert.equal(canonical.wallBudget, 25, 'V5 no-gear wall budget');
+assert.equal(canonical.runnerGearWallBudget, 15, 'V5 equipped runner-gear wall budget');
+assert.deepEqual(canonical.itemCosts, EXPECTED_COSTS, 'all 17 V5 item costs');
 assert.equal(Object.keys(canonical.itemCosts).length, 17, 'exactly 17 item costs');
 assert.deepEqual(
   canonical.itemLimits,
@@ -162,7 +162,7 @@ Object.defineProperty(hiddenExtraTopLevel, 'hidden', { value: true, enumerable: 
 assert.equal(rules.isValidGameRuleSnapshot(hiddenExtraTopLevel), false, 'hidden top-level key rejected');
 
 for (const [field, expected] of [
-  ['version', 3],
+  ['version', 4],
   ['wallBudget', 24],
   ['runnerGearWallBudget', 16],
   ['maxSkillLoadout', 2],
@@ -171,6 +171,14 @@ for (const [field, expected] of [
   changed[field] = expected;
   assert.equal(rules.isValidGameRuleSnapshot(changed), false, `${field} mutation rejected`);
 }
+
+const staleFakeWallCost = clone(second);
+staleFakeWallCost.itemCosts.oneTimeWall = 1;
+assert.equal(
+  rules.isValidGameRuleSnapshot(staleFakeWallCost),
+  false,
+  'V4 fake-wall cost is rejected by the V5 snapshot contract'
+);
 
 for (const recordName of ['itemCosts', 'itemLimits']) {
   const missing = clone(second);
@@ -250,7 +258,7 @@ for (const skillLoadout of EXPECTED_SKILLS) {
 assert.equal(
   rules.isValidNewMapForRuleSnapshot(baseMap(), second),
   true,
-  'new-map boundary accepts the inert V4 compatibility loadout'
+  'new-map boundary accepts the inert V5 compatibility loadout'
 );
 for (const retiredSkillLoadout of ['breach', 'anchor', 'dash']) {
   assert.equal(
@@ -264,7 +272,7 @@ const normalizedSkillMap = rules.normalizeNewMapForRuleSnapshot(
   second
 );
 assert.ok(normalizedSkillMap, 'stale skill drafts normalize at the trusted client boundary');
-assert.equal(normalizedSkillMap.skillLoadout, 'scoutPulse', 'normalized maps keep only V4 compatibility');
+assert.equal(normalizedSkillMap.skillLoadout, 'scoutPulse', 'normalized maps keep only V5 compatibility');
 assert.equal(normalizedSkillMap.runnerGear, 'none', 'normalized maps preserve explicit no-gear');
 
 const legacyRadarMap = baseMap({ items: [{ type: 'radar' }] });
@@ -361,7 +369,7 @@ assert.equal(
   'missing map rulesVersion rejected'
 );
 assert.equal(
-  rules.isValidMapForRuleSnapshot(baseMap({ rulesVersion: 3 }), second),
+  rules.isValidMapForRuleSnapshot(baseMap({ rulesVersion: 4 }), second),
   false,
   'mismatched map rulesVersion rejected'
 );
