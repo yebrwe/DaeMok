@@ -7,6 +7,7 @@ import {
 } from '../vendor/maze-engine/dist/lib/gameRules';
 import {
   resolveTurnAction,
+  sanitizeHiddenIllusionResolutionForPresentation,
   type TurnAction,
   type TurnOutcome,
 } from '../vendor/maze-engine/dist/lib/gameTurn';
@@ -34,6 +35,7 @@ import {
   type GameMap,
   type GameState,
   type ItemType,
+  type IllusionEffect,
   type MapItem,
   type MazeSkillId,
   type LegacyWormholeChallenge,
@@ -42,6 +44,7 @@ import {
   type Player,
   type PoisonEffect,
   type Position,
+  type RunnerGear,
   type VisionEffect,
   type WormholeChallenge,
   type WormholeRunState,
@@ -74,6 +77,7 @@ const DIRECTION_LABELS: Record<Direction, string> = {
   left: '왼쪽',
 };
 const MAZE_SKILLS = new Set<MazeSkillId>(['scoutPulse', 'breach', 'anchor', 'dash']);
+const RUNNER_GEARS = new Set<RunnerGear>(['none', 'wormholeEscapeKit', 'insight']);
 const ITEM_TYPES = new Set<ItemType>([
   'oneTimeWall',
   'mine',
@@ -90,6 +94,8 @@ const ITEM_TYPES = new Set<ItemType>([
   'mirrorWall',
   'thornWall',
   'crystalWall',
+  'fogWall',
+  'illusionWall',
 ]);
 const WALL_ITEM_TYPES = new Set<ItemType>([
   'oneTimeWall',
@@ -103,6 +109,8 @@ const WALL_ITEM_TYPES = new Set<ItemType>([
   'mirrorWall',
   'thornWall',
   'crystalWall',
+  'fogWall',
+  'illusionWall',
 ]);
 
 export type MazeAuthorityCommandType =
@@ -540,6 +548,28 @@ function parsePoisonEffect(value: unknown, label: string): PoisonEffect {
   };
 }
 
+function parseIllusionEffect(value: unknown, label: string): IllusionEffect {
+  const hasFirstWallOrigin = isPlainRecord(value)
+    && Object.prototype.hasOwnProperty.call(value, 'firstWallOrigin');
+  if (!isPlainRecord(value)
+    || !hasExactKeys(value, hasFirstWallOrigin
+      ? ['sourcePlayerId', 'appliedAtTurn', 'actionsRemaining', 'firstWallOrigin']
+      : ['sourcePlayerId', 'appliedAtTurn', 'actionsRemaining'])
+    || !validUid(value.sourcePlayerId)
+    || !isSafeIntegerInRange(value.appliedAtTurn, 0, Number.MAX_SAFE_INTEGER)
+    || !isSafeIntegerInRange(value.actionsRemaining, 1, 3)) {
+    fail('invalid-argument', `${label}-invalid`, `The ${label} illusion effect is malformed.`);
+  }
+  return {
+    sourcePlayerId: value.sourcePlayerId,
+    appliedAtTurn: value.appliedAtTurn,
+    actionsRemaining: value.actionsRemaining,
+    ...(hasFirstWallOrigin
+      ? { firstWallOrigin: parsePosition(value.firstWallOrigin, `${label}-first-wall-origin`) }
+      : {}),
+  };
+}
+
 function parseStoredVisionEffects(
   value: unknown,
 ): Record<string, VisionEffect> | null {
@@ -612,6 +642,42 @@ function parseStoredPoisonEffects(
   return parsed;
 }
 
+function parseStoredIllusionEffects(
+  value: unknown,
+): Record<string, IllusionEffect> | null {
+  if (value === null) return null;
+  if (!isPlainRecord(value)) {
+    fail(
+      'data-loss',
+      'authority-illusion-effects',
+      'The stored illusion effect ledger is malformed.',
+    );
+  }
+  const parsed: Record<string, IllusionEffect> = {};
+  for (const [playerId, rawEffect] of Object.entries(value)) {
+    if (!validUid(playerId)) {
+      fail(
+        'data-loss',
+        'authority-illusion-effect-player',
+        'A stored illusion effect player id is malformed.',
+      );
+    }
+    try {
+      parsed[playerId] = parseIllusionEffect(rawEffect, `authority-illusion-effect-${playerId}`);
+    } catch (error) {
+      if (error instanceof MazeAuthorityDomainError) {
+        fail(
+          'data-loss',
+          'authority-illusion-effect',
+          'A stored illusion effect is malformed.',
+        );
+      }
+      throw error;
+    }
+  }
+  return parsed;
+}
+
 function parseWormholeChallenge(value: unknown, label: string): WormholeChallenge {
   if (isPlainRecord(value) && value.version === 2) {
     if (!hasExactKeys(value, [
@@ -672,7 +738,7 @@ function parseWormholeChallenge(value: unknown, label: string): WormholeChalleng
     fail(
       'invalid-argument',
       `${label}-invalid`,
-      `The ${label} wormhole challenge violates the V3 rules.`,
+      `The ${label} wormhole challenge violates the V4 rules.`,
     );
   }
   return challenge;
@@ -873,16 +939,21 @@ function parseMapItem(
 }
 
 function parseGameMap(value: unknown): GameMap {
-  const required = ['rulesVersion', 'startPosition', 'endPosition', 'obstacles', 'skillLoadout'];
+  const required = [
+    'rulesVersion', 'startPosition', 'endPosition', 'obstacles', 'skillLoadout', 'runnerGear',
+  ];
   const allowed = [...required, 'items', 'item'];
   if (!isPlainRecord(value) || !hasRequiredAndAllowedKeys(value, required, allowed)) {
     fail('invalid-argument', 'map-shape', 'The submitted map is malformed.');
   }
   if (value.rulesVersion !== GAME_RULES_VERSION) {
-    fail('invalid-argument', 'map-rules-version', 'The submitted map does not use V3 rules.');
+    fail('invalid-argument', 'map-rules-version', 'The submitted map does not use V4 rules.');
   }
   if (typeof value.skillLoadout !== 'string' || !MAZE_SKILLS.has(value.skillLoadout as MazeSkillId)) {
     fail('invalid-argument', 'map-skill', 'The submitted map skill is malformed.');
+  }
+  if (typeof value.runnerGear !== 'string' || !RUNNER_GEARS.has(value.runnerGear as RunnerGear)) {
+    fail('invalid-argument', 'map-runner-gear', 'The submitted runner gear is malformed.');
   }
   if (!isDenseArray(value.obstacles, MAX_MAP_OBSTACLE_INPUTS)) {
     fail('invalid-argument', 'map-obstacles', 'The submitted map obstacles are malformed.');
@@ -894,6 +965,7 @@ function parseGameMap(value: unknown): GameMap {
     endPosition: parsePosition(value.endPosition, 'map-end'),
     obstacles: value.obstacles.map((obstacle, index) => parseObstacle(obstacle, `map-obstacle-${index}`)),
     skillLoadout: value.skillLoadout as MazeSkillId,
+    runnerGear: value.runnerGear as RunnerGear,
   };
 
   const hasItems = Object.prototype.hasOwnProperty.call(value, 'items');
@@ -913,7 +985,7 @@ function parseGameMap(value: unknown): GameMap {
     && hasLegacyItem
     && Array.isArray(map.items)
     && map.item !== null) {
-    fail('invalid-argument', 'map-mixed-item-formats', 'A map cannot mix V3 and legacy item formats.');
+    fail('invalid-argument', 'map-mixed-item-formats', 'A map cannot mix V4 and legacy item formats.');
   }
   return map;
 }
@@ -1107,6 +1179,115 @@ function poisonEffectWasCreatedOrReplaced(
   );
 }
 
+function assertValidIllusionEffectTransition(
+  previous: IllusionEffect | undefined,
+  next: IllusionEffect | undefined,
+  outcome: TurnOutcome,
+  runnerFinished: boolean,
+  actionStartedInWormhole: boolean,
+): void {
+  if (outcome.type !== 'move') {
+    if (previous !== next) {
+      fail('data-loss', 'illusion-effect-transition', 'A non-move action changed illusion state.');
+    }
+    return;
+  }
+  if (outcome.illusionReturnFromWormhole !== undefined
+    && outcome.illusionTransition !== 'returned') {
+    fail(
+      'data-loss',
+      'illusion-return-realm',
+      'A non-returning move forged an illusion wormhole return marker.',
+    );
+  }
+
+  if (!previous) {
+    if (!next) {
+      if (outcome.illusionReturnFromWormhole !== undefined) {
+        fail(
+          'data-loss',
+          'illusion-return-realm',
+          'A non-returning move forged an illusion wormhole return marker.',
+        );
+      }
+      return;
+    }
+    if (outcome.illusionTransition !== 'activated'
+      || next.actionsRemaining !== 3
+      || next.firstWallOrigin !== undefined) {
+      fail(
+        'data-loss',
+        'illusion-effect-activation',
+        'The illusion wall activation produced inconsistent private state.',
+      );
+    }
+    return;
+  }
+
+  const newlyAnchored = previous.firstWallOrigin === undefined
+    && next?.firstWallOrigin !== undefined;
+  if (next) {
+    if (previous.actionsRemaining <= 1
+      || next.actionsRemaining !== previous.actionsRemaining - 1
+      || next.sourcePlayerId !== previous.sourcePlayerId
+      || next.appliedAtTurn !== previous.appliedAtTurn
+      || (previous.firstWallOrigin !== undefined
+        && (next.firstWallOrigin === undefined
+          || !isSamePosition(previous.firstWallOrigin, next.firstWallOrigin)))
+      || (newlyAnchored
+        && (outcome.illusionTransition !== 'phased'
+          || !isSamePosition(next.firstWallOrigin!, outcome.origin)))) {
+      fail(
+        'data-loss',
+        'illusion-effect-progress',
+        'The illusion effect progress or fixed first-wall anchor is inconsistent.',
+      );
+    }
+    if (outcome.illusionReturnFromWormhole !== undefined) {
+      fail(
+        'data-loss',
+        'illusion-return-realm',
+        'An active illusion forged a wormhole return marker before expiry.',
+      );
+    }
+    return;
+  }
+
+  if (previous.actionsRemaining > 1 && !runnerFinished) {
+    fail(
+      'data-loss',
+      'illusion-effect-early-removal',
+      'An active illusion effect disappeared before its third action.',
+    );
+  }
+  if (previous.actionsRemaining !== 1) return;
+
+  const firstWallOrigin = previous.firstWallOrigin
+    ?? (outcome.illusionTransition === 'phased' ? outcome.origin : undefined);
+  if (firstWallOrigin) {
+    if (outcome.illusionTransition !== 'returned'
+      || !outcome.illusionReturnPosition
+      || (outcome.illusionReturnFromWormhole === true) !== actionStartedInWormhole
+      || !isSamePosition(outcome.illusionReturnPosition, firstWallOrigin)
+      || !isSamePosition(outcome.position, firstWallOrigin)
+      || outcome.reachedGoal) {
+      fail(
+        'data-loss',
+        'illusion-effect-return',
+        'The expired illusion did not return to its fixed first-wall origin.',
+      );
+    }
+  } else if (outcome.illusionTransition !== 'expired'
+    || outcome.illusionReturnPosition !== undefined
+    || outcome.illusionReturnFromWormhole !== undefined) {
+    fail(
+      'data-loss',
+      'illusion-effect-expiry',
+      'The unanchored illusion did not expire cleanly.',
+    );
+  }
+}
+
 function validTimestamp(value: unknown): value is number {
   return isSafeIntegerInRange(value, 0, Number.MAX_SAFE_INTEGER);
 }
@@ -1185,7 +1366,11 @@ function detectOneTimeWallCollision(
   outcome: TurnOutcome,
 ): OneTimeWallCollision | null {
   if (outcome.type !== 'move'
-    || state.gameState.wormholeRunsByPlayer?.[actorId]) return null;
+    || state.gameState.wormholeRunsByPlayer?.[actorId]
+    // While illusion is active, even an unconsumed fake wall is phased like a
+    // static wall. It must not be consumed, recorded as a collision, or
+    // disclosed through the insight-only fake-wall sanitizer.
+    || state.gameState.illusionEffectsByPlayer?.[actorId]) return null;
 
   const mapOwnerId = state.gameState.assignments?.[actorId];
   const playedMap = mapOwnerId ? state.gameState.maps?.[mapOwnerId] : null;
@@ -1224,11 +1409,14 @@ function sanitizeOneTimeWallCollisionOutcome(
   state: MazeAuthorityState,
   actorId: string,
   outcome: TurnOutcome,
+  identifyFakeWall = false,
 ): TurnOutcome {
   if (outcome.type !== 'move') return cloneJson(outcome);
 
   const playerName = state.gameState.players[actorId]?.displayName || '플레이어';
-  const wallMessage = `${playerName}가 벽에 부딪혔습니다.`;
+  const wallMessage = identifyFakeWall
+    ? `${playerName}가 심안으로 가짜벽을 간파했습니다.`
+    : `${playerName}가 벽에 부딪혔습니다.`;
   const poisonMisdirected = outcome.poisonMisdirected === true
     && outcome.requestedDirection !== undefined;
   const message = poisonMisdirected
@@ -1248,6 +1436,7 @@ function sanitizeOneTimeWallCollisionOutcome(
       requestedDirection: outcome.requestedDirection,
       poisonMisdirected: true,
     } : {}),
+    ...(identifyFakeWall ? { identifiedFakeWall: true } : {}),
     reachedGoal: false,
     message,
   };
@@ -1278,9 +1467,13 @@ function assertValidPrivateEffects(
   const poisonEffects = state.gameState.poisonEffectsByPlayer == null
     ? {}
     : parseStoredPoisonEffects(state.gameState.poisonEffectsByPlayer) ?? {};
+  const illusionEffects = state.gameState.illusionEffectsByPlayer == null
+    ? {}
+    : parseStoredIllusionEffects(state.gameState.illusionEffectsByPlayer) ?? {};
   const effectPlayerIds = new Set([
     ...Object.keys(visionEffects),
     ...Object.keys(poisonEffects),
+    ...Object.keys(illusionEffects),
   ]);
   if (effectPlayerIds.size === 0) return;
   if (state.gameState.phase === GamePhase.SETUP
@@ -1340,6 +1533,33 @@ function assertValidPrivateEffects(
   }
   for (const [playerId, effect] of Object.entries(poisonEffects)) {
     assertCommonEffect(playerId, effect);
+  }
+  for (const [playerId, effect] of Object.entries(illusionEffects)) {
+    const player = state.gameState.players[playerId];
+    const sourceMap = state.gameState.maps?.[effect.sourcePlayerId];
+    const illusionWallIndex = sourceMap
+      ? getMapItems(sourceMap).findIndex((item) => item.type === 'illusionWall')
+      : -1;
+    if (!playerIds.includes(playerId)
+      || !playerIds.includes(effect.sourcePlayerId)
+      || !player
+      || player.finished
+      || player.forfeited
+      || player.hasLeft
+      || state.gameState.assignments?.[playerId] !== effect.sourcePlayerId
+      || effect.appliedAtTurn > (state.gameState.turnNumber as number)
+      || illusionWallIndex < 0
+      || !gameItemWasConsumed(
+        state.gameState,
+        effect.sourcePlayerId,
+        illusionWallIndex,
+      )) {
+      fail(
+        'data-loss',
+        'authority-illusion-effect-reference',
+        'A stored illusion effect does not match its runner and consumed source wall.',
+      );
+    }
   }
 }
 
@@ -1807,6 +2027,9 @@ export function parseMazeAuthorityState(value: unknown): MazeAuthorityState {
       if (!Object.prototype.hasOwnProperty.call(state.gameState, 'poisonEffectsByPlayer')) {
         state.gameState.poisonEffectsByPlayer = {};
       }
+      if (!Object.prototype.hasOwnProperty.call(state.gameState, 'illusionEffectsByPlayer')) {
+        state.gameState.illusionEffectsByPlayer = {};
+      }
       if (isPlainRecord(state.gameState.itemState)) {
         for (const entry of Object.values(state.gameState.itemState)) {
           if (!isPlainRecord(entry)) continue;
@@ -1853,6 +2076,11 @@ export function parseMazeAuthorityState(value: unknown): MazeAuthorityState {
     if (Object.prototype.hasOwnProperty.call(state.gameState, 'poisonEffectsByPlayer')) {
       state.gameState.poisonEffectsByPlayer = parseStoredPoisonEffects(
         state.gameState.poisonEffectsByPlayer,
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(state.gameState, 'illusionEffectsByPlayer')) {
+      state.gameState.illusionEffectsByPlayer = parseStoredIllusionEffects(
+        state.gameState.illusionEffectsByPlayer,
       );
     }
   }
@@ -2094,6 +2322,8 @@ function reduceSubmitMap(
   }
   if (getMapItems(command.map).some(
     (item) => item.type === 'radar'
+      || item.type === 'mine'
+      || item.type === 'smoke'
       || item.type === 'steelWall'
       || item.type === 'collapseWall'
       || item.type === 'phaseWall'
@@ -2107,7 +2337,7 @@ function reduceSubmitMap(
     );
   }
   if (!isValidNewMapForRuleSnapshot(command.map, state.ruleSnapshot)) {
-    fail('failed-precondition', 'invalid-v3-map', 'The submitted map violates the room V3 rules.');
+    fail('failed-precondition', 'invalid-v4-map', 'The submitted map violates the room V4 rules.');
   }
   const next = withAdvancedMeta(cloneJson(state), now);
   const maps = next.gameState.maps || {};
@@ -2201,6 +2431,7 @@ function reduceStartMatch(
   // cleanly through RTDB, which elides empty objects.
   delete gameState.itemState;
   delete gameState.poisonEffectsByPlayer;
+  delete gameState.illusionEffectsByPlayer;
   delete gameState.wormholeRunsByPlayer;
   const nextGameState: GameState = {
     ...gameState,
@@ -2215,6 +2446,7 @@ function reduceStartMatch(
     revealedWallsByPlayer: {},
     visionEffectsByPlayer: {},
     poisonEffectsByPlayer: {},
+    illusionEffectsByPlayer: {},
     winner: null,
     draw: null,
     turnMessage: `${gameState.players[currentTurn]?.displayName || '플레이어'}의 턴`,
@@ -2254,7 +2486,7 @@ function reduceTurn(
   }
   const resolution = resolveTurnAction(cloneJson(state.gameState), actorId, command.action, now);
   if (!resolution) {
-    fail('failed-precondition', 'turn-rejected', 'The V3 engine rejected the turn action.');
+    fail('failed-precondition', 'turn-rejected', 'The V4 engine rejected the turn action.');
   }
   const previousPoisonEffect = state.gameState.poisonEffectsByPlayer?.[actorId];
   const nextPoisonEffect = resolution.state.poisonEffectsByPlayer?.[actorId];
@@ -2267,6 +2499,13 @@ function reduceTurn(
       },
     };
   }
+  assertValidIllusionEffectTransition(
+    state.gameState.illusionEffectsByPlayer?.[actorId],
+    resolution.state.illusionEffectsByPlayer?.[actorId],
+    resolution.outcome,
+    resolution.state.players[actorId]?.finished === true,
+    !!state.gameState.wormholeRunsByPlayer?.[actorId],
+  );
   const oneTimeWallCollision = detectOneTimeWallCollision(
     state,
     actorId,
@@ -2284,13 +2523,37 @@ function reduceTurn(
       'The one-time wall collision did not consume the trusted map item.',
     );
   }
-  const outcome = oneTimeWallCollision
+  const publicOneTimeWallOutcome = oneTimeWallCollision
     ? sanitizeOneTimeWallCollisionOutcome(state, actorId, resolution.outcome)
-    : cloneJson(resolution.outcome);
+    : null;
+  // Activation/progress markers are required for the trusted transition audit
+  // above, but must never tell the runner that the illusion has begun. Only an
+  // actual wake-up return remains visible at the presentation boundary.
+  const presentedResolution = sanitizeHiddenIllusionResolutionForPresentation(
+    resolution,
+    actorId,
+  );
+  const runnerHasInsight = state.gameState.maps?.[actorId]?.runnerGear === 'insight';
+  const outcome = oneTimeWallCollision
+    ? sanitizeOneTimeWallCollisionOutcome(
+        state,
+        actorId,
+        presentedResolution.outcome,
+        runnerHasInsight,
+      )
+    : cloneJson(presentedResolution.outcome);
   const next = withAdvancedMeta(cloneJson(state), now);
-  next.gameState = cloneJson(resolution.state);
-  if (oneTimeWallCollision) next.gameState.turnMessage = outcome.message;
-  if (next.gameState.phase === GamePhase.END) next.lobby.status = 'ended';
+  next.gameState = cloneJson(presentedResolution.state);
+  // Fake-wall knowledge belongs only to the runner. The shared projection
+  // deliberately keeps the ordinary collision message so the gear choice and
+  // the maze owner's deception remain private.
+  if (publicOneTimeWallOutcome) {
+    next.gameState.turnMessage = publicOneTimeWallOutcome.message;
+  }
+  if (next.gameState.phase === GamePhase.END) {
+    next.gameState.illusionEffectsByPlayer = {};
+    next.lobby.status = 'ended';
+  }
   return {
     state: next,
     result: {

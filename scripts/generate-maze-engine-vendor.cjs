@@ -65,8 +65,8 @@ const STATIC_FILES = {
     '',
   ].join('\n'),
   'package.json': `${JSON.stringify({
-    name: '@daemok/maze-engine-v3',
-    version: '3.0.0',
+    name: '@daemok/maze-engine-v4',
+    version: '4.0.0',
     private: true,
     main: 'dist/index.js',
     types: 'dist/index.d.ts',
@@ -161,4 +161,4 @@ for (const relativePath of relativeFiles(VENDOR_SOURCE_ROOT, 'src')) {
 }
 
 checkGeneratedFiles();
-console.log('MAZE ENGINE VENDOR: generated from canonical V3 sources');
+console.log('MAZE ENGINE VENDOR: generated from canonical V4 sources');

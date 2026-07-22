@@ -180,8 +180,9 @@ const LEGACY_WORMHOLE_CHALLENGE = {
 
 function gameMap(overrides = {}) {
   return {
-    rulesVersion: 3,
+    rulesVersion: 4,
     skillLoadout: 'scoutPulse',
+    runnerGear: 'none',
     startPosition: position(0, 0),
     endPosition: position(5, 5),
     obstacles: [],
@@ -206,7 +207,7 @@ function runtimeState(playedMap, options = {}) {
     items: options.ownItems || [],
   });
   return {
-    rulesVersion: 3,
+    rulesVersion: 4,
     matchNumber: 1,
     phase: 'play',
     currentTurn: 'a',
@@ -337,6 +338,27 @@ function deterministicFixtures() {
       },
     },
     {
+      type: 'fogWall',
+      verify(resolved) {
+        assert.equal(resolved.outcome.effect, 'move');
+        assert.deepEqual(resolved.outcome.position, position(0, 1));
+        assert.equal(resolved.state.itemState.b.consumed[0], true);
+        assert.equal(resolved.state.visionEffectsByPlayer.a.type, 'smoke');
+      },
+    },
+    {
+      type: 'illusionWall',
+      verify(resolved) {
+        assert.equal(resolved.outcome.effect, 'move');
+        assert.equal(resolved.outcome.illusionTransition, 'activated');
+        assert.deepEqual(resolved.state.illusionEffectsByPlayer.a, {
+          sourcePlayerId: 'b',
+          appliedAtTurn: 1,
+          actionsRemaining: 3,
+        });
+      },
+    },
+    {
       type: 'poisonWall',
       verify(resolved) {
         assert.deepEqual(resolved.outcome.position, position(0, 1));
@@ -399,6 +421,34 @@ function deterministicFixtures() {
       },
     });
   }
+
+  fixtures.push({
+    name: 'illusion keeps first wall origin and returns after three affected actions',
+    state: runtimeState(gameMap({
+      obstacles: [wall(0, 1, 'right'), wall(0, 2, 'right')],
+      items: [wallItem('illusionWall', 0, 0, 'right')],
+    })),
+    steps: Array.from({ length: 4 }, (_, index) => ({
+      action: { type: 'move', direction: 'right' },
+      now: FIXED_NOW + index,
+    })),
+    verify(run) {
+      assert.equal(resolutionAt(run, 0).outcome.illusionTransition, 'activated');
+      assert.deepEqual(
+        resolutionAt(run, 1).state.illusionEffectsByPlayer.a.firstWallOrigin,
+        position(0, 1)
+      );
+      assert.deepEqual(
+        resolutionAt(run, 2).state.illusionEffectsByPlayer.a.firstWallOrigin,
+        position(0, 1)
+      );
+      const returned = resolutionAt(run, 3);
+      assert.equal(returned.outcome.illusionTransition, 'returned');
+      assert.deepEqual(returned.outcome.position, position(0, 1));
+      assert.equal(returned.state.illusionEffectsByPlayer, undefined);
+      assert.deepEqual(returned.state.collisionWalls || {}, {});
+    },
+  });
 
   const fireKnowledgeState = runtimeState(gameMap({
     obstacles: [wall(2, 2, 'left')],
@@ -770,12 +820,14 @@ function assertCatalogParity(canonical, vendor) {
   assert.deepEqual(
     vendor.GameRules.createCanonicalGameRuleSnapshot(),
     canonical.GameRules.createCanonicalGameRuleSnapshot(),
-    'canonical V3 rule snapshot differs between browser and Functions vendor engines'
+    'canonical V4 rule snapshot differs between browser and Functions vendor engines'
   );
   for (const key of [
     'BOARD_SIZE',
     'GAME_RULES_VERSION',
     'MAX_OBSTACLES',
+    'RUNNER_GEAR_WALL_BUDGET',
+    'RUNNER_GEARS',
     'CARDINAL_DIRECTIONS',
     'MAZE_SKILL_IDS',
     'SPECIAL_WALL_TYPES',

@@ -34,6 +34,8 @@ EXPECTED_ASSETS = {
     "wall-phase",
     "wall-thorn",
     "wall-crystal",
+    "wall-fog",
+    "wall-illusion",
     "wormhole-die",
     "wormhole-board-base",
     "wormhole-rock",

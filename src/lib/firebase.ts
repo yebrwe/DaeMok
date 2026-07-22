@@ -751,6 +751,7 @@ export const startGame = async (roomId: string): Promise<boolean> => {
       // 실제 아이템 상태는 효과가 발생할 때 턴 엔진이 지연 생성한다.
       delete persistentState.itemState;
       delete persistentState.poisonEffectsByPlayer;
+      delete persistentState.illusionEffectsByPlayer;
       delete persistentState.wormholeRunsByPlayer;
       return {
         ...persistentState,
@@ -765,6 +766,7 @@ export const startGame = async (roomId: string): Promise<boolean> => {
         collisionWalls: {},
         revealedWallsByPlayer: {},
         visionEffectsByPlayer: {},
+        illusionEffectsByPlayer: {},
         turnMessage: currentTurn ? `${players[currentTurn]?.displayName || '플레이어'}의 턴` : undefined,
         turnMessageTimestamp: Date.now(),
       };

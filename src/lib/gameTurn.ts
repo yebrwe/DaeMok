@@ -11,6 +11,7 @@ import {
   Obstacle,
   PoisonEffect,
   Position,
+  RunnerGear,
   SpecialWallType,
   FireVisionEffect,
   WormholeRunState,
@@ -21,6 +22,7 @@ import {
   cloneWormholeChallenge,
   findShortestPath,
   getMapItems,
+  getMapRunnerGear,
   getNewPosition,
   getNextTurnPlayerId,
   getOppositeDirection,
@@ -71,8 +73,14 @@ export interface MoveTurnOutcome {
   wormholeExit?: Position;
   realm?: 'main' | 'wormhole';
   wormholeTransition?: 'entered' | 'seal' | 'returned';
+  illusionTransition?: 'activated' | 'phased' | 'returned' | 'expired';
+  illusionReturnPosition?: Position;
+  // The wake-up happened while the runner was inside the private 4x4 room.
+  // Presentation must not reuse that room's attempted coordinate on the main board.
+  illusionReturnFromWormhole?: true;
   requestedDirection?: Direction;
   poisonMisdirected?: boolean;
+  identifiedFakeWall?: true;
   reachedGoal: boolean;
   message: string;
 }
@@ -236,6 +244,68 @@ const DIRECTION_LABELS: Record<Direction, string> = {
   left: '왼쪽',
 };
 
+/**
+ * Illusion activation and progress are trusted reducer details, not player
+ * feedback. Keep those markers available to Authority validation, then pass
+ * the result through this boundary before showing or returning it to a player.
+ * The wake-up return is deliberately public because the board really rewinds.
+ */
+export function sanitizeHiddenIllusionOutcomeForPresentation(
+  outcome: TurnOutcome,
+  playerDisplayName = '플레이어'
+): TurnOutcome {
+  if (outcome.type !== 'move'
+    || !outcome.illusionTransition
+    || outcome.illusionTransition === 'returned') return outcome;
+
+  const hiddenTransition = outcome.illusionTransition;
+  const sanitized: MoveTurnOutcome = { ...outcome };
+  delete sanitized.illusionTransition;
+  delete sanitized.illusionReturnPosition;
+  delete sanitized.illusionReturnFromWormhole;
+
+  // The trigger wall must be indistinguishable from an ordinary open edge.
+  // If another, visible landing effect happened on the same action, retain
+  // that effect while removing only the illusion-wall metadata.
+  if (hiddenTransition === 'activated') {
+    delete sanitized.wallEffect;
+    delete sanitized.wallItemIndex;
+    if (outcome.effect === 'move') {
+      sanitized.consumedItemIndex = null;
+      delete sanitized.itemPosition;
+    }
+  }
+
+  if ((hiddenTransition === 'activated' || hiddenTransition === 'phased')
+    && sanitized.effect === 'move') {
+    const ordinaryMoveMessage = `${playerDisplayName || '플레이어'}가 한 칸 이동했습니다.`;
+    sanitized.message = sanitized.poisonMisdirected === true
+      && sanitized.requestedDirection !== undefined
+      ? `중독으로 ${DIRECTION_LABELS[sanitized.requestedDirection]} 입력이 ${DIRECTION_LABELS[sanitized.direction]} 방향으로 뒤틀렸습니다. ${ordinaryMoveMessage}`
+      : ordinaryMoveMessage;
+  }
+
+  return sanitized;
+}
+
+export function sanitizeHiddenIllusionResolutionForPresentation(
+  resolution: TurnResolution,
+  actorId: string
+): TurnResolution {
+  const outcome = sanitizeHiddenIllusionOutcomeForPresentation(
+    resolution.outcome,
+    resolution.state.players[actorId]?.displayName || '플레이어'
+  );
+  if (outcome === resolution.outcome) return resolution;
+  return {
+    state: {
+      ...resolution.state,
+      turnMessage: outcome.message,
+    },
+    outcome,
+  };
+}
+
 function stableEffectHash(value: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
@@ -299,6 +369,37 @@ function matchingWallItemIndex(
     if (item.type === 'collapseWall' && activeWalls[index]) return true;
     return !consumed[index];
   });
+}
+
+function wallItemWouldBlock(
+  item: MapItem,
+  index: number,
+  activeWalls: Readonly<Record<number, boolean>>,
+  phaseOpen: Readonly<Record<number, boolean>>
+): boolean {
+  switch (item.type) {
+    case 'oneTimeWall':
+    case 'steelWall':
+    case 'fireWall':
+    case 'iceWall':
+    case 'windWall':
+    case 'thornWall':
+    case 'crystalWall':
+      return true;
+    case 'collapseWall':
+      return !!activeWalls[index];
+    case 'phaseWall':
+      return !phaseOpen[index];
+    case 'poisonWall':
+    case 'fogWall':
+    case 'illusionWall':
+    case 'mirrorWall':
+    case 'mine':
+    case 'wormhole':
+    case 'radar':
+    case 'smoke':
+      return false;
+  }
 }
 
 function permanentBlockingWalls(
@@ -651,6 +752,7 @@ function resolveMove(
   direction: Direction,
   playedMap: GameMap,
   mapOwnerId: string,
+  runnerGear: RunnerGear,
   now: number,
   consumeOutOfBounds = false
 ): TurnResolution | null {
@@ -677,6 +779,7 @@ function resolveMove(
   let itemPosition: Position | undefined;
   let wormholeExit: Position | undefined;
   let wormholeTransition: MoveTurnOutcome['wormholeTransition'];
+  let illusionTransition: MoveTurnOutcome['illusionTransition'];
   let wormholeRunToCreate: WormholeRunState | null = null;
   let crystalRevealed: Obstacle[] = [];
   let needsFinalLandingTrapCheck = false;
@@ -693,7 +796,7 @@ function resolveMove(
   };
 
   const applyLandingTrap = (landingPosition: Position, fallbackPosition: Position): boolean => {
-    // Goal arrival is terminal. Valid V3 maps cannot place a cell trap on the goal,
+    // Goal arrival is terminal. Valid V4 maps cannot place a cell trap on the goal,
     // but this also gives legacy/malformed maps deterministic ordering.
     if (isSamePosition(landingPosition, playedMap.endPosition)) return false;
 
@@ -739,7 +842,11 @@ function resolveMove(
       effect = 'wormhole';
       consumeItem(wormholeIndex);
       itemPosition = wormhole.entrance;
-      if (
+      if (exitIsSafe && exit && runnerGear === 'wormholeEscapeKit') {
+        position = { ...exit };
+        wormholeExit = { ...exit };
+        message = `${player.displayName || '플레이어'}가 웜홀 탈출키트로 내부 퍼즐을 건너뛰고 출구로 이동했습니다.`;
+      } else if (
         exitIsSafe &&
         exit &&
         wormhole.challenge &&
@@ -795,12 +902,30 @@ function resolveMove(
     return false;
   };
 
-  const passesStaticWall = attemptedInBoard && canMove(origin, direction, playedMap.obstacles || []);
-  const matchingIndex = passesStaticWall
+  const staticWallBlocked = attemptedInBoard &&
+    !canMove(origin, direction, playedMap.obstacles || []);
+  const matchingIndex = attemptedInBoard && !staticWallBlocked
     ? matchingWallItemIndex(origin, direction, mapItems, consumed, activeWalls)
     : -1;
-  const wallItem = matchingIndex >= 0 ? mapItems[matchingIndex] : null;
-  let blocked = !passesStaticWall;
+  const contactedWallItem = matchingIndex >= 0 ? mapItems[matchingIndex] : null;
+  const illusionActive = !!state.illusionEffectsByPlayer?.[actorId];
+  const phasedBlockingWall = illusionActive && attemptedInBoard && (
+    staticWallBlocked || (
+      !!contactedWallItem &&
+      wallItemWouldBlock(contactedWallItem, matchingIndex, activeWalls, phaseOpen)
+    )
+  );
+  const wallItem = phasedBlockingWall ? null : contactedWallItem;
+  let blocked = !attemptedInBoard || staticWallBlocked;
+
+  if (phasedBlockingWall) {
+    blocked = false;
+    illusionTransition = 'phased';
+    // The transition is retained only for trusted validation. Presentation
+    // must look exactly like an ordinary move so the runner cannot tell that
+    // a hidden wall was phased.
+    message = `${player.displayName || '플레이어'}가 한 칸 이동했습니다.`;
+  }
 
   if (wallItem) {
     wallItemIndex = matchingIndex;
@@ -822,6 +947,18 @@ function resolveMove(
         consumeItem(matchingIndex);
         fireTriggered = true;
         message = '화염벽에 부딪혀 불이 붙었습니다. 벽에 대한 기억이 흐려집니다.';
+        break;
+      case 'fogWall':
+        consumeItem(matchingIndex);
+        smokeTriggered = true;
+        message = activeFireEffect
+          ? '안개벽을 통과했지만 타오르는 불길이 안개를 흘트러뜨렸습니다. 화염 상태가 계속됩니다.'
+          : '안개벽을 통과했습니다. 다음 차례의 시야가 가려집니다.';
+        break;
+      case 'illusionWall':
+        consumeItem(matchingIndex);
+        illusionTransition = 'activated';
+        message = `${player.displayName || '플레이어'}가 한 칸 이동했습니다.`;
         break;
       case 'poisonWall':
         consumeItem(matchingIndex);
@@ -1043,6 +1180,10 @@ function resolveMove(
     };
   }
 
+  const identifiedFakeWall = blocked &&
+    wallItem?.type === 'oneTimeWall' &&
+    runnerGear === 'insight';
+
   if (blocked && attemptedInBoard && wallItem?.type !== 'fireWall') {
     const collision: CollisionWall = {
       playerId: actorId,
@@ -1050,6 +1191,7 @@ function resolveMove(
       direction,
       timestamp: now,
       mapOwnerId,
+      ...(identifiedFakeWall ? { identifiedAsFake: true } : {}),
     };
     const safePlayerId = actorId.replace(/[.#$\[\]/]/g, '_');
     const collisionKey = `turn_${state.turnNumber || 1}_${safePlayerId}`;
@@ -1075,10 +1217,115 @@ function resolveMove(
       itemPosition,
       wormholeExit,
       ...(wormholeTransition ? { realm: 'main' as const, wormholeTransition } : {}),
+      ...(illusionTransition ? { illusionTransition } : {}),
+      ...(identifiedFakeWall ? { identifiedFakeWall: true as const } : {}),
       reachedGoal,
       message,
     },
   };
+}
+
+function applyIllusionActionProgress(
+  stateBeforeAction: GameState,
+  actorId: string,
+  mapOwnerId: string,
+  resolution: TurnResolution
+): TurnResolution {
+  if (resolution.outcome.type !== 'move') return resolution;
+
+  const outcome = resolution.outcome;
+  const previousEffect = stateBeforeAction.illusionEffectsByPlayer?.[actorId];
+  const actionStartedInWormhole = !!stateBeforeAction.wormholeRunsByPlayer?.[actorId];
+  const resolvedPlayer = resolution.state.players[actorId];
+  if (!resolvedPlayer) return resolution;
+
+  if (!previousEffect) {
+    if (outcome.illusionTransition !== 'activated' || resolvedPlayer.finished) return resolution;
+    resolution.state.illusionEffectsByPlayer = {
+      ...(resolution.state.illusionEffectsByPlayer || {}),
+      [actorId]: {
+        sourcePlayerId: mapOwnerId,
+        appliedAtTurn: stateBeforeAction.turnNumber || 1,
+        actionsRemaining: 3,
+      },
+    };
+    return resolution;
+  }
+
+  const firstWallOrigin = previousEffect.firstWallOrigin ||
+    (outcome.illusionTransition === 'phased' ? { ...outcome.origin } : undefined);
+  const actionsRemaining = previousEffect.actionsRemaining - 1;
+  const illusionEffectsByPlayer = {
+    ...(resolution.state.illusionEffectsByPlayer || {}),
+  };
+
+  if (actionsRemaining > 0 && !resolvedPlayer.finished) {
+    illusionEffectsByPlayer[actorId] = {
+      ...previousEffect,
+      actionsRemaining,
+      ...(firstWallOrigin ? { firstWallOrigin } : {}),
+    };
+    resolution.state.illusionEffectsByPlayer = illusionEffectsByPlayer;
+    return resolution;
+  }
+
+  delete illusionEffectsByPlayer[actorId];
+  if (Object.keys(illusionEffectsByPlayer).length > 0) {
+    resolution.state.illusionEffectsByPlayer = illusionEffectsByPlayer;
+  } else {
+    delete resolution.state.illusionEffectsByPlayer;
+  }
+
+  // Reaching the goal during the first or second affected action remains
+  // terminal. On the third action, however, the promised wake-up return is
+  // resolved before finish settlement.
+  if (actionsRemaining !== 0 || !firstWallOrigin) {
+    if (actionsRemaining === 0) outcome.illusionTransition = 'expired';
+    return resolution;
+  }
+
+  const returnedPlayer = {
+    ...resolvedPlayer,
+    position: { ...firstWallOrigin },
+    positionHistory: appendTurnPosition(
+      stateBeforeAction.players[actorId]?.positionHistory,
+      stateBeforeAction.players[actorId]?.position || firstWallOrigin,
+      firstWallOrigin
+    ),
+    finished: false,
+  };
+  delete returnedPlayer.finishMoves;
+  const players = {
+    ...resolution.state.players,
+    [actorId]: returnedPlayer,
+  };
+  const wormholeRunsByPlayer = { ...(resolution.state.wormholeRunsByPlayer || {}) };
+  delete wormholeRunsByPlayer[actorId];
+
+  const returnMessage = `${resolvedPlayer.displayName || '플레이어'}의 환영이 깨져 처음 관통한 원래 막힌 벽 직전으로 돌아갔습니다.`;
+  resolution.state = {
+    ...resolution.state,
+    players,
+    currentTurn: getNextTurnPlayerId(players, actorId, resolution.state.turnOrder),
+    turnMessage: returnMessage,
+  };
+  if (Object.keys(wormholeRunsByPlayer).length > 0) {
+    resolution.state.wormholeRunsByPlayer = wormholeRunsByPlayer;
+  } else {
+    delete resolution.state.wormholeRunsByPlayer;
+  }
+
+  outcome.position = { ...firstWallOrigin };
+  outcome.reachedGoal = false;
+  outcome.illusionTransition = 'returned';
+  outcome.illusionReturnPosition = { ...firstWallOrigin };
+  if (actionStartedInWormhole) outcome.illusionReturnFromWormhole = true;
+  outcome.realm = 'main';
+  outcome.message = returnMessage;
+  if (outcome.effect === 'wormhole') outcome.effect = 'move';
+  delete outcome.wormholeTransition;
+  delete outcome.wormholeExit;
+  return resolution;
 }
 
 export function resolveTurnAction(
@@ -1115,7 +1362,7 @@ export function resolveTurnAction(
     actorId,
     action.direction
   );
-  const resolved = preparedState.wormholeRunsByPlayer?.[actorId]
+  let resolved = preparedState.wormholeRunsByPlayer?.[actorId]
     ? resolveWormholeMove(
         preparedState,
         actorId,
@@ -1131,11 +1378,13 @@ export function resolveTurnAction(
         resolvedDirection,
         playedMap,
         mapOwnerId,
+        getMapRunnerGear(ownMap),
         now,
         poisonWasActive
       );
 
   if (!resolved) return null;
+  resolved = applyIllusionActionProgress(preparedState, actorId, mapOwnerId, resolved);
 
   if (resolvedDirection !== action.direction && resolved.outcome.type === 'move') {
     resolved.outcome.requestedDirection = action.direction;

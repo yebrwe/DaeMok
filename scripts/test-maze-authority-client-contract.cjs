@@ -183,6 +183,34 @@ assert.match(
   /disabled=\{leaveDisabled\}/u,
   'the Authority leave control must consume the play-phase disabled state',
 );
+const ownMap = findDeclaration(
+  authorityRoomSourceFile,
+  'ownMap',
+  (node) => ts.isVariableDeclaration(node),
+);
+assert.ok(ownMap, 'AuthorityGameRoom must derive the viewer own map explicitly');
+assert.match(
+  ownMap.getText(authorityRoomSourceFile),
+  /memberView\?\.viewerUid\s*===\s*userId[\s\S]*fullMap\(memberView\.gameState\.maps\[userId\]\)/u,
+  'the gear badge must derive from only the member viewer full own map',
+);
+assert.doesNotMatch(
+  ownMap.getText(authorityRoomSourceFile),
+  /activeView|publicView/u,
+  'the gear badge source must never fall back to public or opponent map data',
+);
+assert.match(
+  authorityRoomSource,
+  /data-testid="authority-own-runner-gear"/u,
+  'AuthorityGameRoom must expose the persistent private gear badge',
+);
+for (const label of ['탈출키트', '심안', '무장비 +10벽']) {
+  assert.match(authorityRoomSource, new RegExp(label.replace('+', '\\+'), 'u'));
+}
+
+const loginSource = read('src/app/login/page.tsx');
+assert.match(loginSource, /장비 15벽/u, 'login copy must explain the equipped wall budget');
+assert.match(loginSource, /무장비 25벽/u, 'login copy must explain the no-gear wall budget');
 
 const clientPath = 'src/lib/mazeAuthorityClient.ts';
 const clientSourceFile = parse(clientPath);
@@ -251,6 +279,8 @@ assert.equal(
 assert.match(setupSource, /paletteItems\.map\(/u, 'GameSetup must render the guarded palette catalog');
 const retiredEditorTypes = [
   'radar',
+  'mine',
+  'smoke',
   'steelWall',
   'collapseWall',
   'phaseWall',
@@ -279,6 +309,46 @@ for (const retiredType of retiredEditorTypes) {
     `${retiredType} must not be exposed in the new-map palette`,
   );
 }
+for (const supportedType of ['fogWall', 'illusionWall']) {
+  assert.equal(
+    newMapCatalog.includes(supportedType),
+    true,
+    `${supportedType} must be exposed in the new-map palette`,
+  );
+}
+
+assert.match(
+  setupSource,
+  /return\s+getWormholeExitGoalPathError\(map\);/u,
+  'map completion must surface the wormhole-exit-to-goal path error',
+);
+assert.match(
+  setupSource,
+  /!getWormholeExitSafetyError\(candidateMap, position\)\s*&&\s*!getWormholeExitGoalPathError\(candidateMap\)/u,
+  'wormhole exit candidates must satisfy both adjacent-cell and full goal-path safety',
+);
+const specialWallPlacementBranch = setupSource.match(
+  /\/\/ 가짜벽과 특수벽은 모두 칸 사이 선에 배치한다\.([^]*?)\/\/ 일반 벽도 모든 특수벽과 같은 선을 공유할 수 없다\./u,
+)?.[1] || '';
+assert.ok(specialWallPlacementBranch, 'the special-wall placement branch must remain explicit');
+assert.doesNotMatch(
+  specialWallPlacementBranch,
+  /getWormholeExitGoalPathError/u,
+  'consumable special walls must not be rejected by the permanent exit-path guard',
+);
+const ordinaryWallPlacementBranch = setupSource.match(
+  /\/\/ 일반 벽도 모든 특수벽과 같은 선을 공유할 수 없다\.([^]*?)\/\/ 아이템 선택\/제거/u,
+)?.[1] || '';
+assert.match(
+  ordinaryWallPlacementBranch,
+  /getWormholeExitGoalPathError\([^]*?obstacles:\s*tempObstacles/u,
+  'an ordinary-wall candidate must be checked with the proposed wall included',
+);
+assert.match(
+  ordinaryWallPlacementBranch,
+  /이 벽을 놓으면 웜홀 출구에서 도착점까지 갈 수 없습니다\./u,
+  'a rejected ordinary wall must explain the exact exit-to-goal failure',
+);
 
 const retiredTypes = findDeclaration(
   clientSourceFile,
@@ -290,6 +360,8 @@ assert.deepEqual(
   new Set(literalTextsIn(retiredTypes)),
   new Set([
     'radar',
+    'mine',
+    'smoke',
     'steelWall',
     'collapseWall',
     'phaseWall',
@@ -298,6 +370,21 @@ assert.deepEqual(
   ]),
   'the complete retired item catalog is rejected from new submissions',
 );
+
+const presentationSourceFile = parse('src/lib/mazeAuthorityPresentation.ts');
+const presentationIdentifiers = identifiersIn(presentationSourceFile);
+for (const hiddenIllusionIdentifier of [
+  'privateIllusionEffect',
+  'illusionEffectsByPlayer',
+  'illusionActionsRemaining',
+  'illusionReturnFixed',
+]) {
+  assert.equal(
+    presentationIdentifiers.has(hiddenIllusionIdentifier),
+    false,
+    `${hiddenIllusionIdentifier} must not cross the live-board presentation boundary`,
+  );
+}
 const submittedMapParser = findDeclaration(
   clientSourceFile,
   'parseSubmittedGameMap',

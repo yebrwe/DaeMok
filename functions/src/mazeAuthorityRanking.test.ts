@@ -21,12 +21,13 @@ const ROOM_ID = 'ranking-room-001';
 
 function simpleMap(): GameMap {
   return {
-    rulesVersion: 3,
+    rulesVersion: 4,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 0, col: 1 },
     obstacles: [],
     items: [],
     skillLoadout: 'scoutPulse',
+    runnerGear: 'none',
   };
 }
 

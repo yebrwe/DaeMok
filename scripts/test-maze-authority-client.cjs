@@ -47,28 +47,31 @@ const gameUtils = loadTypeScript('src/lib/gameUtils.ts', {
 });
 
 const ITEM_COSTS = {
-  oneTimeWall: 7,
+  oneTimeWall: 1,
   mine: 1,
   wormhole: 7,
   radar: 4,
   smoke: 1,
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 2,
+  poisonWall: 1,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,
   phaseWall: 1,
-  mirrorWall: 5,
+  mirrorWall: 1,
   thornWall: 1,
   crystalWall: 1,
+  fogWall: 1,
+  illusionWall: 2,
 };
 const ITEM_LIMITS = Object.fromEntries(Object.keys(ITEM_COSTS).map((key) => [key, 1]));
 
 function ruleSnapshot() {
   return {
-    version: 3,
-    wallBudget: 24,
+    version: 4,
+    wallBudget: 25,
+    runnerGearWallBudget: 15,
     itemCosts: { ...ITEM_COSTS },
     itemLimits: { ...ITEM_LIMITS },
     maxSkillLoadout: 1,
@@ -86,7 +89,8 @@ function isValidRuleSnapshot(value) {
 
 function isValidMapForRuleSnapshot(map, snapshot) {
   return isValidRuleSnapshot(snapshot)
-    && map?.rulesVersion === 3
+    && map?.rulesVersion === 4
+    && ['none', 'wormholeEscapeKit', 'insight'].includes(map?.runnerGear)
     && ['scoutPulse', 'breach', 'anchor', 'dash'].includes(map?.skillLoadout)
     && Array.isArray(map?.obstacles)
     && (!Object.prototype.hasOwnProperty.call(map, 'items') || Array.isArray(map.items) || map.items === null)
@@ -100,12 +104,13 @@ function isValidNewMapForRuleSnapshot(map, snapshot) {
 
 function validMap(overrides = {}) {
   return {
-    rulesVersion: 3,
+    rulesVersion: 4,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 5, col: 5 },
     obstacles: [],
     items: [],
     skillLoadout: 'scoutPulse',
+    runnerGear: 'none',
     ...overrides,
   };
 }
@@ -158,7 +163,7 @@ function baseView(audience, overrides = {}) {
     },
     ruleSnapshot: ruleSnapshot(),
     gameState: {
-      rulesVersion: 3,
+      rulesVersion: 4,
       matchNumber: 1,
       phase: 'play',
       players: {
@@ -178,11 +183,12 @@ function baseView(audience, overrides = {}) {
       maps: {
         [OWNER]: member
           ? {
-            rulesVersion: 3,
+            rulesVersion: 4,
             startPosition: { row: 0, col: 0 },
             endPosition: { row: 5, col: 5 },
             // Empty arrays are deliberately absent after RTDB persistence.
             skillLoadout: 'scoutPulse',
+            runnerGear: 'none',
           }
           : {
             startPosition: { row: 0, col: 0 },
@@ -454,8 +460,22 @@ async function main() {
   assert.equal(
     normalizedSubmit.map.skillLoadout,
     'scoutPulse',
-    'the client normalizes stale skill drafts to the inert V3 compatibility value',
+    'the client normalizes stale skill drafts to the inert V4 compatibility value',
   );
+  const insightSubmit = client.buildMazeAuthoritySubmitMapCommand({
+    ...fence,
+    map: validMap({ runnerGear: 'insight' }),
+  });
+  assert.equal(insightSubmit.map.runnerGear, 'insight', 'the selected persistent runner gear is submitted');
+  assert.equal(client.parseMazeAuthorityCommand({
+    ...insightSubmit,
+    map: { ...insightSubmit.map, runnerGear: 'forgedGear' },
+  }), null, 'the strict wire parser rejects unknown runner gear');
+  const { runnerGear: _omittedRunnerGear, ...mapWithoutRunnerGear } = insightSubmit.map;
+  assert.equal(client.parseMazeAuthorityCommand({
+    ...insightSubmit,
+    map: mapWithoutRunnerGear,
+  }), null, 'the strict wire parser requires an explicit runner gear choice');
   assert.equal(client.parseMazeAuthorityCommand({
     ...normalizedSubmit,
     map: { ...normalizedSubmit.map, skillLoadout: 'dash' },
@@ -555,6 +575,19 @@ async function main() {
     (error) => error?.code === 'invalid-command',
     'new Authority maps reject radar',
   );
+  for (const retiredTrap of [
+    { type: 'mine', position: { row: 0, col: 1 } },
+    { type: 'smoke', position: { row: 0, col: 1 } },
+  ]) {
+    assert.throws(
+      () => client.buildMazeAuthoritySubmitMapCommand({
+        ...fence,
+        map: validMap({ items: [retiredTrap] }),
+      }),
+      (error) => error?.code === 'invalid-command',
+      `new Authority maps reject ${retiredTrap.type}`,
+    );
+  }
   for (const retiredWall of [
     'steelWall',
     'collapseWall',
@@ -576,6 +609,19 @@ async function main() {
       (error) => error?.code === 'invalid-command',
       `new Authority maps reject the retired ${retiredWall}`,
     );
+  }
+  for (const supportedWall of ['fogWall', 'illusionWall']) {
+    const command = client.buildMazeAuthoritySubmitMapCommand({
+      ...fence,
+      map: validMap({
+        items: [{
+          type: supportedWall,
+          wallPosition: { row: 0, col: 0 },
+          wallDirection: 'right',
+        }],
+      }),
+    });
+    assert.equal(command.map.items[0].type, supportedWall);
   }
 
   const lifecycleResponses = [
@@ -871,6 +917,7 @@ async function main() {
   assert.deepEqual(publicView.gameState.itemState, {});
   assert.deepEqual(publicView.gameState.revealedWallsByPlayer, {});
   assert.deepEqual(publicView.gameState.visionEffectsByPlayer, {});
+  assert.deepEqual(publicView.gameState.illusionEffectsByPlayer, {});
   assert.deepEqual(Object.keys(publicView.gameState.maps[OWNER]).sort(), [
     'endPosition', 'startPosition',
   ]);
@@ -889,6 +936,42 @@ async function main() {
     memberView.gameState.itemState[OWNER].consumed,
     { 0: true },
     'RTDB numeric-key arrays canonicalize back to boolean index records',
+  );
+
+  const insightCollision = {
+    playerId: OWNER,
+    mapOwnerId: GUEST,
+    position: { row: 0, col: 0 },
+    direction: 'right',
+    timestamp: 10_500,
+    identifiedAsFake: true,
+  };
+  const memberWithInsightCollision = clone(memberRaw);
+  memberWithInsightCollision.gameState.maps[OWNER].runnerGear = 'insight';
+  memberWithInsightCollision.gameState.collisionWalls = [insightCollision];
+  const parsedInsightCollision = client.canonicalizeMazeAuthorityMemberView(
+    memberWithInsightCollision,
+    OWNER,
+    ROOM_ID,
+  );
+  assert.equal(
+    parsedInsightCollision?.gameState.collisionWalls[0].identifiedAsFake,
+    true,
+    'only an insight runner member view accepts the private fake-wall marker',
+  );
+  const forgedPublicInsight = clone(publicRaw);
+  forgedPublicInsight.gameState.collisionWalls = [insightCollision];
+  assert.equal(
+    client.canonicalizeMazeAuthorityPublicView(forgedPublicInsight, ROOM_ID),
+    null,
+    'public projections fail closed if a private fake-wall marker leaks onto the wire',
+  );
+  const wrongGearInsight = clone(memberRaw);
+  wrongGearInsight.gameState.collisionWalls = [insightCollision];
+  assert.equal(
+    client.canonicalizeMazeAuthorityMemberView(wrongGearInsight, OWNER, ROOM_ID),
+    null,
+    'a member view cannot forge insight knowledge for an unequipped runner',
   );
 
   const projectedMapDiceChallenge = diceWormhole.generateDiceWormholeChallenge(0x4D4150);
@@ -998,6 +1081,80 @@ async function main() {
     null,
     'the exact poison view parser rejects an injected server-only seed',
   );
+
+  const memberWithIllusion = clone(memberRaw);
+  memberWithIllusion.gameState.illusionEffectsByPlayer = {
+    [OWNER]: {
+      sourcePlayerId: GUEST,
+      appliedAtTurn: 4,
+      actionsRemaining: 2,
+      firstWallOrigin: { row: 0, col: 1 },
+    },
+  };
+  const memberIllusionView = client.canonicalizeMazeAuthorityMemberView(
+    memberWithIllusion,
+    OWNER,
+    ROOM_ID,
+  );
+  assert.equal(
+    memberIllusionView,
+    null,
+    'even the affected member projection rejects illusion progress and its return anchor',
+  );
+  const ordinaryBoard = presentation.buildMazeAuthorityLiveBoards({
+    gameState: memberView.gameState,
+    viewerUid: OWNER,
+  }).find((board) => board.runnerId === OWNER);
+  assert.ok(ordinaryBoard);
+  assert.equal(Object.prototype.hasOwnProperty.call(ordinaryBoard, 'illusionActionsRemaining'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(ordinaryBoard, 'illusionReturnFixed'), false);
+
+  const publicWithIllusion = clone(publicRaw);
+  publicWithIllusion.gameState.illusionEffectsByPlayer = clone(
+    memberWithIllusion.gameState.illusionEffectsByPlayer,
+  );
+  assert.equal(
+    client.canonicalizeMazeAuthorityPublicView(publicWithIllusion, ROOM_ID),
+    null,
+    'public projection rejects private illusion progress and its return anchor',
+  );
+  const memberWithForeignIllusion = clone(memberRaw);
+  memberWithForeignIllusion.gameState.illusionEffectsByPlayer = {
+    [GUEST]: {
+      sourcePlayerId: OWNER,
+      appliedAtTurn: 4,
+      actionsRemaining: 3,
+    },
+  };
+  assert.equal(
+    client.canonicalizeMazeAuthorityMemberView(memberWithForeignIllusion, OWNER, ROOM_ID),
+    null,
+    'a member projection cannot disclose another runner illusion state',
+  );
+  for (const malformedEffect of [
+    { sourcePlayerId: GUEST, appliedAtTurn: 4, actionsRemaining: 0 },
+    { sourcePlayerId: GUEST, appliedAtTurn: 4, actionsRemaining: 4 },
+    {
+      sourcePlayerId: GUEST,
+      appliedAtTurn: 4,
+      actionsRemaining: 2,
+      firstWallOrigin: { row: 6, col: 0 },
+    },
+    {
+      sourcePlayerId: GUEST,
+      appliedAtTurn: 4,
+      actionsRemaining: 2,
+      privateSeed: 123,
+    },
+  ]) {
+    const malformedIllusion = clone(memberRaw);
+    malformedIllusion.gameState.illusionEffectsByPlayer = { [OWNER]: malformedEffect };
+    assert.equal(
+      client.canonicalizeMazeAuthorityMemberView(malformedIllusion, OWNER, ROOM_ID),
+      null,
+      'malformed or expanded illusion projections fail closed',
+    );
+  }
 
   const hiddenWormholeWalls = [
     { position: { row: 0, col: 1 }, direction: 'down' },
@@ -1186,10 +1343,11 @@ async function main() {
   endedLegacy.gameState.players[GUEST].finished = true;
   endedLegacy.gameState.maps = {
     [OWNER]: {
-      rulesVersion: 3,
+      rulesVersion: 4,
       startPosition: { row: 0, col: 0 },
       endPosition: { row: 5, col: 5 },
       skillLoadout: 'scoutPulse',
+      runnerGear: 'none',
       items: {
         0: {
           type: 'collapseWall',
@@ -1207,10 +1365,11 @@ async function main() {
       },
     },
     [GUEST]: {
-      rulesVersion: 3,
+      rulesVersion: 4,
       startPosition: { row: 5, col: 5 },
       endPosition: { row: 0, col: 0 },
       skillLoadout: 'anchor',
+      runnerGear: 'insight',
     },
   };
   const endedView = client.canonicalizeMazeAuthorityPublicView(endedLegacy);
@@ -1228,7 +1387,7 @@ async function main() {
   ]) {
     assert.ok(
       Object.prototype.hasOwnProperty.call(endedView.ruleSnapshot.itemCosts, retiredWall),
-      `the legacy V3 rule snapshot keeps ${retiredWall} on the wire`,
+      `the V4 read projection keeps ${retiredWall} on the wire`,
     );
   }
   const endedWithFullWormholeRun = clone(endedLegacy);
@@ -1280,7 +1439,7 @@ async function main() {
       status: 'closed',
     },
     gameState: {
-      rulesVersion: 3,
+      rulesVersion: 4,
       matchNumber: 1,
       phase: 'setup',
     },
@@ -1293,6 +1452,113 @@ async function main() {
     name: 'mazeV1Command',
     payload: turn,
   });
+
+  callableResponse = turnResponse(turn);
+  callableResponse.result.outcome = {
+    ...callableResponse.result.outcome,
+    position: { row: 0, col: 0 },
+    effect: 'bump',
+    identifiedFakeWall: true,
+    message: '심안으로 가짜벽을 간파했습니다.',
+  };
+  const identifiedFakeResponse = await client.invokeMazeAuthorityCommand(turn);
+  assert.equal(
+    identifiedFakeResponse.result.outcome.identifiedFakeWall,
+    true,
+    'the private callable result preserves the insight identification marker',
+  );
+
+  const illusionReturnedResponse = turnResponse(turn);
+  illusionReturnedResponse.result.outcome = {
+    ...illusionReturnedResponse.result.outcome,
+    position: { row: 0, col: 0 },
+    realm: 'main',
+    illusionTransition: 'returned',
+    illusionReturnPosition: { row: 0, col: 0 },
+    reachedGoal: false,
+    message: '환영이 깨져 첫 관통 지점으로 돌아갔습니다.',
+  };
+  assert.deepEqual(
+    client.decodeMazeAuthorityCommandResponse(illusionReturnedResponse, turn),
+    illusionReturnedResponse,
+    'the private callable result preserves an exact illusion return position',
+  );
+  const wormholeIllusionReturn = clone(illusionReturnedResponse);
+  wormholeIllusionReturn.result.outcome.illusionReturnFromWormhole = true;
+  assert.deepEqual(
+    client.decodeMazeAuthorityCommandResponse(wormholeIllusionReturn, turn),
+    wormholeIllusionReturn,
+    'a wormhole-room wake-up marker survives the exact private outcome parser',
+  );
+  for (const hiddenTransition of ['activated', 'phased', 'expired']) {
+    const leakedTransition = turnResponse(turn);
+    leakedTransition.result.outcome.illusionTransition = hiddenTransition;
+    assert.equal(
+      client.decodeMazeAuthorityCommandResponse(leakedTransition, turn),
+      null,
+      `the exact callable parser rejects the hidden ${hiddenTransition} marker`,
+    );
+  }
+  const malformedIllusionReturns = [
+    (() => {
+      const value = clone(illusionReturnedResponse);
+      delete value.result.outcome.illusionReturnPosition;
+      return value;
+    })(),
+    (() => {
+      const value = clone(illusionReturnedResponse);
+      delete value.result.outcome.realm;
+      return value;
+    })(),
+    {
+      ...clone(illusionReturnedResponse),
+      result: {
+        ...clone(illusionReturnedResponse.result),
+        outcome: {
+          ...clone(illusionReturnedResponse.result.outcome),
+          illusionReturnPosition: { row: 0, col: 1 },
+        },
+      },
+    },
+    {
+      ...clone(illusionReturnedResponse),
+      result: {
+        ...clone(illusionReturnedResponse.result),
+        outcome: {
+          ...clone(illusionReturnedResponse.result.outcome),
+          reachedGoal: true,
+        },
+      },
+    },
+    {
+      ...clone(illusionReturnedResponse),
+      result: {
+        ...clone(illusionReturnedResponse.result),
+        outcome: {
+          ...clone(illusionReturnedResponse.result.outcome),
+          illusionTransition: 'phased',
+        },
+      },
+    },
+    (() => {
+      const value = clone(illusionReturnedResponse);
+      value.result.outcome.illusionReturnFromWormhole = false;
+      return value;
+    })(),
+    (() => {
+      const value = clone(illusionReturnedResponse);
+      value.result.outcome.illusionTransition = 'phased';
+      value.result.outcome.illusionReturnFromWormhole = true;
+      return value;
+    })(),
+  ];
+  for (const malformedReturn of malformedIllusionReturns) {
+    assert.equal(
+      client.decodeMazeAuthorityCommandResponse(malformedReturn, turn),
+      null,
+      'malformed illusion return outcomes fail closed',
+    );
+  }
 
   callableResponse = offlineTurnResponse;
   assert.deepEqual(

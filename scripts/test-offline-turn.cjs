@@ -68,7 +68,7 @@ function player(id, overrides = {}) {
 
 function playState(overrides = {}) {
   return {
-    rulesVersion: 3,
+    rulesVersion: 4,
     matchNumber: 1,
     phase: types.GamePhase.PLAY,
     players: {

@@ -44,6 +44,11 @@ const ACCOUNTS = {
   c: { email: `daemok.e2e.c.${STAMP}@example.com`, name: 'TestC' },
   d: { email: `daemok.e2e.d.${STAMP}@example.com`, name: 'TestD' },
 };
+const RUNNER_GEAR_WALL_BUDGET = Object.freeze({
+  none: 25,
+  wormholeEscapeKit: 15,
+  insight: 15,
+});
 
 function step(msg) { console.log('STEP:', msg); }
 function ok(msg) { console.log('  OK:', msg); }
@@ -385,24 +390,34 @@ async function signInWithFakeGoogle(page, acc) {
 }
 
 // 맵 제작 (2D 고정 보드): 시작(0,0), 도착(0,2), 벽 없음 (최단 2턴)
-async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormholeSafety = false } = {}) {
+async function selectRunnerGear(page, runnerGear) {
+  const selector = page.getByTestId('runner-gear-selector');
+  await selector.waitFor({ state: 'visible', timeout: 10000 });
+  const option = selector.locator(`[data-runner-gear-option="${runnerGear}"]`);
+  if (await option.count() !== 1) {
+    throw new Error(`러너 장비 옵션을 찾지 못함: ${runnerGear}`);
+  }
+  await option.click();
+  const checked = selector.locator('[role="radio"][aria-checked="true"]');
+  if (await checked.count() !== 1 || await option.getAttribute('aria-checked') !== 'true') {
+    throw new Error(`러너 장비 단일 선택 상태 불일치: ${runnerGear}`);
+  }
+}
+
+async function setupMap(page, {
+  fog = false,
+  ownerSecrets = false,
+  verifyWormholeSafety = false,
+  runnerGear = 'none',
+} = {}) {
   await expectText(page, '시작점을 선택하세요');
   const items = page.locator('div.grid').first().locator(':scope > *');
   await items.nth(0).click();
   await expectText(page, '도착점을 선택하세요');
-  await items.nth(4).click();
+  await page.locator(`[data-cell="0,${ownerSecrets ? 3 : 2}"]`).click();
   await expectText(page, '벽(장애물)을 배치하세요');
+  await selectRunnerGear(page, runnerGear);
   if (verifyWormholeSafety) {
-    const mineButton = page.getByRole('button', { name: /지뢰/ }).first();
-    await mineButton.click();
-    await page.locator('[data-cell="5,4"]').click();
-    await page.getByRole('button', { name: '이전' }).click();
-    await page.locator('[data-cell="5,4"]').click();
-    if (!(await page.getByText('도착점을 선택하세요', { exact: false }).isVisible())) {
-      throw new Error('셀형 아이템 위로 도착점을 옮길 수 있음');
-    }
-    await page.locator('[data-cell="0,2"]').click();
-
     const cornerWall = page.getByRole('button', { name: '6행 5열 right 벽' });
     const topWall = page.getByRole('button', { name: '5행 6열 down 벽' });
     const wormholeButton = page.getByRole('button', { name: /웜홀/ }).first();
@@ -423,6 +438,14 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
 
     await wormholeButton.click(); // 배치 취소
     await topWall.click(); // 위쪽을 열어 출구에 인접한 이동 칸을 하나만 남김
+
+    // 6열을 따라 올라가 1행에서만 도착점 쪽으로 빠져나오는 통로를 만든다.
+    // 출구 바로 옆 칸 수가 아니라 출구→도착점 전체 경로를 검사해야 잡히는 사례다.
+    const corridorWalls = [2, 3, 4, 5].map((row) =>
+      page.getByRole('button', { name: `${row}행 5열 right 벽`, exact: true })
+    );
+    for (const wall of corridorWalls) await wall.click();
+
     await wormholeButton.click();
     await page.locator('[data-cell="3,3"]').click();
     const safeExit = page.locator('[data-cell="5,5"][data-valid-item-target="true"]');
@@ -431,23 +454,60 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     if (!(await wormholeButton.isDisabled())) {
       throw new Error('웜홀 1개 배치 후 종류별 최대 수량 제한이 적용되지 않음');
     }
-    ok('item/goal overlap rejected; sealed wormhole exit rejected; one-open exit highlighted; cap enforced');
+
+    const routeGateWall = page.getByRole('button', { name: '1행 5열 right 벽', exact: true });
+    const budgetBeforeBlockedWall = await page.locator('[data-testid="setup-budget"]').innerText();
+    let routeSafetyMessage = '';
+    page.once('dialog', async (dialog) => {
+      routeSafetyMessage = dialog.message();
+      await dialog.accept();
+    });
+    await routeGateWall.click();
+    if (routeSafetyMessage !== '이 벽을 놓으면 웜홀 출구에서 도착점까지 갈 수 없습니다.') {
+      throw new Error(`웜홀 출구→도착점 경로 검증 메시지 불일치: ${JSON.stringify(routeSafetyMessage)}`);
+    }
+    if (await page.locator('[data-testid="setup-budget"]').innerText() !== budgetBeforeBlockedWall) {
+      throw new Error('웜홀 출구→도착점 경로를 끊는 일반벽이 예산에 반영됨');
+    }
+
+    // 출구에 남은 마지막 인접 통로도 일반벽으로는 막을 수 없다.
+    const budgetBeforeLastExitWall = await page.locator('[data-testid="setup-budget"]').innerText();
+    let lastExitSafetyMessage = '';
+    page.once('dialog', async (dialog) => {
+      lastExitSafetyMessage = dialog.message();
+      await dialog.accept();
+    });
+    await topWall.click();
+    if (lastExitSafetyMessage !== '이 벽을 놓으면 웜홀 출구에서 도착점까지 갈 수 없습니다.') {
+      throw new Error(`웜홀 마지막 출구 일반벽 검증 메시지 불일치: ${JSON.stringify(lastExitSafetyMessage)}`);
+    }
+    if (await page.locator('[data-testid="setup-budget"]').innerText() !== budgetBeforeLastExitWall) {
+      throw new Error('웜홀 마지막 출구를 막는 일반벽이 예산에 반영됨');
+    }
+
+    // 같은 마지막 출구 위치라도 소멸 특수벽은 영구 경로를 끊지 않으므로 허용한다.
+    await page.getByRole('tab', { name: '특수벽' }).click();
+    await page.getByRole('button', { name: /안개벽/ }).first().click();
+    await topWall.click();
+    const placedItems = await page.locator('[aria-label="배치된 아이템"]').innerText();
+    if (!placedItems.includes('안개벽')) {
+      throw new Error('웜홀 마지막 출구의 같은 위치에 소멸 특수벽을 배치할 수 없음');
+    }
+    ok('sealed exit rejected; full exit-to-goal route guarded; consumable special wall allowed');
   }
   if (ownerSecrets) {
-    await page.getByRole('button', { name: '4행 1열 right 벽' }).click();
     await page.getByRole('button', { name: /가짜벽/ }).first().click();
     await page.getByRole('button', { name: '1행 1열 right 벽' }).click();
-    await page.getByRole('button', { name: /지뢰/ }).first().click();
-    await page.locator('[data-cell="2,2"]').click();
     await page.getByRole('button', { name: /웜홀/ }).first().click();
     await page.locator('[data-cell="3,3"]').click();
     await page.locator('[data-cell="4,4"]').click();
   }
-  if (smoke) {
-    await page.getByRole('button', { name: /연막 함정/ }).first().click();
-    await page.locator('[data-cell="0,1"]').click();
+  if (fog) {
+    await page.getByRole('tab', { name: '특수벽' }).click();
+    await page.getByRole('button', { name: /안개벽/ }).first().click();
+    await page.getByRole('button', { name: '1행 2열 right 벽' }).click();
     const placedItems = await page.locator('[aria-label="배치된 아이템"]').innerText();
-    if (!placedItems.includes('연막 함정')) throw new Error('연막 함정 제작 상태가 표시되지 않음');
+    if (!placedItems.includes('안개벽')) throw new Error('안개벽 제작 상태가 표시되지 않음');
   }
   await page.getByRole('button', { name: '완료' }).click();
 }
@@ -501,15 +561,21 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     await pageB.waitForURL(/\/rooms\/.+/, { timeout: 20000 });
 
     step('5: B 맵 제작 완료 -> B는 방장 대기, A(방장)가 게임 시작');
-    await setupMap(pageB, { smoke: true, ownerSecrets: true });
+    const playerBRunnerGear = 'insight';
+    await setupMap(pageB, { fog: true, ownerSecrets: true, runnerGear: playerBRunnerGear });
     await expectText(pageB, '방장이 시작하면 게임이 시작됩니다');
     await pageB.getByRole('button', { name: '맵 다시 만들기' }).click();
     await expectText(pageB, '벽(장애물)을 배치하세요');
     const reopenedBudget = pageB.locator('[data-testid="setup-budget"]');
     await reopenedBudget.waitFor({ state: 'visible', timeout: 10000 });
     const reopenedBudgetText = await reopenedBudget.innerText();
-    const reopenedUsedBudget = Number(reopenedBudgetText.match(/(\d+)\s*\/\s*24/)?.[1]);
-    if (!(reopenedUsedBudget > 0)) {
+    const reopenedBudgetMatch = reopenedBudgetText.match(/(\d+)\s*\/\s*(\d+)/);
+    const reopenedUsedBudget = Number(reopenedBudgetMatch?.[1]);
+    const reopenedWallBudget = Number(reopenedBudgetMatch?.[2]);
+    if (
+      !(reopenedUsedBudget > 0)
+      || reopenedWallBudget !== RUNNER_GEAR_WALL_BUDGET[playerBRunnerGear]
+    ) {
       throw new Error(`재편집 화면에 저장한 맵 예산이 복원되지 않음: ${reopenedBudgetText}`);
     }
     const resubmitButton = pageB.getByRole('button', { name: '완료', exact: true });
@@ -620,36 +686,46 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     await pageB.keyboard.press('ArrowUp');
     await expectMyBoardTurns(pageB, 2);
     await expectText(pageA, '내 턴');
+
+    step('8: A 세 번째 행동에서 안개벽 관통 -> B 행동 뒤 A의 다음 행동 시야 차단');
+    await pageA.keyboard.press('ArrowRight');
+    await expectMyBoardTurns(pageA, 3);
+    await pageA.locator('[data-player-board][data-my-player="true"][data-player-position="0,2"]')
+      .waitFor({ timeout: 10000 });
+    await expectText(pageB, '내 턴');
+    await pageB.keyboard.press('ArrowDown');
+    await expectMyBoardTurns(pageB, 3);
+    await expectText(pageA, '내 턴');
     await pageA.locator('[data-my-player="true"][data-vision-effect="smoke"][data-vision-obscured="true"]')
       .waitFor({ timeout: 10000 });
     await pageA.locator('[data-testid=board-obscure-overlay]').waitFor({ timeout: 10000 });
     if (await pageA.getByRole('button', { name: '오른쪽으로 이동' }).first().isDisabled()) {
-      throw new Error('온라인 연막 상태에서 대상의 방향 조작이 비활성화됨');
+      throw new Error('온라인 안개 상태에서 대상의 방향 조작이 비활성화됨');
     }
     if (await pageB.locator('[data-vision-obscured="true"]').count() > 0) {
-      throw new Error('연막을 설치한 상대 화면까지 완전히 가려짐');
+      throw new Error('안개벽을 설치한 상대 화면까지 완전히 가려짐');
     }
     if (await pageB.locator('[data-vision-effect="smoke"]').count() !== 1) {
-      throw new Error('상대 화면에 연막 피격 상태가 표시되지 않음');
+      throw new Error('상대 화면에 안개 피격 상태가 표시되지 않음');
     }
-    ok('Firebase 연막 상태 동기화 + 피격자 자신의 다음 차례만 시야 차단');
+    ok('Firebase 안개 상태 동기화 + 피격자 자신의 다음 차례만 시야 차단');
 
-    step('8: A가 세 번째 행동으로 선완주 -> B로 턴 이동');
+    step('9: A가 네 번째 행동으로 선완주 -> B로 턴 이동');
     await pageA.keyboard.press('ArrowRight');
     await expectText(pageA, '턴으로 완주했습니다');
-    await expectMyBoardTurns(pageA, 3);
+    await expectMyBoardTurns(pageA, 4);
     if (await pageA.locator('[data-vision-obscured="true"]').count() > 0) {
-      throw new Error('온라인 유효 행동 후 연막이 해제되지 않음');
+      throw new Error('온라인 유효 행동 후 안개가 해제되지 않음');
     }
     await expectText(pageB, '내 턴');
-    ok('A 3턴 완주 후 완주자를 건너뛰고 B 턴 유지');
+    ok('A 4턴 완주 후 완주자를 건너뛰고 B 턴 유지');
 
-    step('9: A = 관전 모드(승부 미확정), B = 기권 없이 목표까지 진행');
+    step('10: A = 관전 모드(승부 미확정), B = 기권 없이 목표까지 진행');
     await expectText(pageA, '관전 중');
     await expect3DOnlyGameplay(pageA, 2, '온라인 완주자 관전 화면');
     await pageA.waitForTimeout(1000);
     await pageA.screenshot({ path: `${OUT}/mp-01-A-spectate.png` });
-    await expectOpponentCompletion(pageB, ACCOUNTS.a.name, 3);
+    await expectOpponentCompletion(pageB, ACCOUNTS.a.name, 4);
     await expectOnlineRankTotal(pageB, 2);
     if (await pageB.getByRole('button', { name: /포기|기권/ }).count() > 0) {
       throw new Error('진행 중인 플레이어에게 포기/기권 버튼이 노출됨');
@@ -661,21 +737,18 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     }
     await pageB.screenshot({ path: `${OUT}/mp-02-B-must-finish.png` });
 
-    step('10: B 세 번째 헛걸음 -> A 완주자를 건너뛰어 B가 계속 현재 턴');
-    await pageB.keyboard.press('ArrowDown');
-    await expectMyBoardTurns(pageB, 3);
+    step('11: B 네 번째 이동 -> A 완주자를 건너뛰어 B가 계속 현재 턴');
+    await pageB.keyboard.press('ArrowUp');
+    await expectMyBoardTurns(pageB, 4);
     await expectText(pageB, '내 턴');
-    await expectOpponentCompletion(pageB, ACCOUNTS.a.name, 3);
+    await expectOpponentCompletion(pageB, ACCOUNTS.a.name, 4);
     if (!(await finishOnlyButton.isDisabled())) {
       throw new Error('상대 최고 기록을 넘긴 뒤에도 미완주자의 나가기가 차단되지 않음');
     }
     await pageA.waitForTimeout(800);
     await pageA.screenshot({ path: `${OUT}/mp-03-A-watching-B-move.png` });
 
-    step('11: B가 남은 경로를 끝까지 완주 -> 최소 3턴 A 승리 / 6턴 B 패배');
-    await pageB.keyboard.press('ArrowUp');
-    await expectMyBoardTurns(pageB, 4);
-    await expectText(pageB, '내 턴');
+    step('12: B가 남은 경로를 끝까지 완주 -> 4턴 A 승리 / 6턴 B 패배');
     await pageB.keyboard.press('ArrowRight');
     await expectMyBoardTurns(pageB, 5);
     await expectText(pageB, '내 턴');
@@ -686,7 +759,7 @@ async function setupMap(page, { smoke = false, ownerSecrets = false, verifyWormh
     await pageA.screenshot({ path: `${OUT}/mp-04-A-win.png` });
     await pageB.screenshot({ path: `${OUT}/mp-05-B-finished-lose.png` });
 
-    step('12: 재시작 -> 양쪽 모두 맵 제작으로 복귀');
+    step('13: 재시작 -> 양쪽 모두 맵 제작으로 복귀');
     await pageA.getByRole('button', { name: '재시작' }).click();
     await expectText(pageA, '시작점을 선택하세요');
     await expectText(pageB, '시작점을 선택하세요');

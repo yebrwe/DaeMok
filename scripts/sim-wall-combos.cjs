@@ -32,13 +32,13 @@ const LOADOUT_SCENARIOS = [
 
 const COSTS = {
   fire: 1,
-  poison: 2,
+  poison: 1,
   ice: 1,
   wind: 1,
   collapse: 1,
-  mirror: 5,
+  mirror: 1,
   thorn: 1,
-  fake: 7,
+  fake: 1,
   wormhole: 7,
 };
 const COST_SENSITIVITY_BASE_COSTS = {

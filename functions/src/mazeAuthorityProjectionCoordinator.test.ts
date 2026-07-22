@@ -60,23 +60,33 @@ function rtdbEncode(value: unknown): unknown {
 
 function ownerMap(): GameMap {
   return {
-    rulesVersion: 3,
+    rulesVersion: 4,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 0, col: 2 },
     obstacles: [{ position: { row: 3, col: 3 }, direction: 'right' }],
-    items: [{ type: 'mine', position: { row: 4, col: 4 } }],
+    items: [{
+      type: 'fogWall',
+      wallPosition: { row: 4, col: 4 },
+      wallDirection: 'right',
+    }],
     skillLoadout: 'scoutPulse',
+    runnerGear: 'none',
   };
 }
 
 function guestMap(): GameMap {
   return {
-    rulesVersion: 3,
+    rulesVersion: 4,
     startPosition: { row: 5, col: 5 },
     endPosition: { row: 5, col: 3 },
     obstacles: [{ position: { row: 1, col: 1 }, direction: 'right' }],
-    items: [{ type: 'smoke', position: { row: 2, col: 2 } }],
+    items: [{
+      type: 'illusionWall',
+      wallPosition: { row: 2, col: 2 },
+      wallDirection: 'right',
+    }],
     skillLoadout: 'scoutPulse',
+    runnerGear: 'none',
   };
 }
 

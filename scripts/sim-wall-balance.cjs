@@ -27,7 +27,7 @@ const SIZE = 6;
 const CELL_COUNT = SIZE * SIZE;
 const MIN_BUDGET = 10;
 // The live validator only preserves a start-to-goal path; it does not require
-// every cell to stay connected. Sample well beyond the 24-wall live baseline.
+// every cell to stay connected. Sample well beyond the 25-wall live maximum.
 const MAX_BUDGET = 35;
 const BUDGETS = Array.from(
   { length: MAX_BUDGET - MIN_BUDGET + 1 },
@@ -41,7 +41,7 @@ const AGGRESSIVENESS = ['casual', 'adversarial'];
 const POLICIES = ['believer', 'adaptive', 'skeptic'];
 const PLACEMENT_MODES = ['strong', 'optimized'];
 const ITEM_DEFS = [
-  { id: 'fake', label: 'fake-wall', cost: 7 },
+  { id: 'fake', label: 'fake-wall', cost: 1 },
   { id: 'mine', label: 'mine', cost: 1 },
   { id: 'wormhole', label: 'wormhole', cost: 7 },
 ];
@@ -351,9 +351,11 @@ function openDegree(map, cell) {
 function safeExitCells(map) {
   if (map.safeExitCells) return map.safeExitCells;
   const candidates = [];
+  const distances = goalDistances(map);
   for (let cell = 0; cell < CELL_COUNT; cell += 1) {
     if (cell === map.start || cell === map.end) continue;
     if (openDegree(map, cell) < 1) continue;
+    if (distances[cell] < 0) continue;
     candidates.push(cell);
   }
   map.safeExitCells = candidates;
@@ -537,8 +539,9 @@ function bestSafeWormhole(map, entrances) {
     if (entrance === map.start || entrance === map.end) continue;
     for (const exit of exits) {
       if (exit === entrance) continue;
-      // A valid exit only needs one immediately open adjacent cell. Goal
-      // reachability is intentionally not part of the placement contract.
+      if (distances[exit] < 0) {
+        throw new Error('safeExitCells returned an exit with no route to the goal.');
+      }
       const setback = distances[exit] - distances[entrance];
       const score = setback * 1_000 + candidate.tieBreaker;
       if (score > bestScore) {
@@ -746,7 +749,7 @@ function printResults(options, experiment) {
   console.log(`board=${SIZE}x${SIZE} budgets=${MIN_BUDGET}..${MAX_BUDGET} elapsed=${(experiment.elapsedMs / 1000).toFixed(2)}s`);
   console.log('hardlock runs are reported separately and excluded from turn/delta percentiles.');
   console.log('activation is activated/placed; optimized placement is a policy-aware oracle upper bound.');
-  console.log('wormhole exits always have >=1 open edge; exit-to-goal reachability is unrestricted.');
+  console.log('wormhole exits always have >=1 open edge and a static-wall route to the goal.');
 
   for (const aggressiveness of AGGRESSIVENESS) {
     const { baselines, items } = experiment.results.get(aggressiveness);

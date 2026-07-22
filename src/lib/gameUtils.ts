@@ -9,6 +9,7 @@ import {
   Obstacle,
   Player,
   Position,
+  RunnerGear,
   SpecialWallType,
   WallItemType,
   WormholeChallenge,
@@ -21,7 +22,7 @@ import {
 // 보드 크기 상수
 export const BOARD_SIZE = 6;
 export const CARDINAL_DIRECTIONS: Direction[] = ['up', 'down', 'left', 'right'];
-export const GAME_RULES_VERSION = 3;
+export const GAME_RULES_VERSION = 4;
 
 export const MAZE_SKILL_IDS: MazeSkillId[] = ['scoutPulse', 'breach', 'anchor', 'dash'];
 export const DEFAULT_MAZE_SKILL: MazeSkillId = 'scoutPulse';
@@ -30,8 +31,38 @@ export function isMazeSkillId(value: unknown): value is MazeSkillId {
   return typeof value === 'string' && MAZE_SKILL_IDS.includes(value as MazeSkillId);
 }
 
-// 벽 예산 (아이템 비용 포함)
-export const MAX_OBSTACLES = 24;
+// 벽 예산 (아이템 비용 포함). 장비가 없을 때만 절대 최대치를 쓸 수 있다.
+export const MAX_OBSTACLES = 25;
+export const RUNNER_GEAR_WALL_BUDGET = 15;
+export const RUNNER_GEARS: readonly RunnerGear[] = [
+  'none',
+  'wormholeEscapeKit',
+  'insight',
+];
+export const DEFAULT_RUNNER_GEAR: RunnerGear = 'none';
+
+export function isRunnerGear(value: unknown): value is RunnerGear {
+  return typeof value === 'string' && RUNNER_GEARS.includes(value as RunnerGear);
+}
+
+export function getMapRunnerGear(
+  map: Pick<GameMap, 'runnerGear'> | null | undefined
+): RunnerGear {
+  return isRunnerGear(map?.runnerGear) ? map.runnerGear : DEFAULT_RUNNER_GEAR;
+}
+
+export function getMapWallBudget(runnerGear: RunnerGear): number;
+export function getMapWallBudget(
+  map: Pick<GameMap, 'runnerGear'> | null | undefined
+): number;
+export function getMapWallBudget(
+  value: RunnerGear | Pick<GameMap, 'runnerGear'> | null | undefined
+): number {
+  const runnerGear = typeof value === 'string'
+    ? value
+    : getMapRunnerGear(value);
+  return runnerGear === 'none' ? MAX_OBSTACLES : RUNNER_GEAR_WALL_BUDGET;
+}
 export const WORMHOLE_CHALLENGE_SEAL_COUNT = 3;
 export const WORMHOLE_CHALLENGE_MIN_WALLS = 4;
 export const WORMHOLE_CHALLENGE_MAX_WALLS = 12;
@@ -41,6 +72,8 @@ export const WORMHOLE_CHALLENGE_MAX_STEPS = 28;
 export const SPECIAL_WALL_TYPES: SpecialWallType[] = [
   'steelWall',
   'fireWall',
+  'fogWall',
+  'illusionWall',
   'poisonWall',
   'iceWall',
   'windWall',
@@ -57,6 +90,8 @@ export const WALL_ITEM_TYPES: WallItemType[] = ['oneTimeWall', ...SPECIAL_WALL_T
 // an already-running legacy room can finish without corrupting its match.
 export const RETIRED_NEW_MAP_ITEM_TYPES: readonly ItemType[] = [
   'radar',
+  'mine',
+  'smoke',
   'steelWall',
   'collapseWall',
   'phaseWall',
@@ -71,19 +106,21 @@ export function isRetiredNewMapItemType(value: unknown): value is ItemType {
 
 // 아이템 비용 (벽 개수 기준)
 export const ITEM_COSTS: Record<ItemType, number> = {
-  oneTimeWall: 7,
+  oneTimeWall: 1,
   mine: 1,
   wormhole: 7,
   radar: 4,
   smoke: 1,
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 2,
+  fogWall: 1,
+  illusionWall: 2,
+  poisonWall: 1,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,
   phaseWall: 1,
-  mirrorWall: 5,
+  mirrorWall: 1,
   thornWall: 1,
   crystalWall: 1,
 };
@@ -96,6 +133,8 @@ export const ITEM_LIMITS: Record<ItemType, number> = {
   smoke: 1,
   steelWall: 1,
   fireWall: 1,
+  fogWall: 1,
+  illusionWall: 1,
   poisonWall: 1,
   iceWall: 1,
   windWall: 1,
@@ -114,6 +153,8 @@ export const ITEM_LABELS: Record<ItemType, string> = {
   smoke: '연막 함정',
   steelWall: '강철벽',
   fireWall: '화염벽',
+  fogWall: '안개벽',
+  illusionWall: '환영벽',
   poisonWall: '독벽',
   iceWall: '빙결벽',
   windWall: '바람벽',
@@ -259,11 +300,12 @@ export function cloneGameMap(map: GameMap): GameMap {
     })),
     items: getMapItems(map).map(cloneMapItem),
     ...(map.skillLoadout ? { skillLoadout: map.skillLoadout } : {}),
+    runnerGear: getMapRunnerGear(map),
   };
 }
 
 /**
- * V3 still carries one skill field on the wire. New clients always write the
+ * V4 still carries one skill field on the wire. New clients always write the
  * inert compatibility value so a stale draft cannot re-enable a retired
  * loadout. Retired items are deliberately preserved here and rejected by the
  * new-map validator instead of being removed without the author noticing.
@@ -283,6 +325,11 @@ export function getVisibleCollisionWalls(
   const items = getMapItems(map);
 
   return collisionWalls.filter((collision) => {
+    // Only the insight runner receives this private marker. Hiding the marker's
+    // collision removes the fake normal-wall model for that runner, while
+    // public/opponent projections keep the unmarked disguise intact.
+    if (collision.identifiedAsFake === true) return false;
+
     const hasStaticWall = (map.obstacles || []).some((wall) =>
       isSameWallSegment(collision.position, collision.direction, wall.position, wall.direction)
     );
@@ -313,7 +360,14 @@ export function getVisibleCollisionWalls(
 
 function getGuaranteedBlockingWalls(map: GameMap): Obstacle[] {
   const itemWalls = getMapItems(map).flatMap((item) =>
-    isWallItemType(item.type) && isPositionInBoard(item.wallPosition) && isDirection(item.wallDirection)
+    // Newly placeable item walls disappear after activation. Treating them as
+    // permanent here prevented authors from putting one on a wormhole exit's
+    // sole route even though that route reopens during play. Steel is retained
+    // for already persisted maps because it is the only non-disappearing item
+    // wall supported by the legacy runtime.
+    item.type === 'steelWall' &&
+      isPositionInBoard(item.wallPosition) &&
+      isDirection(item.wallDirection)
       ? [{ position: item.wallPosition, direction: item.wallDirection }]
       : []
   );
@@ -347,6 +401,75 @@ export function getWormholeExitSafetyError(map: GameMap, exit: Position): string
 
 export function isWormholeExitSafe(map: GameMap, exit: Position | null | undefined): boolean {
   return !!exit && getWormholeExitSafetyError(map, exit) === null;
+}
+
+const WORMHOLE_EXIT_GOAL_PATH_ERROR =
+  '웜홀 출구에서 도착점까지 갈 수 있는 길이 필요합니다.';
+
+/**
+ * New-map-only reachability rule for wormhole exits. Only ordinary walls in
+ * `map.obstacles` participate: item walls are intentionally ignored because
+ * every wall available to new map authors is transient and can disappear.
+ */
+export function getWormholeExitGoalPathError(
+  map: GameMap | null | undefined
+): string | null {
+  if (!isRecord(map) || !isPositionInBoard(map.endPosition)) {
+    return WORMHOLE_EXIT_GOAL_PATH_ERROR;
+  }
+
+  const rawObstacles = (map as unknown as { obstacles?: unknown }).obstacles;
+  if (rawObstacles != null && !Array.isArray(rawObstacles)) {
+    return WORMHOLE_EXIT_GOAL_PATH_ERROR;
+  }
+  const obstacles = (Array.isArray(rawObstacles) ? rawObstacles : []) as unknown[];
+  if (
+    !isDenseRecordArray(obstacles) ||
+    obstacles.some((obstacle) =>
+      !isRecord(obstacle) ||
+      !isPositionInBoard(obstacle.position as Position | undefined) ||
+      !isDirection(obstacle.direction) ||
+      !isPositionInBoard(
+        getNewPosition(obstacle.position as Position, obstacle.direction as Direction)
+      )
+    )
+  ) {
+    return WORMHOLE_EXIT_GOAL_PATH_ERROR;
+  }
+
+  const rawItems = (map as unknown as { items?: unknown }).items;
+  const rawLegacyItem = (map as unknown as { item?: unknown }).item;
+  if (rawItems != null && !Array.isArray(rawItems)) {
+    return WORMHOLE_EXIT_GOAL_PATH_ERROR;
+  }
+  if (rawLegacyItem != null && !isRecord(rawLegacyItem)) {
+    return WORMHOLE_EXIT_GOAL_PATH_ERROR;
+  }
+  const itemValues = Array.isArray(rawItems)
+    ? rawItems
+    : rawLegacyItem == null
+      ? []
+      : [rawLegacyItem];
+  if (!isDenseRecordArray(itemValues)) return WORMHOLE_EXIT_GOAL_PATH_ERROR;
+
+  const permanentWalls = obstacles as Obstacle[];
+  for (const item of itemValues as MapItem[]) {
+    if (item.type !== 'wormhole') continue;
+    if (
+      !isPositionInBoard(item.exit) ||
+      !findShortestPath(item.exit, map.endPosition, permanentWalls)
+    ) {
+      return WORMHOLE_EXIT_GOAL_PATH_ERROR;
+    }
+  }
+
+  return null;
+}
+
+export function areWormholeExitsReachableFromGoal(
+  map: GameMap | null | undefined
+): boolean {
+  return getWormholeExitGoalPathError(map) === null;
 }
 
 // 위치가 보드 내에 있는지 확인
@@ -618,6 +741,7 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
   if (!isPositionInBoard(map.startPosition) || !isPositionInBoard(map.endPosition)) return false;
   if (isSamePosition(map.startPosition, map.endPosition)) return false;
   if (map.skillLoadout != null && !isMazeSkillId(map.skillLoadout)) return false;
+  if (map.runnerGear !== undefined && !isRunnerGear(map.runnerGear)) return false;
 
   const rawObstacles = (map as unknown as { obstacles?: unknown }).obstacles;
   if (rawObstacles != null && !Array.isArray(rawObstacles)) return false;
@@ -695,7 +819,7 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
     }
   }
 
-  if (countUniqueMapWalls(validObstacles) + itemCost > MAX_OBSTACLES) return false;
+  if (countUniqueMapWalls(validObstacles) + itemCost > getMapWallBudget(map)) return false;
 
   const basePath = findShortestPath(
     map.startPosition,
@@ -713,13 +837,15 @@ export function isValidMap(map: GameMap, expectedRulesVersion?: number): boolean
 
 /**
  * Strict boundary for newly saved maps. `isValidMap` remains intentionally
- * backward-compatible so already persisted V3 maps can still be read while a
- * legacy match drains.
+ * backward-compatible so already persisted legacy maps can still be read
+ * while an older match drains.
  */
 export function isValidNewMap(map: GameMap, expectedRulesVersion?: number): boolean {
-  return map?.skillLoadout === DEFAULT_MAZE_SKILL
+  return isRunnerGear(map?.runnerGear)
+    && map?.skillLoadout === DEFAULT_MAZE_SKILL
     && !getMapItems(map).some((item) => isRetiredNewMapItemType(item.type))
     && getMapItems(map).every((item) => item.type !== 'wormhole'
       || (item.challenge?.version === 2 && isValidDiceWormholeChallenge(item.challenge)))
-    && isValidMap(map, expectedRulesVersion);
+    && isValidMap(map, expectedRulesVersion)
+    && areWormholeExitsReachableFromGoal(map);
 }

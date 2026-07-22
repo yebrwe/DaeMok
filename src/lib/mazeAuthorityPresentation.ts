@@ -4,6 +4,7 @@ import type {
   MazeAuthorityPlayerView,
   MazeAuthorityWormholeRunView,
 } from '@/lib/mazeAuthorityClient';
+import { MAZE_AUTHORITY_RULES_VERSION } from '@/lib/mazeAuthorityClient';
 import { GamePhase, type GameMap, type WormholeRunState } from '@/types/game';
 import type { LiveBoardEntry } from '@/components/LiveBoardGrid';
 
@@ -16,12 +17,13 @@ export function isFullMazeAuthorityMap(map: MazeAuthorityMapView): map is GameMa
 export function materializeMazeAuthorityBoard(map: MazeAuthorityMapView): GameMap {
   if (isFullMazeAuthorityMap(map)) return map;
   return {
-    rulesVersion: 3,
+    rulesVersion: MAZE_AUTHORITY_RULES_VERSION,
     startPosition: { ...map.startPosition },
     endPosition: { ...map.endPosition },
     obstacles: [],
     items: [],
     skillLoadout: 'scoutPulse',
+    runnerGear: 'none',
   };
 }
 

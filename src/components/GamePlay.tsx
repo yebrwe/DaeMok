@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Image from 'next/image';
-import { CollisionWall, Direction, GameMap, GameState, Obstacle, Position } from '@/types/game';
+import { CollisionWall, Direction, GameMap, GamePhase, GameState, Obstacle, Position } from '@/types/game';
 import type { BoardFx } from './three/GameBoard3D';
 import LiveBoardGrid, { LiveBoardEntry } from './LiveBoardGrid';
 import MobileDirectionPad from './MobileDirectionPad';
@@ -16,15 +16,23 @@ import {
   MoveTurnOutcome,
   normalizeConsumed,
   resolveTurnAction,
+  sanitizeHiddenIllusionResolutionForPresentation,
 } from '@/lib/gameTurn';
 import {
   createLocalBoardVisualRoute,
   deriveLiveBoardVisualTransition,
   getActiveLocalBoardVia,
+  getIllusionReturnOutcomeVia,
   getWallReboundOutcomeVia,
   LocalBoardVisualRoute,
   LiveBoardVisualTransition,
 } from '@/lib/liveBoardVisuals';
+import {
+  legacyPrivateCollisionKey,
+  projectLegacyCollisionsForLocalRunner,
+  sanitizeLegacyHiddenIllusionMessage,
+  sanitizeLegacyGameStateForSharedWrite,
+} from '@/lib/legacyGamePrivacy';
 import { getDatabase, ref, update, runTransaction, serverTimestamp } from 'firebase/database';
 import { getAuth } from 'firebase/auth';
 
@@ -50,9 +58,16 @@ interface GamePlayProps {
 }
 
 function removeTransientMaps(state: GameState): GameState {
-  const persistentState = { ...state };
+  const persistentState = sanitizeLegacyGameStateForSharedWrite(state);
   delete persistentState.maps;
+  if (persistentState.phase === GamePhase.END) {
+    delete persistentState.illusionEffectsByPlayer;
+  }
   return persistentState;
+}
+
+interface PrivateInsightNotice {
+  message: string;
 }
 
 const GamePlay: React.FC<GamePlayProps> = ({
@@ -73,6 +88,10 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const [gameOver, setGameOver] = useState<boolean>(false);
   const [lastMoveValid, setLastMoveValid] = useState<boolean | null>(null);
   const [message, setMessage] = useState<string>('');
+  const [privateInsightNotice, setPrivateInsightNotice] = useState<PrivateInsightNotice | null>(null);
+  const [identifiedFakeWallKeys, setIdentifiedFakeWallKeys] = useState<ReadonlySet<string>>(
+    () => new Set<string>()
+  );
   const [playerPhotoURL, setPlayerPhotoURL] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState<string>('나');
   // 액션 이펙트 (지뢰 폭발/웜홀/충돌 스파크/골인 축포)
@@ -182,6 +201,44 @@ const GamePlay: React.FC<GamePlayProps> = ({
   const activeWormholeRun = gameState?.wormholeRunsByPlayer?.[userId] || null;
   const displayedPlayerPosition = activeWormholeRun?.position || playerPosition;
   const moveVia = getActiveLocalBoardVia(localVisualRoute, displayedPlayerPosition, moveCount);
+  const matchNumber = gameState?.matchNumber ?? 1;
+  const privateKnowledgeStorageKey = `daemok:legacy-insight:${roomId}:${matchNumber}:${userId}`;
+  const assignedMapOwnerId = gameState?.assignments?.[userId] ?? null;
+
+  useEffect(() => {
+    setPrivateInsightNotice(null);
+    try {
+      const stored = window.sessionStorage.getItem(privateKnowledgeStorageKey);
+      const parsed = stored ? JSON.parse(stored) : [];
+      setIdentifiedFakeWallKeys(new Set(
+        Array.isArray(parsed)
+          ? parsed.filter((entry): entry is string => typeof entry === 'string').slice(0, 256)
+          : []
+      ));
+    } catch {
+      setIdentifiedFakeWallKeys(new Set());
+    }
+  }, [privateKnowledgeStorageKey]);
+
+  const rememberIdentifiedFakeWall = useCallback((outcome: MoveTurnOutcome) => {
+    if (!assignedMapOwnerId) return;
+    const key = legacyPrivateCollisionKey({
+      mapOwnerId: assignedMapOwnerId,
+      position: outcome.origin,
+      direction: outcome.direction,
+    });
+    setIdentifiedFakeWallKeys((current) => {
+      if (current.has(key)) return current;
+      const next = new Set(current);
+      next.add(key);
+      try {
+        window.sessionStorage.setItem(privateKnowledgeStorageKey, JSON.stringify([...next]));
+      } catch {
+        /* Private knowledge still remains in component memory. */
+      }
+      return next;
+    });
+  }, [assignedMapOwnerId, privateKnowledgeStorageKey]);
 
   // 상위 방 구독의 위치와 턴 수를 따라가 다중 탭에서도 같은 상태를 유지한다.
   useEffect(() => {
@@ -216,7 +273,8 @@ const GamePlay: React.FC<GamePlayProps> = ({
     }).length;
   const rankTotal = rankedOthers.length + 1;
   const showRank = !gameEnded && othersInfo.length > 0;
-  const mobileStatusText = message
+  const visibleMessage = privateInsightNotice?.message || message;
+  const mobileStatusText = visibleMessage
     || (iAmDone && !gameEnded
       ? `${myFinishMoves ?? moveCount}턴 완주 · 관전 중`
       : !iAmDone && !gameEnded && leadingFinishMoves !== null
@@ -229,6 +287,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
       setMessage(`${currentTurnName}의 턴입니다. 차례를 기다려주세요.`);
       return;
     }
+    setPrivateInsightNotice(null);
     const actionWormholeRun = gameState?.wormholeRunsByPlayer?.[userId] || null;
     const actionPosition = actionWormholeRun?.position || playerPosition;
     // V2는 4×4 내부 경계/차원석 충돌도 정상 행동으로 소비한다. 6×6 메인 보드용
@@ -254,8 +313,9 @@ const GamePlay: React.FC<GamePlayProps> = ({
           { type: 'move', direction }
         );
         if (!resolved || resolved.outcome.type !== 'move') return;
-        outcome = resolved.outcome;
-        return removeTransientMaps(resolved.state);
+        const presented = sanitizeHiddenIllusionResolutionForPresentation(resolved, userId);
+        outcome = presented.outcome as MoveTurnOutcome;
+        return removeTransientMaps(presented.state);
       }, { applyLocally: false });
 
       if (!result.committed || !outcome) {
@@ -273,10 +333,24 @@ const GamePlay: React.FC<GamePlayProps> = ({
             ? null
             : false
       );
-      setMessage(committed.message);
+      if (committed.identifiedFakeWall) {
+        const insightMessage = '심안으로 방금 충돌한 벽이 가짜벽임을 간파했습니다.';
+        rememberIdentifiedFakeWall(committed);
+        setPrivateInsightNotice({ message: insightMessage });
+        setMessage(insightMessage);
+      } else {
+        setMessage(committed.message);
+      }
       const reboundVia = getWallReboundOutcomeVia(committed);
+      const illusionReturnVia = getIllusionReturnOutcomeVia(committed);
 
-      if (committed.effect === 'bump') {
+      if (illusionReturnVia) {
+        setLocalVisualRoute(createLocalBoardVisualRoute(
+          illusionReturnVia,
+          committed.position,
+          committed.moves
+        ));
+      } else if (committed.effect === 'bump') {
         setLocalVisualRoute(createLocalBoardVisualRoute(
           reboundVia,
           committed.position,
@@ -346,7 +420,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
     } finally {
       releaseActionLock();
     }
-  }, [isFinished, isMyTurn, currentTurnName, playerPosition, roomId, userId, onGameComplete, fireFx, immutableMaps, releaseActionLock, gameState?.wormholeRunsByPlayer]);
+  }, [isFinished, isMyTurn, currentTurnName, playerPosition, roomId, userId, onGameComplete, fireFx, immutableMaps, releaseActionLock, gameState?.wormholeRunsByPlayer, rememberIdentifiedFakeWall]);
 
   const handleMove = useCallback(
     async (direction: Direction) => {
@@ -401,7 +475,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
   useEffect(() => {
     if (gameState?.turnMessage) {
-      setMessage(gameState.turnMessage);
+      setMessage(sanitizeLegacyHiddenIllusionMessage(gameState.turnMessage));
       setLastMoveValid(null);
     }
   }, [gameState?.turnMessage, gameState?.turnMessageTimestamp]);
@@ -412,7 +486,12 @@ const GamePlay: React.FC<GamePlayProps> = ({
     const players = gameState.players || {};
     const ordered = (gameState.turnOrder || Object.keys(players)).filter((id) => !!players[id]);
     const runnerIds = [userId, ...ordered.filter((id) => id !== userId)].slice(0, 4);
-    const wallList = Object.values(gameState.collisionWalls || {}).filter(Boolean) as CollisionWall[];
+    const wallList = projectLegacyCollisionsForLocalRunner(
+      Object.values(gameState.collisionWalls || {}).filter(Boolean) as CollisionWall[],
+      userId,
+      assignedMapOwnerId || '',
+      identifiedFakeWallKeys
+    );
 
     return runnerIds.flatMap((runnerId, index) => {
       const runner = players[runnerId];
@@ -463,7 +542,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
         wormholeRun: gameState.wormholeRunsByPlayer?.[runnerId] || null,
       }];
     });
-  }, [gameState, userId, playerName, displayedPlayerPosition, moveCount, revealedWalls, fx, moveVia, remoteVisuals, currentTurnId]);
+  }, [gameState, userId, playerName, displayedPlayerPosition, moveCount, revealedWalls, fx, moveVia, remoteVisuals, currentTurnId, assignedMapOwnerId, identifiedFakeWallKeys]);
 
   const renderControls = () => {
     const sizeClass = '!h-11 !w-11 !rounded-lg';
@@ -659,7 +738,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
 
       {/* 메시지/배너 오버레이 */}
       <div className="game-desktop-messages pointer-events-none absolute left-1/2 top-[114px] z-20 w-[96%] max-w-2xl -translate-x-1/2 flex-col items-center gap-1.5">
-        {message && (
+        {visibleMessage && (
           <div
             className={`rounded-full border px-3 py-1 text-xs backdrop-blur-sm ${
               lastMoveValid === false
@@ -669,7 +748,7 @@ const GamePlay: React.FC<GamePlayProps> = ({
                   : 'bg-slate-800/80 border-slate-600/60 text-slate-200'
             }`}
           >
-            {message}
+            {visibleMessage}
           </div>
         )}
 

@@ -4,12 +4,15 @@ import {
   resolveTurnAction,
   type TurnAction,
 } from '../vendor/maze-engine/dist/lib/gameTurn';
+import { generateDiceWormholeChallenge } from '../vendor/maze-engine/dist/lib/diceWormhole';
+import { GAME_RULES_VERSION } from '../vendor/maze-engine/dist/lib/gameUtils';
 import {
   GamePhase,
   type GameMap,
   type MapItem,
   type MazeSkillId,
   type Position,
+  type RunnerGear,
 } from '../vendor/maze-engine/dist/types/game';
 import {
   MAZE_AUTHORITY_MAX_RECEIPTS,
@@ -31,6 +34,8 @@ const REPLACEMENT = 'replacement-user-001';
 const ROOM_ID = 'room-authority-001';
 const RETIRED_NEW_MAP_ITEMS: readonly MapItem[] = [
   { type: 'radar' },
+  { type: 'mine', position: { row: 2, col: 2 } },
+  { type: 'smoke', position: { row: 2, col: 2 } },
   { type: 'steelWall', wallPosition: { row: 2, col: 2 }, wallDirection: 'right' },
   { type: 'collapseWall', wallPosition: { row: 2, col: 2 }, wallDirection: 'right' },
   { type: 'phaseWall', wallPosition: { row: 2, col: 2 }, wallDirection: 'right' },
@@ -60,14 +65,16 @@ function simpleMap(
   startPosition: Position = { row: 0, col: 0 },
   endPosition: Position = { row: 0, col: 1 },
   skillLoadout: MazeSkillId = 'scoutPulse',
+  runnerGear: RunnerGear = 'none',
 ): GameMap {
   return {
-    rulesVersion: 3,
+    rulesVersion: GAME_RULES_VERSION,
     startPosition,
     endPosition,
     obstacles: [],
     items: [],
     skillLoadout,
+    runnerGear,
   };
 }
 
@@ -265,6 +272,24 @@ test('strict tagged parsing rejects unknown command, action, map, and array fiel
     map: simpleMap(),
   };
   assert.deepEqual(parseMazeAuthorityCommand(submit), submit);
+  const mapWithoutRunnerGear = cloneJson(submit.map) as Partial<GameMap>;
+  delete mapWithoutRunnerGear.runnerGear;
+  expectDomainError(
+    () => parseMazeAuthorityCommand({
+      ...submit,
+      map: mapWithoutRunnerGear,
+    }),
+    'invalid-argument',
+    'map-shape',
+  );
+  expectDomainError(
+    () => parseMazeAuthorityCommand({
+      ...submit,
+      map: { ...submit.map, runnerGear: 'radar' },
+    }),
+    'invalid-argument',
+    'map-runner-gear',
+  );
   expectDomainError(
     () => parseMazeAuthorityCommand({
       ...submit,
@@ -351,6 +376,9 @@ test('create, join, and submitMap apply exact generation/revision CAS without mu
   assert.equal(created.state.meta.generation, 1);
   assert.equal(created.state.meta.revision, 1);
   assert.equal(created.state.gameState.phase, GamePhase.SETUP);
+  assert.equal(created.state.ruleSnapshot.version, GAME_RULES_VERSION);
+  assert.equal(created.state.ruleSnapshot.runnerGearWallBudget, 15);
+  assert.equal(created.state.ruleSnapshot.wallBudget, 25);
   assert.deepEqual(created.state.gameState.turnOrder, [OWNER]);
 
   const beforeFailure = cloneJson(created.state);
@@ -495,6 +523,7 @@ test('one-time wall Authority outcomes and receipts are indistinguishable from s
   assert.equal(staticWallState.gameState.currentTurn, OWNER);
   assert.equal(oneTimeWallState.gameState.currentTurn, OWNER);
   assert.equal(oneTimeWallState.gameState.assignments?.[OWNER], GUEST);
+  assert.equal(oneTimeWallState.gameState.maps?.[OWNER]?.runnerGear, 'none');
 
   const staticCommand = {
     type: 'turn',
@@ -537,13 +566,20 @@ test('one-time wall Authority outcomes and receipts are indistinguishable from s
     oneTimeTurn.state.gameState.turnMessage,
     staticTurn.state.gameState.turnMessage,
   );
-  for (const leakedField of ['wallEffect', 'wallItemIndex', 'itemPosition']) {
+  for (const leakedField of [
+    'wallEffect', 'wallItemIndex', 'itemPosition', 'identifiedFakeWall',
+  ]) {
     assert.equal(
       Object.prototype.hasOwnProperty.call(oneTimeTurn.result.outcome, leakedField),
       false,
       `Authority outcome leaked ${leakedField}`,
     );
   }
+  const fakeCollisionWalls = Object.values(
+    oneTimeTurn.state.gameState.collisionWalls ?? {},
+  );
+  assert.equal(fakeCollisionWalls.length, 1);
+  assert.equal(fakeCollisionWalls[0].identifiedAsFake, undefined);
 
   const consumed = oneTimeTurn.state.gameState.itemState?.[GUEST]?.consumed;
   assert.ok(consumed && typeof consumed === 'object');
@@ -569,6 +605,429 @@ test('one-time wall Authority outcomes and receipts are indistinguishable from s
     (replay.result as TurnResult).outcome,
     staticTurn.result.outcome,
   );
+});
+
+test('insight identifies a fake wall only in the runner outcome and exactly replayed receipt', () => {
+  const wallPosition = { row: 2, col: 2 };
+  const wallDirection = 'right' as const;
+  const playedMapBase = simpleMap(wallPosition, { row: 2, col: 4 });
+  const state = startMatch(readyTwoPlayerRoom(
+    simpleMap(undefined, undefined, 'scoutPulse', 'insight'),
+    {
+      ...playedMapBase,
+      items: [{
+        type: 'oneTimeWall',
+        wallPosition,
+        wallDirection,
+      }],
+    },
+  ));
+  assert.equal(state.gameState.maps?.[OWNER]?.runnerGear, 'insight');
+
+  const command = {
+    type: 'turn',
+    commandId: 'command-insight-one-time-wall',
+    roomId: ROOM_ID,
+    expectedGeneration: state.meta.generation,
+    expectedRevision: state.meta.revision,
+    action: { type: 'move', direction: wallDirection },
+  } as const;
+  const turn = reduceMazeAuthorityCommand(state, OWNER, command, 2_100);
+
+  assert.equal(turn.result.type, 'turn');
+  assert.equal(turn.result.outcome.type, 'move');
+  assert.equal(turn.result.outcome.effect, 'bump');
+  assert.equal(turn.result.outcome.consumedItemIndex, null);
+  assert.equal(turn.result.outcome.identifiedFakeWall, true);
+  assert.equal(
+    turn.result.outcome.message,
+    '플레이어가 심안으로 가짜벽을 간파했습니다.',
+  );
+  for (const leakedField of ['wallEffect', 'wallItemIndex', 'itemPosition']) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(turn.result.outcome, leakedField),
+      false,
+      `Insight outcome leaked ${leakedField}`,
+    );
+  }
+  assert.equal(
+    turn.state.gameState.turnMessage,
+    '플레이어가 벽에 부딪혔습니다.',
+  );
+
+  const fakeCollisionWalls = Object.values(turn.state.gameState.collisionWalls ?? {});
+  assert.equal(fakeCollisionWalls.length, 1);
+  assert.equal(fakeCollisionWalls[0].identifiedAsFake, true);
+  const consumed = turn.state.gameState.itemState?.[GUEST]?.consumed;
+  assert.ok(consumed && typeof consumed === 'object');
+  assert.equal((consumed as Record<number, boolean>)[0], true);
+
+  const storedReceipt = turn.state.receipts.byId[command.commandId];
+  assert.deepEqual(storedReceipt.result, turn.result);
+  assert.equal(JSON.stringify(storedReceipt.result).includes('wallItemIndex'), false);
+  const persistedState = simulateRealtimeDatabase(turn.state);
+  assert.ok(persistedState);
+  const replay = reduceMazeAuthorityCommand(
+    persistedState as MazeAuthorityState,
+    OWNER,
+    command,
+    9_999,
+  );
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.result, turn.result);
+});
+
+test('fog wall passes through once and creates the private smoke-vision effect', () => {
+  const fogOrigin = { row: 2, col: 1 };
+  const state = startMatch(readyTwoPlayerRoom(
+    simpleMap({ row: 0, col: 0 }, { row: 5, col: 5 }),
+    {
+      ...simpleMap(fogOrigin, { row: 5, col: 5 }),
+      items: [{
+        type: 'fogWall',
+        wallPosition: fogOrigin,
+        wallDirection: 'right',
+      }],
+    },
+  ));
+  const turn = reduceMazeAuthorityCommand(state, OWNER, {
+    type: 'turn',
+    commandId: 'command-fog-wall-pass',
+    roomId: ROOM_ID,
+    expectedGeneration: state.meta.generation,
+    expectedRevision: state.meta.revision,
+    action: { type: 'move', direction: 'right' },
+  }, 2_150);
+
+  assert.equal(turn.result.type, 'turn');
+  assert.equal(turn.result.outcome.type, 'move');
+  assert.equal(turn.result.outcome.effect, 'move');
+  assert.equal(turn.result.outcome.wallEffect, 'fogWall');
+  assert.equal(turn.result.outcome.wallItemIndex, 0);
+  assert.equal(turn.result.outcome.consumedItemIndex, 0);
+  assert.deepEqual(turn.result.outcome.position, { row: 2, col: 2 });
+  assert.equal(turn.state.gameState.visionEffectsByPlayer?.[OWNER]?.type, 'smoke');
+  assert.equal(
+    turn.state.gameState.visionEffectsByPlayer?.[OWNER]?.sourcePlayerId,
+    GUEST,
+  );
+  assert.equal(
+    (turn.state.gameState.itemState?.[GUEST]?.consumed as Record<number, boolean>)[0],
+    true,
+  );
+});
+
+test('illusion state phases real and fake walls, fixes the first anchor, and returns after three own actions', () => {
+  const illusionOrigin = { row: 2, col: 1 };
+  const fakeOrigin = { row: 2, col: 2 };
+  const staticOrigin = { row: 2, col: 3 };
+  const guestMap: GameMap = {
+    ...simpleMap(illusionOrigin, { row: 5, col: 5 }),
+    obstacles: [{ position: staticOrigin, direction: 'right' }],
+    items: [{
+      type: 'illusionWall',
+      wallPosition: illusionOrigin,
+      wallDirection: 'right',
+    }, {
+      type: 'oneTimeWall',
+      wallPosition: fakeOrigin,
+      wallDirection: 'right',
+    }],
+  };
+  let state = startMatch(readyTwoPlayerRoom(
+    simpleMap({ row: 0, col: 0 }, { row: 5, col: 5 }, 'scoutPulse', 'insight'),
+    guestMap,
+  ));
+  const takeTurn = (
+    actorId: string,
+    direction: 'up' | 'down' | 'left' | 'right',
+    commandId: string,
+    now: number,
+  ) => {
+    const reduction = reduceMazeAuthorityCommand(state, actorId, {
+      type: 'turn',
+      commandId,
+      roomId: ROOM_ID,
+      expectedGeneration: state.meta.generation,
+      expectedRevision: state.meta.revision,
+      action: { type: 'move', direction },
+    }, now);
+    state = reduction.state;
+    return reduction;
+  };
+
+  const activation = takeTurn(OWNER, 'right', 'illusion-activate', 2_200);
+  assert.equal(activation.result.type, 'turn');
+  assert.equal(activation.result.outcome.type, 'move');
+  assert.equal(activation.result.outcome.illusionTransition, undefined);
+  assert.equal(activation.result.outcome.wallEffect, undefined);
+  assert.equal(activation.result.outcome.wallItemIndex, undefined);
+  assert.equal(activation.result.outcome.itemPosition, undefined);
+  assert.equal(activation.result.outcome.consumedItemIndex, null);
+  assert.match(activation.result.outcome.message, /한 칸 이동했습니다/u);
+  assert.equal(activation.result.outcome.message.includes('환영'), false);
+  assert.equal(state.gameState.turnMessage?.includes('환영'), false);
+  assert.equal(
+    JSON.stringify(state.receipts.byId['illusion-activate'].result).includes('illusionTransition'),
+    false,
+    'the replay receipt cannot disclose activation later',
+  );
+  assert.deepEqual(activation.result.outcome.position, fakeOrigin);
+  assert.deepEqual(state.gameState.illusionEffectsByPlayer?.[OWNER], {
+    sourcePlayerId: GUEST,
+    appliedAtTurn: 1,
+    actionsRemaining: 3,
+  });
+  assert.equal(
+    (state.gameState.itemState?.[GUEST]?.consumed as Record<number, boolean>)[0],
+    true,
+  );
+
+  const malformed = cloneJson(state);
+  malformed.gameState.illusionEffectsByPlayer![OWNER].actionsRemaining = 4;
+  expectDomainError(
+    () => parseMazeAuthorityState(malformed),
+    'data-loss',
+    'authority-illusion-effect',
+  );
+  const wrongSource = cloneJson(state);
+  wrongSource.gameState.illusionEffectsByPlayer![OWNER].sourcePlayerId = OWNER;
+  expectDomainError(
+    () => parseMazeAuthorityState(wrongSource),
+    'data-loss',
+    'authority-illusion-effect-reference',
+  );
+
+  takeTurn(GUEST, 'down', 'illusion-guest-gap-1', 2_210);
+  const fakePhase = takeTurn(OWNER, 'right', 'illusion-phase-fake', 2_220);
+  assert.equal(fakePhase.result.type, 'turn');
+  assert.equal(fakePhase.result.outcome.type, 'move');
+  assert.equal(fakePhase.result.outcome.effect, 'move');
+  assert.equal(fakePhase.result.outcome.illusionTransition, undefined);
+  assert.match(fakePhase.result.outcome.message, /한 칸 이동했습니다/u);
+  assert.equal(fakePhase.result.outcome.message.includes('환영'), false);
+  assert.deepEqual(fakePhase.result.outcome.position, staticOrigin);
+  for (const hiddenFakeField of [
+    'identifiedFakeWall', 'wallEffect', 'wallItemIndex', 'itemPosition',
+  ]) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(fakePhase.result.outcome, hiddenFakeField),
+      false,
+      `illusion traversal leaked ${hiddenFakeField}`,
+    );
+  }
+  assert.equal(fakePhase.result.outcome.consumedItemIndex, null);
+  assert.equal(
+    (state.gameState.itemState?.[GUEST]?.consumed as Record<number, boolean>)[1],
+    undefined,
+    'the phased fake wall remains unconsumed',
+  );
+  assert.deepEqual(state.gameState.collisionWalls, {});
+  assert.deepEqual(state.gameState.illusionEffectsByPlayer?.[OWNER], {
+    sourcePlayerId: GUEST,
+    appliedAtTurn: 1,
+    actionsRemaining: 2,
+    firstWallOrigin: fakeOrigin,
+  });
+
+  takeTurn(GUEST, 'up', 'illusion-guest-gap-2', 2_230);
+  const staticPhase = takeTurn(OWNER, 'right', 'illusion-phase-static', 2_240);
+  assert.equal(staticPhase.result.type, 'turn');
+  assert.equal(staticPhase.result.outcome.type, 'move');
+  assert.equal(staticPhase.result.outcome.illusionTransition, undefined);
+  assert.equal(staticPhase.result.outcome.message.includes('환영'), false);
+  assert.deepEqual(state.gameState.players[OWNER].position, { row: 2, col: 4 });
+  assert.deepEqual(
+    state.gameState.illusionEffectsByPlayer?.[OWNER]?.firstWallOrigin,
+    fakeOrigin,
+    'later walls cannot replace the first anchor',
+  );
+  assert.equal(state.gameState.illusionEffectsByPlayer?.[OWNER]?.actionsRemaining, 1);
+
+  takeTurn(GUEST, 'down', 'illusion-guest-gap-3', 2_250);
+  const returned = takeTurn(OWNER, 'down', 'illusion-return', 2_260);
+  assert.equal(returned.result.type, 'turn');
+  assert.equal(returned.result.outcome.type, 'move');
+  assert.equal(returned.result.outcome.illusionTransition, 'returned');
+  assert.deepEqual(returned.result.outcome.illusionReturnPosition, fakeOrigin);
+  assert.deepEqual(returned.result.outcome.position, fakeOrigin);
+  assert.equal(returned.result.outcome.reachedGoal, false);
+  assert.equal(state.gameState.illusionEffectsByPlayer?.[OWNER], undefined);
+  assert.deepEqual(state.gameState.players[OWNER].position, fakeOrigin);
+
+  const persisted = simulateRealtimeDatabase(state);
+  assert.ok(persisted);
+  const replay = reduceMazeAuthorityCommand(
+    persisted as MazeAuthorityState,
+    OWNER,
+    {
+      type: 'turn',
+      commandId: 'illusion-return',
+      roomId: ROOM_ID,
+      expectedGeneration: returned.result.generation,
+      expectedRevision: returned.result.revision - 1,
+      action: { type: 'move', direction: 'down' },
+    },
+    99_999,
+  );
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.result, returned.result);
+});
+
+test('an illusion expires inside a wormhole by returning to its first main-board wall anchor', () => {
+  const illusionOrigin = { row: 0, col: 0 };
+  const firstWallOrigin = { row: 0, col: 1 };
+  const wormholeEntrance = { row: 0, col: 3 };
+  const wormholeExit = { row: 4, col: 4 };
+  const challenge = generateDiceWormholeChallenge(0x1A11_5100);
+  const guestMap: GameMap = {
+    ...simpleMap(illusionOrigin, { row: 0, col: 5 }),
+    obstacles: [{ position: firstWallOrigin, direction: 'right' }],
+    items: [{
+      type: 'illusionWall',
+      wallPosition: illusionOrigin,
+      wallDirection: 'right',
+    }, {
+      type: 'wormhole',
+      entrance: wormholeEntrance,
+      exit: wormholeExit,
+      challenge,
+    }],
+  };
+  let state = startMatch(readyTwoPlayerRoom(
+    simpleMap({ row: 5, col: 5 }, { row: 5, col: 4 }),
+    guestMap,
+  ));
+  const takeTurn = (
+    actorId: string,
+    direction: 'up' | 'down' | 'left' | 'right',
+    commandId: string,
+    now: number,
+  ) => {
+    const reduction = reduceMazeAuthorityCommand(state, actorId, {
+      type: 'turn',
+      commandId,
+      roomId: ROOM_ID,
+      expectedGeneration: state.meta.generation,
+      expectedRevision: state.meta.revision,
+      action: { type: 'move', direction },
+    }, now);
+    state = reduction.state;
+    return reduction;
+  };
+
+  const activation = takeTurn(OWNER, 'right', 'illusion-wormhole-activate', 2_300);
+  assert.equal(activation.result.type, 'turn');
+  assert.equal(activation.result.outcome.type, 'move');
+  assert.equal(activation.result.outcome.illusionTransition, undefined);
+  assert.equal(activation.result.outcome.message.includes('환영'), false);
+  assert.deepEqual(state.gameState.illusionEffectsByPlayer?.[OWNER], {
+    sourcePlayerId: GUEST,
+    appliedAtTurn: 1,
+    actionsRemaining: 3,
+  });
+
+  takeTurn(GUEST, 'up', 'illusion-wormhole-guest-gap-1', 2_310);
+  const anchored = takeTurn(OWNER, 'right', 'illusion-wormhole-anchor', 2_320);
+  assert.equal(anchored.result.type, 'turn');
+  assert.equal(anchored.result.outcome.type, 'move');
+  assert.equal(anchored.result.outcome.illusionTransition, undefined);
+  assert.deepEqual(state.gameState.players[OWNER].position, { row: 0, col: 2 });
+  assert.deepEqual(state.gameState.illusionEffectsByPlayer?.[OWNER], {
+    sourcePlayerId: GUEST,
+    appliedAtTurn: 1,
+    actionsRemaining: 2,
+    firstWallOrigin,
+  });
+
+  takeTurn(GUEST, 'down', 'illusion-wormhole-guest-gap-2', 2_330);
+  const entered = takeTurn(OWNER, 'right', 'illusion-wormhole-enter', 2_340);
+  assert.equal(entered.result.type, 'turn');
+  assert.equal(entered.result.outcome.type, 'move');
+  assert.equal(entered.result.outcome.illusionTransition, undefined);
+  assert.equal(entered.result.outcome.wormholeTransition, 'entered');
+  assert.equal(entered.result.outcome.realm, 'main');
+  assert.deepEqual(state.gameState.players[OWNER].position, wormholeEntrance);
+  assert.ok(state.gameState.wormholeRunsByPlayer?.[OWNER]);
+  assert.deepEqual(state.gameState.illusionEffectsByPlayer?.[OWNER], {
+    sourcePlayerId: GUEST,
+    appliedAtTurn: 1,
+    actionsRemaining: 1,
+    firstWallOrigin,
+  });
+
+  takeTurn(GUEST, 'up', 'illusion-wormhole-guest-gap-3', 2_350);
+  const returned = takeTurn(OWNER, 'up', 'illusion-wormhole-return', 2_360);
+  assert.equal(returned.result.type, 'turn');
+  assert.equal(returned.result.outcome.type, 'move');
+  assert.equal(returned.result.outcome.illusionTransition, 'returned');
+  assert.equal(returned.result.outcome.illusionReturnFromWormhole, true);
+  assert.deepEqual(returned.result.outcome.illusionReturnPosition, firstWallOrigin);
+  assert.deepEqual(returned.result.outcome.position, firstWallOrigin);
+  assert.equal(returned.result.outcome.realm, 'main');
+  assert.equal(returned.result.outcome.wormholeTransition, undefined);
+  assert.equal(returned.result.outcome.wormholeExit, undefined);
+  assert.equal(returned.result.outcome.reachedGoal, false);
+  assert.deepEqual(state.gameState.players[OWNER].position, firstWallOrigin);
+  assert.equal(state.gameState.illusionEffectsByPlayer?.[OWNER], undefined);
+  assert.equal(state.gameState.wormholeRunsByPlayer?.[OWNER], undefined);
+  assert.deepEqual(state.receipts.byId['illusion-wormhole-return'].result, returned.result);
+});
+
+test('wormhole escape kit moves directly to a safe exit without creating an internal run', () => {
+  const entrance = { row: 0, col: 1 };
+  const exit = { row: 4, col: 4 };
+  const challenge = generateDiceWormholeChallenge(0xE5CA_9E01);
+  const setup = readyTwoPlayerRoom(
+    simpleMap(undefined, undefined, 'scoutPulse', 'wormholeEscapeKit'),
+    {
+      ...simpleMap({ row: 0, col: 0 }, { row: 0, col: 5 }),
+      items: [{
+        type: 'wormhole',
+        entrance,
+        exit,
+        challenge,
+      }],
+    },
+  );
+  assert.equal(setup.gameState.maps?.[OWNER]?.runnerGear, 'wormholeEscapeKit');
+  const state = startMatch(setup);
+  const command = {
+    type: 'turn',
+    commandId: 'command-wormhole-escape-kit',
+    roomId: ROOM_ID,
+    expectedGeneration: state.meta.generation,
+    expectedRevision: state.meta.revision,
+    action: { type: 'move', direction: 'right' },
+  } as const;
+  const turn = reduceMazeAuthorityCommand(state, OWNER, command, 2_200);
+
+  assert.equal(turn.result.type, 'turn');
+  assert.equal(turn.result.outcome.type, 'move');
+  assert.equal(turn.result.outcome.effect, 'wormhole');
+  assert.equal(turn.result.outcome.consumedItemIndex, 0);
+  assert.deepEqual(turn.result.outcome.position, exit);
+  assert.deepEqual(turn.result.outcome.wormholeExit, exit);
+  assert.equal(
+    turn.result.outcome.message,
+    '플레이어가 웜홀 탈출키트로 내부 퍼즐을 건너뛰고 출구로 이동했습니다.',
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(turn.result.outcome, 'wormholeTransition'),
+    false,
+  );
+  assert.equal(Object.prototype.hasOwnProperty.call(turn.result.outcome, 'realm'), false);
+  assert.deepEqual(turn.state.gameState.players[OWNER].position, exit);
+  assert.equal(turn.state.gameState.wormholeRunsByPlayer?.[OWNER], undefined);
+  const consumed = turn.state.gameState.itemState?.[GUEST]?.consumed;
+  assert.ok(consumed && typeof consumed === 'object');
+  assert.equal((consumed as Record<number, boolean>)[0], true);
+
+  const storedReceipt = turn.state.receipts.byId[command.commandId];
+  assert.deepEqual(storedReceipt.result, turn.result);
+  const replay = reduceMazeAuthorityCommand(turn.state, OWNER, command, 9_999);
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.result, turn.result);
 });
 
 test('Realtime Database sparse values rehydrate to canonical maps and exactly replay nullable outcomes', () => {
@@ -669,7 +1128,7 @@ test('receipt ledger stays bounded and a retained command remains replayable onl
   );
 });
 
-test('startMatch preserves the current V3 relay assignment and initialization contract', () => {
+test('startMatch preserves the current V4 relay assignment and initialization contract', () => {
   const ownerMap = simpleMap({ row: 0, col: 0 }, { row: 0, col: 1 }, 'scoutPulse');
   const guestMap = simpleMap({ row: 5, col: 5 }, { row: 5, col: 4 });
   const setup = readyTwoPlayerRoom(ownerMap, guestMap);
@@ -731,6 +1190,7 @@ test('startMatch preserves the current V3 relay assignment and initialization co
   assert.deepEqual(state.gameState.collisionWalls, {});
   assert.deepEqual(state.gameState.revealedWallsByPlayer, {});
   assert.deepEqual(state.gameState.visionEffectsByPlayer, {});
+  assert.deepEqual(state.gameState.illusionEffectsByPlayer, {});
   assert.equal(state.gameState.turnMessageTimestamp, 1_400);
 
   const unchanged = cloneJson(state);
@@ -765,7 +1225,7 @@ function applyTurnWithParity(
   now: number,
 ): MazeAuthorityState {
   const expected = resolveTurnAction(cloneJson(state.gameState), actorId, action, now);
-  assert.ok(expected, 'the canonical V3 engine must accept the parity action');
+  assert.ok(expected, 'the canonical V4 engine must accept the parity action');
   const reduction = reduceMazeAuthorityCommand(state, actorId, {
     type: 'turn',
     commandId,
@@ -797,7 +1257,7 @@ function finishStartedRoomWithRealMoves(
   return state;
 }
 
-test('turn delegates to the generated V3 engine and preserves winner/end settlement parity', () => {
+test('turn delegates to the generated V4 engine and preserves winner/end settlement parity', () => {
   const finishMap = simpleMap({ row: 0, col: 0 }, { row: 0, col: 1 });
   let state = startMatch(readyTwoPlayerRoom(finishMap, finishMap));
 
@@ -850,7 +1310,7 @@ test('turn delegates to the generated V3 engine and preserves winner/end settlem
 
 test('Authority replaces a new poison effect seed with deterministic private-state entropy', () => {
   const poisonMap = (hiddenWallDirection: 'right' | 'down'): GameMap => ({
-    rulesVersion: 3,
+    rulesVersion: GAME_RULES_VERSION,
     startPosition: { row: 2, col: 2 },
     endPosition: { row: 5, col: 5 },
     obstacles: [{ position: { row: 4, col: 4 }, direction: hiddenWallDirection }],
@@ -860,6 +1320,7 @@ test('Authority replaces a new poison effect seed with deterministic private-sta
       wallDirection: 'right',
     }],
     skillLoadout: 'scoutPulse',
+    runnerGear: 'none',
   });
   const poisonTurn = (state: MazeAuthorityState) => ({
     type: 'turn' as const,
@@ -991,7 +1452,7 @@ test('V2 wormhole parsing keeps a strict run union while map validity stays cano
   const state = startMatch(readyTwoPlayerRoom());
   const entrance = { row: 5, col: 5 };
   state.gameState.maps![GUEST] = {
-    rulesVersion: 3,
+    rulesVersion: GAME_RULES_VERSION,
     startPosition: entrance,
     endPosition: { row: 5, col: 4 },
     obstacles: [],
@@ -1002,6 +1463,7 @@ test('V2 wormhole parsing keeps a strict run union while map validity stays cano
       challenge,
     }],
     skillLoadout: 'scoutPulse',
+    runnerGear: 'none',
   };
   state.gameState.players[OWNER].position = entrance;
   state.gameState.players[OWNER].positionHistory = [entrance];
@@ -1067,7 +1529,7 @@ test('V2 wormhole parsing keeps a strict run union while map validity stays cano
   expectDomainError(
     () => reduceMazeAuthorityCommand(setup, OWNER, command, 1_500),
     'failed-precondition',
-    'invalid-v3-map',
+    'invalid-v4-map',
   );
 });
 
@@ -1262,7 +1724,7 @@ test('SETUP leave returns slots, transfers ownership by lowest slot, and last le
   assert.equal(closed.state.lobby.ownerId, REPLACEMENT);
   assert.deepEqual(closed.state.lobby.members, {});
   assert.deepEqual(closed.state.gameState, {
-    rulesVersion: 3,
+    rulesVersion: GAME_RULES_VERSION,
     matchNumber: 0,
     phase: GamePhase.SETUP,
     currentTurn: null,

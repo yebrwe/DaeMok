@@ -29,11 +29,11 @@ const FORCED_EFFECTS = new Set(['wind', 'thorn', 'mirror']);
 
 const SPECIALS = [
   { kind: 'fire', initialCost: 1 },
-  { kind: 'poison', initialCost: 2 },
+  { kind: 'poison', initialCost: 1 },
   { kind: 'ice', initialCost: 1 },
   { kind: 'wind', initialCost: 1 },
   { kind: 'collapse', initialCost: 1 },
-  { kind: 'mirror', initialCost: 5 },
+  { kind: 'mirror', initialCost: 1 },
   { kind: 'thorn', initialCost: 1 },
 ];
 

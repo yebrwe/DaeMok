@@ -99,6 +99,8 @@ const EXPECTED_BLENDER_ASSETS = Object.freeze({
   wallPhase: ['wall-phase', 'wall-phase.glb'],
   wallThorn: ['wall-thorn', 'wall-thorn.glb'],
   wallCrystal: ['wall-crystal', 'wall-crystal.glb'],
+  wallFog: ['wall-fog', 'wall-fog.glb'],
+  wallIllusion: ['wall-illusion', 'wall-illusion.glb'],
   wallCollapse: ['wall-collapse', 'wall-collapse.glb'],
   wallMirror: ['wall-mirror', 'wall-mirror.glb'],
   goalFlag: ['goal-flag', 'goal-flag.glb'],
@@ -117,7 +119,7 @@ const EXPECTED_BLENDER_ASSETS = Object.freeze({
 const EXPECTED_MAIN_ASSET_IDS = Object.freeze([
   'rabbitPawn', 'tileCream', 'tileSage', 'boardBase', 'markerStart', 'markerGoal',
   'wallNormal', 'wallSteel', 'wallFire', 'wallPoison', 'wallIce', 'wallWind',
-  'wallPhase', 'wallThorn', 'wallCrystal', 'wallCollapse', 'wallMirror',
+  'wallPhase', 'wallThorn', 'wallCrystal', 'wallFog', 'wallIllusion', 'wallCollapse', 'wallMirror',
   'goalFlag', 'goalLock', 'itemMine', 'itemMineUsed', 'itemSmoke', 'itemSmokeUsed',
   'wormholePortal', 'legacySealDie',
 ]);
@@ -182,11 +184,11 @@ function testBlenderAssetContract(boardSource) {
     Object.entries(EXPECTED_BLENDER_ASSETS)
       .map(([assetId, [, fileName]]) => [assetId, `/assets/maze/v1/${fileName}`])
   );
-  assert.deepEqual(actualPaths, expectedPaths, 'the runtime catalog contains exactly the approved 29 Blender assets');
+  assert.deepEqual(actualPaths, expectedPaths, 'the runtime catalog contains exactly the approved 31 Blender assets');
   assert.deepEqual(
     parseAssetSet(assetSource, 'MAZE_CARTOON_MAIN_ASSET_IDS'),
     EXPECTED_MAIN_ASSET_IDS,
-    'main canvases load only their 25 required Blender assets',
+    'main canvases load only their 27 required Blender assets',
   );
   assert.deepEqual(
     parseAssetSet(assetSource, 'MAZE_CARTOON_WORMHOLE_ASSET_IDS'),
@@ -220,7 +222,7 @@ function testBlenderAssetContract(boardSource) {
   assert.match(assetSource, /mesh\.raycast\s*=\s*\(\)\s*=>\s*\{\}/, 'decorative Blender meshes cannot steal gameplay pointer events');
   assert.match(assetSource, /return\s+<primitive\s+object=\{object\}\s+dispose=\{null\}\s*\/>/, 'React never disposes cached GLTF geometry per instance');
   assert.match(assetSource, /mazeAssetState\s*=\s*['"]ready['"]/, 'the Canvas advertises completed Blender asset loading');
-  assert.match(assetSource, /mazeAssetCatalogCount\s*=\s*String\(MAZE_CARTOON_ASSET_CATALOG_COUNT\)/, 'each Canvas exposes the full 29-asset catalog count');
+  assert.match(assetSource, /mazeAssetCatalogCount\s*=\s*String\(MAZE_CARTOON_ASSET_CATALOG_COUNT\)/, 'each Canvas exposes the full 31-asset catalog count');
   assert.match(assetSource, /mazeAssetSet\s*=\s*assetSet/, 'each Canvas identifies its loaded asset subset');
 
   assert.match(boardSource, /preloadMazeCartoonAssets\(\)/, 'GameBoard3D primes the Blender catalog before rendering');
@@ -268,7 +270,9 @@ function testBlenderAssetContract(boardSource) {
     crystalWall: 'wallCrystal',
     collapseWall: 'wallCollapse',
     mirrorWall: 'wallMirror',
-  }, 'all ten special walls map one-to-one to their Blender models');
+    fogWall: 'wallFog',
+    illusionWall: 'wallIllusion',
+  }, 'all twelve special walls map one-to-one to their Blender models');
   assert.match(
     boardSource,
     /const\s+assetId\s*=\s*SPECIAL_WALL_ASSETS\[props\.type\];\s*if\s*\(assetId\)\s*return\s*<BlenderSpecialWallBox\s+\{\.\.\.props\}\s+assetId=\{assetId\}\s*\/>;\s*return\s*<LegacySpecialWallBox\s+\{\.\.\.props\}\s*\/>;/,
@@ -356,7 +360,7 @@ function testBlenderAssetContract(boardSource) {
       }
     }
   }
-  assert.ok(totalBytes <= 1024 * 1024, 'the complete 29-model Blender maze catalog stays within the 1 MiB transfer budget');
+  assert.ok(totalBytes <= 1024 * 1024, 'the complete 31-model Blender maze catalog stays within the 1 MiB transfer budget');
 }
 
 function createMaterialFixture(MaterialType, label, roughness, metalness) {

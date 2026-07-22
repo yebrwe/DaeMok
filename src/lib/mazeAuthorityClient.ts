@@ -10,6 +10,7 @@ import {
 } from '@/lib/gameRules';
 import { firebaseInitPromise } from '@/lib/firebase';
 import {
+  GAME_RULES_VERSION,
   WORMHOLE_CHALLENGE_MAX_WALLS,
   WORMHOLE_CHALLENGE_SEAL_COUNT,
   isValidWormholeChallenge,
@@ -36,6 +37,7 @@ import type {
   LegacyWormholeChallenge,
   Obstacle,
   Position,
+  RunnerGear,
   SpecialWallType,
   VisionEffect,
   WormholeChallenge,
@@ -44,7 +46,7 @@ import type {
 export const MAZE_AUTHORITY_FUNCTIONS_REGION = 'asia-southeast1' as const;
 export const MAZE_AUTHORITY_VIEW_VERSION = 1 as const;
 export const MAZE_AUTHORITY_SCHEMA_VERSION = 1 as const;
-export const MAZE_AUTHORITY_RULES_VERSION = 3 as const;
+export const MAZE_AUTHORITY_RULES_VERSION = GAME_RULES_VERSION;
 
 export const MAZE_AUTHORITY_CALLABLES = Object.freeze({
   command: 'mazeV1Command',
@@ -85,6 +87,7 @@ const RESERVED_RECORD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const DIRECTIONS: readonly Direction[] = ['up', 'down', 'left', 'right'];
 const MAZE_SKILLS: readonly MazeSkillId[] = ['scoutPulse', 'breach', 'anchor', 'dash'];
 const NEW_MAP_SKILL_LOADOUT = 'scoutPulse' as const satisfies MazeSkillId;
+const RUNNER_GEARS = ['none', 'wormholeEscapeKit', 'insight'] as const satisfies readonly RunnerGear[];
 const ACTIVE_MAZE_SKILLS: readonly Exclude<MazeSkillId, 'anchor'>[] = [
   'scoutPulse',
   'breach',
@@ -106,9 +109,13 @@ const ITEM_TYPES: readonly ItemType[] = [
   'mirrorWall',
   'thornWall',
   'crystalWall',
+  'fogWall',
+  'illusionWall',
 ];
 const RETIRED_NEW_MAP_ITEM_TYPES = new Set<ItemType>([
   'radar',
+  'mine',
+  'smoke',
   'steelWall',
   'collapseWall',
   'phaseWall',
@@ -128,6 +135,8 @@ const WALL_ITEM_TYPES = new Set<ItemType>([
   'mirrorWall',
   'thornWall',
   'crystalWall',
+  'fogWall',
+  'illusionWall',
 ]);
 const SPECIAL_WALL_TYPES = new Set<ItemType>([
   'steelWall',
@@ -140,6 +149,8 @@ const SPECIAL_WALL_TYPES = new Set<ItemType>([
   'mirrorWall',
   'thornWall',
   'crystalWall',
+  'fogWall',
+  'illusionWall',
 ]);
 const TURN_MOVE_EFFECTS = new Set(['move', 'bump', 'mine', 'wormhole', 'smoke']);
 
@@ -454,6 +465,8 @@ export interface MazeAuthorityGameStateView {
   revealedWallsByPlayer: Record<string, Obstacle[]>;
   visionEffectsByPlayer: Record<string, VisionEffect>;
   poisonEffectsByPlayer: Record<string, MazeAuthorityPoisonEffectView>;
+  /** Always empty while projected; illusion state is authority-internal. */
+  illusionEffectsByPlayer: Record<string, never>;
   wormholeRunsByPlayer: Record<string, MazeAuthorityWormholeRunView>;
   turnMessage?: string;
   turnMessageTimestamp?: number;
@@ -797,12 +810,15 @@ function parseMapItemList(value: unknown, allowLegacyCollapseWall = true): MapIt
 }
 
 function parseSubmittedGameMap(value: unknown): GameMap | null {
-  const required = ['rulesVersion', 'startPosition', 'endPosition', 'obstacles', 'skillLoadout'];
+  const required = [
+    'rulesVersion', 'startPosition', 'endPosition', 'obstacles', 'skillLoadout', 'runnerGear',
+  ];
   const allowed = [...required, 'items', 'item'];
   if (!isRecord(value)
     || !hasRequiredAllowedKeys(value, required, allowed)
     || value.rulesVersion !== MAZE_AUTHORITY_RULES_VERSION
-    || value.skillLoadout !== NEW_MAP_SKILL_LOADOUT) return null;
+    || value.skillLoadout !== NEW_MAP_SKILL_LOADOUT
+    || !oneOf(value.runnerGear, RUNNER_GEARS)) return null;
   const startPosition = parsePosition(value.startPosition);
   const endPosition = parsePosition(value.endPosition);
   const obstacles = parseObstacleList(value.obstacles);
@@ -813,6 +829,7 @@ function parseSubmittedGameMap(value: unknown): GameMap | null {
     endPosition,
     obstacles,
     skillLoadout: value.skillLoadout,
+    runnerGear: value.runnerGear,
   };
   if (Object.prototype.hasOwnProperty.call(value, 'items')) {
     if (value.items === null) map.items = null;
@@ -836,7 +853,7 @@ function parseSubmittedGameMap(value: unknown): GameMap | null {
 
 function canonicalRuleSnapshotForMapValidation(): GameRuleSnapshot {
   // The room projection is validated separately. This fixed snapshot prevents a
-  // caller from weakening V3 validation while constructing a submit command.
+  // caller from weakening V4 validation while constructing a submit command.
   return createCanonicalGameRuleSnapshot();
 }
 
@@ -1013,8 +1030,10 @@ export function buildMazeAuthoritySubmitMapCommand(
     ...fencedCommandInput(input),
     map: {
       ...input.map,
-      // V3 requires this field, but skills are retired for newly authored maps.
+      // V4 retains this compatibility field, but skills remain retired.
       skillLoadout: NEW_MAP_SKILL_LOADOUT,
+      // Old local drafts predate runner gear; no gear is the safe compatible default.
+      runnerGear: input.map.runnerGear ?? 'none',
     },
   })) as MazeAuthoritySubmitMapCommand;
 }
@@ -1169,6 +1188,8 @@ function parseTurnOutcome(value: unknown): TurnOutcome | null {
   const allowed = [
       ...required, 'wallEffect', 'wallItemIndex', 'skillEffect', 'itemPosition', 'wormholeExit',
       'realm', 'wormholeTransition', 'requestedDirection', 'poisonMisdirected',
+      'identifiedFakeWall', 'illusionTransition', 'illusionReturnPosition',
+      'illusionReturnFromWormhole',
     ];
     const origin = parsePosition(value.origin);
     const attempted = parsePosition(value.attempted, -1, 6);
@@ -1192,6 +1213,13 @@ function parseTurnOutcome(value: unknown): TurnOutcome | null {
         && !oneOf(value.realm, ['main', 'wormhole'] as const))
       || (Object.prototype.hasOwnProperty.call(value, 'wormholeTransition')
         && !oneOf(value.wormholeTransition, ['entered', 'seal', 'returned'] as const))
+      || (Object.prototype.hasOwnProperty.call(value, 'illusionTransition')
+        && value.illusionTransition !== 'returned')
+      || (Object.prototype.hasOwnProperty.call(value, 'illusionReturnFromWormhole')
+        && (value.illusionReturnFromWormhole !== true
+          || value.illusionTransition !== 'returned'))
+      || (Object.prototype.hasOwnProperty.call(value, 'identifiedFakeWall')
+        && (value.identifiedFakeWall !== true || value.effect !== 'bump'))
       || (Object.prototype.hasOwnProperty.call(value, 'requestedDirection')
         !== Object.prototype.hasOwnProperty.call(value, 'poisonMisdirected'))
       || (Object.prototype.hasOwnProperty.call(value, 'requestedDirection')
@@ -1204,8 +1232,21 @@ function parseTurnOutcome(value: unknown): TurnOutcome | null {
     const wormholeExit = Object.prototype.hasOwnProperty.call(value, 'wormholeExit')
       ? parsePosition(value.wormholeExit)
       : undefined;
+    const illusionReturnPosition = Object.prototype.hasOwnProperty.call(value, 'illusionReturnPosition')
+      ? parsePosition(value.illusionReturnPosition)
+      : undefined;
     if ((Object.prototype.hasOwnProperty.call(value, 'itemPosition') && !itemPosition)
-      || (Object.prototype.hasOwnProperty.call(value, 'wormholeExit') && !wormholeExit)) return null;
+      || (Object.prototype.hasOwnProperty.call(value, 'wormholeExit') && !wormholeExit)
+      || (Object.prototype.hasOwnProperty.call(value, 'illusionReturnPosition')
+        && !illusionReturnPosition)
+      || ((value.illusionTransition === 'returned') !== !!illusionReturnPosition)
+      || (illusionReturnPosition
+        && (value.realm !== 'main'
+          || value.reachedGoal
+          || Object.prototype.hasOwnProperty.call(value, 'wormholeTransition')
+          || Object.prototype.hasOwnProperty.call(value, 'wormholeExit')
+          || illusionReturnPosition.row !== position.row
+          || illusionReturnPosition.col !== position.col))) return null;
     return {
       type: 'move',
       direction: value.direction,
@@ -1232,12 +1273,23 @@ function parseTurnOutcome(value: unknown): TurnOutcome | null {
       ...(Object.prototype.hasOwnProperty.call(value, 'wormholeTransition')
         ? { wormholeTransition: value.wormholeTransition as 'entered' | 'seal' | 'returned' }
         : {}),
+      ...(Object.prototype.hasOwnProperty.call(value, 'illusionTransition')
+        ? {
+            illusionTransition: value.illusionTransition as
+              'returned',
+          }
+        : {}),
+      ...(illusionReturnPosition ? { illusionReturnPosition } : {}),
+      ...(value.illusionReturnFromWormhole === true
+        ? { illusionReturnFromWormhole: true as const }
+        : {}),
       ...(Object.prototype.hasOwnProperty.call(value, 'requestedDirection')
         ? {
             requestedDirection: value.requestedDirection as Direction,
             poisonMisdirected: true,
           }
         : {}),
+      ...(value.identifiedFakeWall === true ? { identifiedFakeWall: true } : {}),
       reachedGoal: value.reachedGoal,
       message: value.message,
     } as TurnOutcome;
@@ -1663,14 +1715,15 @@ function parseBoundaryMap(value: unknown): MazeAuthorityBoardBoundaryView | null
 }
 
 function parseProjectedFullMap(value: unknown, ruleSnapshot: GameRuleSnapshot): GameMap | null {
-  const required = ['startPosition', 'endPosition'];
+  const required = ['startPosition', 'endPosition', 'runnerGear'];
   const allowed = [
     ...required, 'rulesVersion', 'obstacles', 'items', 'item', 'skillLoadout',
   ];
   if (!isRecord(value)
     || !hasRequiredAllowedKeys(value, required, allowed)
     || value.rulesVersion !== MAZE_AUTHORITY_RULES_VERSION
-    || !oneOf(value.skillLoadout, MAZE_SKILLS)) return null;
+    || !oneOf(value.skillLoadout, MAZE_SKILLS)
+    || !oneOf(value.runnerGear, RUNNER_GEARS)) return null;
   const startPosition = parsePosition(value.startPosition);
   const endPosition = parsePosition(value.endPosition);
   const obstacles = parseObstacleList(value.obstacles);
@@ -1684,6 +1737,7 @@ function parseProjectedFullMap(value: unknown, ruleSnapshot: GameRuleSnapshot): 
     endPosition,
     obstacles,
     skillLoadout: value.skillLoadout,
+    runnerGear: value.runnerGear,
   };
   if (hasItems || !hasLegacyItem) map.items = items;
   if (hasLegacyItem) {
@@ -1786,10 +1840,11 @@ function parseItemStateView(value: unknown): MazeAuthorityItemStateView | null {
 }
 
 function parseCollisionWall(value: unknown, memberIds: ReadonlySet<string>): CollisionWall | null {
+  const identifiedAsFake = isRecord(value) && value.identifiedAsFake === true;
   if (!isRecord(value)
-    || !hasExactKeys(value, [
-      'playerId', 'position', 'direction', 'timestamp', 'mapOwnerId',
-    ])
+    || !hasExactKeys(value, identifiedAsFake
+      ? ['playerId', 'position', 'direction', 'timestamp', 'mapOwnerId', 'identifiedAsFake']
+      : ['playerId', 'position', 'direction', 'timestamp', 'mapOwnerId'])
     || !validUid(value.playerId) || !memberIds.has(value.playerId)
     || !validUid(value.mapOwnerId) || !memberIds.has(value.mapOwnerId)
     || !oneOf(value.direction, DIRECTIONS)
@@ -1801,6 +1856,7 @@ function parseCollisionWall(value: unknown, memberIds: ReadonlySet<string>): Col
     direction: value.direction,
     timestamp: value.timestamp,
     mapOwnerId: value.mapOwnerId,
+    ...(identifiedAsFake ? { identifiedAsFake: true } : {}),
   } : null;
 }
 
@@ -1967,7 +2023,7 @@ function parseGameStateView(input: {
     ...required, 'rulesVersion', 'matchNumber', 'maps', 'assignments', 'currentTurn',
     'turnOrder', 'turnNumber', 'winner', 'draw', 'collisionWalls', 'itemState',
     'revealedWallsByPlayer', 'visionEffectsByPlayer', 'turnMessage', 'turnMessageTimestamp',
-    'wormholeRunsByPlayer', 'poisonEffectsByPlayer',
+    'wormholeRunsByPlayer', 'poisonEffectsByPlayer', 'illusionEffectsByPlayer',
   ];
   const value = input.value;
   if (!isRecord(value)
@@ -2051,6 +2107,14 @@ function parseGameStateView(input: {
   for (const rawCollision of rawCollisions) {
     const collision = parseCollisionWall(rawCollision, rosterSet);
     if (!collision) return null;
+    if (collision.identifiedAsFake === true) {
+      const ownProjectedMap = input.viewerUid ? maps[input.viewerUid] : null;
+      if (input.audience !== 'member'
+        || input.viewerUid !== collision.playerId
+        || !ownProjectedMap
+        || !('runnerGear' in ownProjectedMap)
+        || ownProjectedMap.runnerGear !== 'insight') return null;
+    }
     collisionWalls.push(collision);
   }
 
@@ -2105,12 +2169,17 @@ function parseGameStateView(input: {
     poisonEffectsByPlayer[uid] = effect;
   }
 
+  const rawIllusionEffects = value.illusionEffectsByPlayer ?? {};
+  if (!isRecord(rawIllusionEffects) || Object.keys(rawIllusionEffects).length > 0) return null;
+  const illusionEffectsByPlayer: Record<string, never> = {};
+
   const privateIds = new Set([
     ...Object.keys(itemState),
     ...Object.keys(revealedWallsByPlayer),
     ...Object.keys(visionEffectsByPlayer),
     ...Object.keys(wormholeRunsByPlayer),
     ...Object.keys(poisonEffectsByPlayer),
+    ...Object.keys(illusionEffectsByPlayer),
   ]);
   if (phase !== ('end' as GamePhase)) {
     if (input.audience === 'public' && privateIds.size > 0) return null;
@@ -2145,6 +2214,7 @@ function parseGameStateView(input: {
     visionEffectsByPlayer,
     wormholeRunsByPlayer,
     poisonEffectsByPlayer,
+    illusionEffectsByPlayer,
     ...(Object.prototype.hasOwnProperty.call(value, 'turnMessage')
       ? { turnMessage: value.turnMessage as string }
       : {}),

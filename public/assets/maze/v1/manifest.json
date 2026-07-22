@@ -287,6 +287,42 @@
       "sha256": "429194867dc7c60e93b3fa330557570dd4bce340719bd56430fe52cb18e38685",
       "root": "asset_wall_crystal"
     },
+    "wall-fog": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 470,
+      "triangles": 912,
+      "bounds_blender_xyz": [
+        -0.5396,
+        -0.085,
+        0.0,
+        0.5396,
+        0.095,
+        0.58
+      ],
+      "file": "wall-fog.glb",
+      "bytes": 19268,
+      "sha256": "7f9e6891bd716509f8d03da92bff527bf11a5b7007ac7e18b6ff887ddfb2a94b",
+      "root": "asset_wall_fog"
+    },
+    "wall-illusion": {
+      "objects": 3,
+      "meshes": 2,
+      "vertices": 296,
+      "triangles": 572,
+      "bounds_blender_xyz": [
+        -0.542,
+        -0.0666,
+        0.0,
+        0.542,
+        0.0666,
+        0.5
+      ],
+      "file": "wall-illusion.glb",
+      "bytes": 24728,
+      "sha256": "f0b0cc03cad0d9ac6b16c5c9d91e94b7e9e4dfe2464d5333f1bdc98677329845",
+      "root": "asset_wall_illusion"
+    },
     "wormhole-die": {
       "objects": 3,
       "meshes": 2,

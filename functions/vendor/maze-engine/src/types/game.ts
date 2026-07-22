@@ -57,6 +57,8 @@ export interface Player {
 export type SpecialWallType =
   | 'steelWall'
   | 'fireWall'
+  | 'fogWall'
+  | 'illusionWall'
   | 'poisonWall'
   | 'iceWall'
   | 'windWall'
@@ -71,6 +73,11 @@ export type WallItemType = 'oneTimeWall' | SpecialWallType;
 export type ItemType = WallItemType | 'mine' | 'wormhole' | 'radar' | 'smoke';
 
 export type MazeSkillId = 'scoutPulse' | 'breach' | 'anchor' | 'dash';
+
+// A player chooses exactly one persistent runner loadout for each submitted map.
+// `none` is explicit on newly-authored maps; a missing value is read as `none`
+// only for legacy compatibility.
+export type RunnerGear = 'none' | 'wormholeEscapeKit' | 'insight';
 
 export interface LegacyWormholeChallenge {
   version: 1;
@@ -108,7 +115,7 @@ export interface MazeSkillStateData {
 
 export interface MapItem {
   type: ItemType;
-  // oneTimeWall: 일반 벽과 똑같이 한 번 막은 뒤, 다음 시도부터 통과되는 위장 벽 (벽 7개 소모)
+  // oneTimeWall: 일반 벽과 똑같이 한 번 막은 뒤, 다음 시도부터 통과되는 위장 벽 (벽 1개 소모)
   wallPosition?: Position;
   wallDirection?: Direction;
   // windWall: 충돌한 원래 칸에서 튕겨날 방향. 생략하면 입력 방향을 사용한다.
@@ -134,6 +141,7 @@ export interface GameMap {
   items?: MapItem[] | null; // 설치된 아이템들 (공용 벽 예산 + 종류별 최대 수량)
   item?: MapItem | null; // 레거시 단일 아이템 (구버전 맵 하위호환 - getMapItems로 읽을 것)
   skillLoadout?: MazeSkillId | null;
+  runnerGear?: RunnerGear;
 }
 
 // 충돌된 벽 타입
@@ -143,6 +151,8 @@ export interface CollisionWall {
   direction: Direction;
   timestamp: number;
   mapOwnerId: string;  // 맵 소유자 ID - 어떤 플레이어의 맵인지 구분
+  // Only the colliding insight runner may receive this marker in a projected view.
+  identifiedAsFake?: true;
 }
 
 // 아이템 사용(소모) 상태 - 맵 소유자 uid를 키로 기록
@@ -185,6 +195,17 @@ export interface PoisonEffect {
   seed: number;
 }
 
+export interface IllusionEffect {
+  sourcePlayerId: string;
+  appliedAtTurn: number;
+  // The trigger action is excluded. Each subsequently committed own action,
+  // including a wormhole action, consumes exactly one remaining action.
+  actionsRemaining: number;
+  // Fixed only once: the origin immediately before the first main-board wall
+  // that was traversed while the illusion was active.
+  firstWallOrigin?: Position;
+}
+
 interface WormholeRunStateBase {
   mapOwnerId: string;
   itemIndex: number;
@@ -210,6 +231,7 @@ export type WormholeRunState = LegacyWormholeRunState | DiceWormholeRunState;
 export interface GameRuleSnapshot {
   version: number;
   wallBudget: number;
+  runnerGearWallBudget: number;
   itemCosts: Record<ItemType, number>;
   itemLimits: Record<ItemType, number>;
   maxSkillLoadout: number;
@@ -236,6 +258,7 @@ export interface GameState {
   revealedWallsByPlayer?: Record<string, Obstacle[]>;
   visionEffectsByPlayer?: Record<string, VisionEffect> | null;
   poisonEffectsByPlayer?: Record<string, PoisonEffect> | null;
+  illusionEffectsByPlayer?: Record<string, IllusionEffect> | null;
   // 외부 player.position은 입구에 고정하고 내부 좌표는 주자별 세션에 분리한다.
   wormholeRunsByPlayer?: Record<string, WormholeRunState>;
   turnMessage?: string;

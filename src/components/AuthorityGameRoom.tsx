@@ -35,7 +35,14 @@ import {
   buildMazeAuthorityLiveBoards,
   isFullMazeAuthorityMap,
 } from '@/lib/mazeAuthorityPresentation';
-import type { Direction, GameMap } from '@/types/game';
+import {
+  getIllusionReturnOutcomeVia,
+  getWallReboundOutcomeVia,
+  type LiveBoardVisualAction,
+} from '@/lib/liveBoardVisuals';
+import type { MoveTurnOutcome } from '@/lib/gameTurn';
+import type { BoardFx } from '@/components/three/GameBoard3D';
+import type { Direction, GameMap, RunnerGear } from '@/types/game';
 
 interface AuthorityGameRoomProps {
   roomId: string;
@@ -48,6 +55,84 @@ interface OfflineTurnNotice {
   identity: string;
   message: string;
   persistent?: true;
+}
+
+interface PrivateTurnVisual {
+  sequence: number;
+  action: LiveBoardVisualAction;
+  fx: BoardFx | null;
+  via: MoveTurnOutcome['attempted'][] | null;
+  position: MoveTurnOutcome['position'];
+  moves: number;
+}
+
+function privateTurnVisual(outcome: MoveTurnOutcome, sequence: number): PrivateTurnVisual {
+  const reboundVia = getWallReboundOutcomeVia(outcome);
+  const illusionReturnVia = getIllusionReturnOutcomeVia(outcome);
+  const resolved = { position: { ...outcome.position }, moves: outcome.moves };
+  if (illusionReturnVia) {
+    return {
+      ...resolved,
+      sequence,
+      action: 'move',
+      fx: null,
+      via: illusionReturnVia,
+    };
+  }
+  if (outcome.reachedGoal) {
+    return {
+      ...resolved,
+      sequence,
+      action: 'goal',
+      fx: { key: sequence, type: 'goal', at: outcome.position },
+      via: outcome.effect === 'wormhole' ? [outcome.attempted] : reboundVia,
+    };
+  }
+  if (outcome.effect === 'bump') {
+    return {
+      ...resolved,
+      sequence,
+      action: 'bump',
+      fx: { key: sequence, type: 'bump', at: outcome.origin, dir: outcome.direction },
+      via: reboundVia,
+    };
+  }
+  if (outcome.effect === 'mine') {
+    return {
+      ...resolved,
+      sequence,
+      action: 'mine',
+      fx: { key: sequence, type: 'mine', at: outcome.itemPosition, delay: 0.35 },
+      via: reboundVia || [outcome.attempted, outcome.origin],
+    };
+  }
+  if (outcome.effect === 'wormhole') {
+    return {
+      ...resolved,
+      sequence,
+      action: 'wormhole',
+      fx: {
+        key: sequence,
+        type: 'wormhole',
+        at: outcome.itemPosition,
+        to: outcome.wormholeExit,
+        delay: 0.35,
+        ...(outcome.wormholeTransition === 'entered' || outcome.wormholeTransition === 'returned'
+          ? { wormholeTransition: outcome.wormholeTransition }
+          : {}),
+      },
+      via: reboundVia || [outcome.attempted],
+    };
+  }
+  return {
+    ...resolved,
+    sequence,
+    action: outcome.poisonMisdirected ? 'poison' : 'move',
+    fx: outcome.poisonMisdirected
+      ? { key: sequence, type: 'poison', at: outcome.origin, dir: outcome.direction }
+      : null,
+    via: reboundVia,
+  };
 }
 
 const OFFLINE_TURN_RETRY_DELAY_MS = 15_000;
@@ -72,6 +157,12 @@ const DIRECTIONS: Array<{
   { direction: 'down', label: '아래', Icon: ArrowDown },
   { direction: 'right', label: '오른쪽', Icon: ArrowRight },
 ];
+
+const RUNNER_GEAR_LABELS: Record<RunnerGear, string> = {
+  none: '무장비 +10벽',
+  wormholeEscapeKit: '탈출키트',
+  insight: '심안',
+};
 
 function fence(view: Pick<MazeAuthorityPublicView, 'roomId' | 'generation' | 'revision'>) {
   return {
@@ -110,6 +201,8 @@ export default function AuthorityGameRoom({ roomId, userId }: AuthorityGameRoomP
   const [message, setMessage] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [offlineTurnNotice, setOfflineTurnNotice] = useState<OfflineTurnNotice | null>(null);
+  const [localTurnVisual, setLocalTurnVisual] = useState<PrivateTurnVisual | null>(null);
+  const localVisualSequence = useRef(0);
   const componentMounted = useRef(false);
   const offlineTurnAttempts = useRef(new Map<string, OfflineTurnAttemptState>());
   const activeView = memberView ?? publicView;
@@ -128,10 +221,30 @@ export default function AuthorityGameRoom({ roomId, userId }: AuthorityGameRoomP
     };
   }, []);
 
-  const boards = useMemo(() => activeView ? buildMazeAuthorityLiveBoards({
-    gameState: activeView.gameState,
-    viewerUid: memberView ? userId : null,
-  }) : [], [activeView, memberView, userId]);
+  const boards = useMemo(() => {
+    if (!activeView) return [];
+    const projected = buildMazeAuthorityLiveBoards({
+      gameState: activeView.gameState,
+      viewerUid: memberView ? userId : null,
+    });
+    if (!localTurnVisual) return projected;
+    return projected.map((board) => board.runnerId === userId
+      ? {
+          ...board,
+          position: localTurnVisual.position,
+          moves: localTurnVisual.moves,
+          fx: localTurnVisual.fx,
+          via: localTurnVisual.via,
+          visualAction: localTurnVisual.action,
+          visualSequence: localTurnVisual.sequence,
+        }
+      : board);
+  }, [activeView, localTurnVisual, memberView, userId]);
+
+  useEffect(() => {
+    setLocalTurnVisual(null);
+    localVisualSequence.current = 0;
+  }, [activeView?.generation, activeView?.gameState.matchNumber]);
 
   const offlineTurnCandidate = useMemo(() => {
     const gameState = activeView?.gameState;
@@ -324,9 +437,17 @@ export default function AuthorityGameRoom({ roomId, userId }: AuthorityGameRoomP
 
   const gameState = activeView.gameState;
   const me = gameState.players[userId];
-  const ownMap = fullMap(gameState.maps[userId]);
+  // 장비는 공개/상대 맵이 아니라 현재 멤버에게 투영된 자기 전체 맵에서만 읽는다.
+  const ownMap = memberView?.viewerUid === userId
+    ? fullMap(memberView.gameState.maps[userId])
+    : null;
   const isOwner = publicView.lobby.ownerId === userId && isMember;
   const phase = gameState.phase;
+  const ownGearLabel = ownMap && (
+    phase === 'play' || (phase === 'setup' && me?.isReady)
+  )
+    ? RUNNER_GEAR_LABELS[ownMap.runnerGear ?? 'none']
+    : null;
   const allReady = gameState.turnOrder.length >= 2
     && gameState.turnOrder.every((uid) => gameState.players[uid]?.isReady);
   const myTurn = phase === 'play' && gameState.currentTurn === userId;
@@ -365,7 +486,16 @@ export default function AuthorityGameRoom({ roomId, userId }: AuthorityGameRoomP
       ...fence(activeView),
       action: { type: 'move', direction },
     }));
-    if (response?.result.type === 'turn') setMessage(response.result.outcome.message);
+    if (response?.result.type === 'turn') {
+      setMessage(response.result.outcome.message);
+      if (response.result.outcome.type === 'move') {
+        localVisualSequence.current += 1;
+        setLocalTurnVisual(privateTurnVisual(
+          response.result.outcome,
+          localVisualSequence.current,
+        ));
+      }
+    }
   };
 
   const leave = async () => {
@@ -396,11 +526,20 @@ export default function AuthorityGameRoom({ roomId, userId }: AuthorityGameRoomP
       <div className="flex h-svh min-h-0 flex-col gap-2 p-2 text-[#3d352d] sm:gap-3 sm:p-3">
         <header className="game-panel flex min-h-14 shrink-0 items-center justify-between gap-2 !rounded-2xl px-3 py-2">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="truncate text-sm font-black sm:text-base">{publicView.lobby.name}</h1>
-              <span className="rounded-full bg-[#e4f6ef] px-2 py-1 text-[11px] font-black text-[#315f54]">
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="min-w-0 flex-1 truncate text-sm font-black sm:text-base">{publicView.lobby.name}</h1>
+              <span className="shrink-0 whitespace-nowrap rounded-full bg-[#e4f6ef] px-2 py-1 text-[11px] font-black text-[#315f54]">
                 {isMember ? `${Object.keys(publicView.lobby.members).length}/${publicView.lobby.maxPlayers}명` : '관전'}
               </span>
+              {ownGearLabel && (
+                <span
+                  className="shrink-0 whitespace-nowrap rounded-full bg-[#fff1c7] px-2 py-1 text-[10px] font-black text-[#76521d]"
+                  data-testid="authority-own-runner-gear"
+                  aria-label={`내 경기 아이템: ${ownGearLabel}`}
+                >
+                  {ownGearLabel}
+                </span>
+              )}
             </div>
             <p className="mt-0.5 text-[11px] font-semibold text-[#74685c]" aria-live="polite">
               {phase === 'setup'

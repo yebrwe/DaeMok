@@ -37,10 +37,11 @@ export interface Player {
     moves?: number;
     positionHistory?: Position[];
 }
-export type SpecialWallType = 'steelWall' | 'fireWall' | 'poisonWall' | 'iceWall' | 'windWall' | 'collapseWall' | 'phaseWall' | 'mirrorWall' | 'thornWall' | 'crystalWall';
+export type SpecialWallType = 'steelWall' | 'fireWall' | 'fogWall' | 'illusionWall' | 'poisonWall' | 'iceWall' | 'windWall' | 'collapseWall' | 'phaseWall' | 'mirrorWall' | 'thornWall' | 'crystalWall';
 export type WallItemType = 'oneTimeWall' | SpecialWallType;
 export type ItemType = WallItemType | 'mine' | 'wormhole' | 'radar' | 'smoke';
 export type MazeSkillId = 'scoutPulse' | 'breach' | 'anchor' | 'dash';
+export type RunnerGear = 'none' | 'wormholeEscapeKit' | 'insight';
 export interface LegacyWormholeChallenge {
     version: 1;
     startPosition: Position;
@@ -83,6 +84,7 @@ export interface GameMap {
     items?: MapItem[] | null;
     item?: MapItem | null;
     skillLoadout?: MazeSkillId | null;
+    runnerGear?: RunnerGear;
 }
 export interface CollisionWall {
     playerId: string;
@@ -90,6 +92,7 @@ export interface CollisionWall {
     direction: Direction;
     timestamp: number;
     mapOwnerId: string;
+    identifiedAsFake?: true;
 }
 export interface ItemStateEntry {
     consumed?: Record<number, boolean> | boolean;
@@ -120,6 +123,12 @@ export interface PoisonEffect {
     expiresAtTargetMove: number;
     seed: number;
 }
+export interface IllusionEffect {
+    sourcePlayerId: string;
+    appliedAtTurn: number;
+    actionsRemaining: number;
+    firstWallOrigin?: Position;
+}
 interface WormholeRunStateBase {
     mapOwnerId: string;
     itemIndex: number;
@@ -140,6 +149,7 @@ export type WormholeRunState = LegacyWormholeRunState | DiceWormholeRunState;
 export interface GameRuleSnapshot {
     version: number;
     wallBudget: number;
+    runnerGearWallBudget: number;
     itemCosts: Record<ItemType, number>;
     itemLimits: Record<ItemType, number>;
     maxSkillLoadout: number;
@@ -162,6 +172,7 @@ export interface GameState {
     revealedWallsByPlayer?: Record<string, Obstacle[]>;
     visionEffectsByPlayer?: Record<string, VisionEffect> | null;
     poisonEffectsByPlayer?: Record<string, PoisonEffect> | null;
+    illusionEffectsByPlayer?: Record<string, IllusionEffect> | null;
     wormholeRunsByPlayer?: Record<string, WormholeRunState>;
     turnMessage?: string;
     turnMessageTimestamp?: unknown;

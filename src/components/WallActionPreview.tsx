@@ -9,7 +9,17 @@ interface WallActionPreviewProps {
   position: Position;
   source: 'suggested' | 'pointer';
 }
-type PreviewBehavior = 'block' | 'pass' | 'fire' | 'poison' | 'ice' | 'wind' | 'phase' | 'thorn';
+type PreviewBehavior =
+  | 'block'
+  | 'pass'
+  | 'fire'
+  | 'poison'
+  | 'ice'
+  | 'wind'
+  | 'phase'
+  | 'thorn'
+  | 'fog'
+  | 'illusion';
 
 const BEHAVIORS: Record<WallItemType, PreviewBehavior> = {
   oneTimeWall: 'block',
@@ -23,6 +33,8 @@ const BEHAVIORS: Record<WallItemType, PreviewBehavior> = {
   mirrorWall: 'pass',
   thornWall: 'thorn',
   crystalWall: 'block',
+  fogWall: 'fog',
+  illusionWall: 'illusion',
 };
 
 const DIRECTION_ARROWS: Record<Direction, string> = {
@@ -89,7 +101,7 @@ function OriginPreview({ plan }: { plan: WallActionPreviewPlan }) {
   const behavior = BEHAVIORS[plan.type];
   const originClass = behavior === 'fire'
     ? 'wall-shadow-fire-map'
-    : behavior === 'poison'
+    : behavior === 'poison' || behavior === 'fog' || behavior === 'illusion'
       ? 'wall-shadow-pass-out'
       : behavior === 'ice' || behavior === 'wind' || behavior === 'thorn'
         ? 'wall-shadow-bump'
@@ -119,6 +131,28 @@ function OriginPreview({ plan }: { plan: WallActionPreviewPlan }) {
           </span>
         </span>
       )}
+      {behavior === 'fog' && (
+        <span className="wall-preview-fog-cue" data-preview-effect="next-action-fog">
+          <span data-fog-puff="one" />
+          <span data-fog-puff="two" />
+          <span data-fog-puff="three" />
+          <span className="wall-preview-fog-copy">다음 1행동 시야</span>
+        </span>
+      )}
+      {behavior === 'illusion' && (
+        <span
+          className="wall-preview-illusion-cue"
+          data-preview-effect="illusion-three-actions"
+          data-first-blocking-wall-lock="true"
+          data-later-wall-update="false"
+          data-no-collision-stay="true"
+        >
+          <span className="wall-preview-illusion-copy">첫 차단벽 관통 직전 고정</span>
+          <span data-illusion-action="one">1</span>
+          <span data-illusion-action="two">2</span>
+          <span data-illusion-action="three">3↩</span>
+        </span>
+      )}
     </>
   );
 }
@@ -138,6 +172,8 @@ function resultLabel(plan: WallActionPreviewPlan): string {
   }
   if (plan.type === 'poisonWall') return '③ 방향 무작위';
   if (plan.type === 'fireWall') return '③ 벽 기억 소각';
+  if (plan.type === 'fogWall') return '③ 관통 · 다음 1행동 시야 차단';
+  if (plan.type === 'illusionWall') return '③ 관통 · 환영 3행동 시작';
   if (plan.type === 'phaseWall') return '③ 통과/차단 교대';
   if (plan.type === 'crystalWall') return '③ 주변 벽 공개';
   if (plan.type === 'steelWall') return '③ 항상 차단';
@@ -181,6 +217,15 @@ function DestinationPreview({ plan }: { plan: WallActionPreviewPlan }) {
       >
         {label}
       </span>
+      {plan.type === 'illusionWall' && (
+        <span
+          className="wall-preview-illusion-rule"
+          data-preview-rule="first-blocking-wall-only"
+          title="처음 관통한 원래 막힌 벽 직전 칸만 귀환점으로 고정합니다. 뒤에 관통한 벽은 갱신하지 않으며, 3행동 뒤 귀환합니다. 원래 막힌 벽을 관통하지 않았다면 현재 위치를 유지합니다."
+        >
+          첫 차단벽 관통 직전 고정 · 뒤 벽 갱신 없음 · 3행동 뒤 ↩
+        </span>
+      )}
     </>
   );
 }

@@ -25,6 +25,8 @@ const expectedAssets = new Map([
   ['wall-phase', 'wall-phase.glb'],
   ['wall-thorn', 'wall-thorn.glb'],
   ['wall-crystal', 'wall-crystal.glb'],
+  ['wall-fog', 'wall-fog.glb'],
+  ['wall-illusion', 'wall-illusion.glb'],
   ['wormhole-die', 'wormhole-die.glb'],
   ['wormhole-board-base', 'wormhole-board-base.glb'],
   ['wormhole-rock', 'wormhole-rock.glb'],

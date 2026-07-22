@@ -289,7 +289,6 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
               )
             : 0;
           const status = boardStatus(board, isCurrentTurn, isMine);
-
           return (
             <section
               key={board.runnerId}
@@ -367,10 +366,10 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
                 data-testid="board-obscure-overlay"
               >
                 <CloudFog size={34} className="mb-2 text-slate-300" aria-hidden="true" />
-                <p className="text-xs font-black text-slate-100">연막으로 시야 차단</p>
+                <p className="text-xs font-black text-slate-100">안개로 시야 차단</p>
                 <p className="mt-1 text-[10px] text-slate-400">이번 행동 후 해제됩니다</p>
                 <span className="sr-only" role="status">
-                  연막이 적용되어 주행 보드 시야가 가려졌습니다. 이번 행동 후 해제됩니다.
+                  안개가 적용되어 주행 보드 시야가 가려졌습니다. 이번 행동 후 해제됩니다.
                 </span>
               </div>
             )}
@@ -401,7 +400,7 @@ const LiveBoardGrid: React.FC<LiveBoardGridProps> = ({
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 {board.smokeAffected && (
-                  <span title="연막 영향" aria-label="연막 영향" className="text-[#74685c]">
+                  <span title="안개 영향" aria-label="안개 영향" className="text-[#74685c]">
                     <CloudFog size={12} aria-hidden="true" />
                   </span>
                 )}

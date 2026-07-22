@@ -11,16 +11,18 @@ const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 const OUT = path.join(__dirname, '..', 'e2e-artifacts');
 const EXPECTED_MAZE_TOON_VERSION = 'inked-toy-v3';
 const EXPECTED_MAZE_ASSET_VERSION = 'blender-cartoon-v1';
-const EXPECTED_MAZE_ASSET_CATALOG_COUNT = 29;
-const EXPECTED_MAIN_ASSET_COUNT = 25;
+const EXPECTED_MAZE_ASSET_CATALOG_COUNT = 31;
+const EXPECTED_MAIN_ASSET_COUNT = 27;
 const EXPECTED_WORMHOLE_ASSET_COUNT = 7;
+const NO_GEAR_WALL_BUDGET = 25;
+const RUNNER_GEAR_WALL_BUDGET = 15;
 fs.mkdirSync(OUT, { recursive: true });
 
 function ok(message) {
   console.log(`  OK: ${message}`);
 }
 
-const FULL_BUDGET_WALLS = [
+const WALL_PLACEMENT_CANDIDATES = [
   [0, 1, 'right'], [0, 2, 'down'], [0, 3, 'down'], [0, 4, 'down'],
   [1, 1, 'right'], [2, 1, 'right'], [3, 1, 'right'], [4, 1, 'right'],
   [2, 2, 'down'], [2, 3, 'down'], [2, 4, 'down'], [1, 5, 'down'],
@@ -29,20 +31,146 @@ const FULL_BUDGET_WALLS = [
   [4, 2, 'right'], [4, 3, 'right'],
 ];
 
-async function addFullBudgetWalls(page) {
-  for (const [row, col, direction] of FULL_BUDGET_WALLS) {
+const GEAR_FULL_BUDGET_WALLS = WALL_PLACEMENT_CANDIDATES.slice(0, 13);
+const MAP_TEST_OVER_GEAR_WALLS = WALL_PLACEMENT_CANDIDATES.slice(0, 15);
+
+async function toggleWalls(page, walls) {
+  for (const [row, col, direction] of walls) {
     await page.getByRole('button', {
       name: `${row + 1}행 ${col + 1}열 ${direction} 벽`,
       exact: true,
     }).click();
   }
+}
+
+async function readSetupBudget(page) {
   const budget = page.locator('[data-testid=setup-budget]');
-  if ((await budget.getAttribute('data-budget-complete')) !== 'true') {
-    throw new Error(`연습 맵 전체 예산 배치 실패: ${await budget.innerText()}`);
+  const text = await budget.innerText();
+  const match = text.match(/(\d+)\/(\d+)/);
+  if (!match) throw new Error(`벽 예산을 읽지 못함: ${text}`);
+  return {
+    used: Number(match[1]),
+    limit: Number(match[2]),
+    complete: await budget.getAttribute('data-budget-complete'),
+    declaredLimit: Number(await budget.getAttribute('data-budget-limit')),
+    gear: await budget.getAttribute('data-runner-gear'),
+    text,
+  };
+}
+
+async function expectSetupBudget(page, { used, limit, gear, complete = used === limit }, label) {
+  const contract = await readSetupBudget(page);
+  if (
+    contract.used !== used || contract.limit !== limit || contract.declaredLimit !== limit ||
+    contract.gear !== gear || contract.complete !== String(complete)
+  ) {
+    throw new Error(`${label} 벽 예산 계약 오류: ${JSON.stringify(contract)}`);
   }
+}
+
+async function selectSetupRunnerGear(page, gear, used, limit, label) {
+  const option = page.locator(
+    `[data-testid=runner-gear-selector] [data-runner-gear-option="${gear}"]`
+  );
+  await option.click();
+  await page.waitForFunction(({ expectedGear, expectedLimit }) => {
+    const budget = document.querySelector('[data-testid=setup-budget]');
+    return budget?.getAttribute('data-runner-gear') === expectedGear &&
+      budget?.getAttribute('data-budget-limit') === String(expectedLimit);
+  }, { expectedGear: gear, expectedLimit: limit });
+  if ((await option.getAttribute('aria-checked')) !== 'true') {
+    throw new Error(`${label} 장비 선택 상태가 반영되지 않음: ${gear}`);
+  }
+  await expectSetupBudget(page, { used, limit, gear }, label);
+}
+
+async function expectSetupSelectorNoScroll(page, label) {
+  const contract = await page.evaluate(() => {
+    const selector = document.querySelector('[data-testid=runner-gear-selector]');
+    const controls = document.querySelector('[data-testid=setup-controls]');
+    if (!selector || !controls) return null;
+    const selectorRect = selector.getBoundingClientRect();
+    const optionRects = [...selector.querySelectorAll('[data-runner-gear-option]')]
+      .map((option) => option.getBoundingClientRect());
+    return {
+      selector: {
+        left: selectorRect.left,
+        right: selectorRect.right,
+        top: selectorRect.top,
+        bottom: selectorRect.bottom,
+        scrollWidth: selector.scrollWidth,
+        clientWidth: selector.clientWidth,
+        scrollHeight: selector.scrollHeight,
+        clientHeight: selector.clientHeight,
+      },
+      optionCount: optionRects.length,
+      overflowingOptions: optionRects.filter((rect) =>
+        rect.left < selectorRect.left - 1 || rect.right > selectorRect.right + 1 ||
+        rect.top < selectorRect.top - 1 || rect.bottom > selectorRect.bottom + 1
+      ).length,
+      controls: {
+        scrollWidth: controls.scrollWidth,
+        clientWidth: controls.clientWidth,
+        scrollHeight: controls.scrollHeight,
+        clientHeight: controls.clientHeight,
+      },
+      page: {
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+        scrollHeight: document.documentElement.scrollHeight,
+        clientHeight: document.documentElement.clientHeight,
+      },
+    };
+  });
+  if (
+    !contract || contract.optionCount !== 3 || contract.overflowingOptions !== 0 ||
+    contract.selector.scrollWidth > contract.selector.clientWidth + 1 ||
+    contract.selector.scrollHeight > contract.selector.clientHeight + 1 ||
+    contract.controls.scrollWidth > contract.controls.clientWidth + 1 ||
+    contract.controls.scrollHeight > contract.controls.clientHeight + 1 ||
+    contract.page.scrollWidth > contract.page.clientWidth + 1 ||
+    contract.page.scrollHeight > contract.page.clientHeight + 1
+  ) {
+    throw new Error(`${label} 장비 선택기/컨트롤/페이지 스크롤 계약 오류: ${JSON.stringify(contract)}`);
+  }
+  ok(`${label} 장비 선택기 3개 무오버플로 · 컨트롤/페이지 무스크롤`);
+}
+
+async function addGearFullBudgetWalls(page, gear) {
+  await toggleWalls(page, GEAR_FULL_BUDGET_WALLS);
+  await expectSetupBudget(page, {
+    used: RUNNER_GEAR_WALL_BUDGET,
+    limit: RUNNER_GEAR_WALL_BUDGET,
+    gear,
+  }, '장비 장착 연습 맵');
   if (!(await page.getByRole('button', { name: '완료', exact: true }).isEnabled())) {
-    throw new Error('24/24 유효 맵인데 완료 버튼이 활성화되지 않음');
+    throw new Error(`${RUNNER_GEAR_WALL_BUDGET}/${RUNNER_GEAR_WALL_BUDGET} 유효 맵인데 완료 버튼이 활성화되지 않음`);
   }
+}
+
+async function expectBattleRunnerGear(page, gear, label) {
+  const labels = {
+    none: '무장비 +10벽',
+    wormholeEscapeKit: '탈출키트',
+    insight: '심안',
+  };
+  const match = page.locator('[data-testid=practice-match]');
+  const badge = page.locator('[data-testid=practice-runner-gear]');
+  await match.waitFor();
+  await badge.waitFor();
+  const contract = {
+    matchGear: await match.getAttribute('data-runner-gear'),
+    badgeGear: await badge.getAttribute('data-runner-gear'),
+    badgeText: (await badge.innerText()).trim(),
+    badgeLabel: await badge.getAttribute('aria-label'),
+  };
+  if (
+    contract.matchGear !== gear || contract.badgeGear !== gear ||
+    !contract.badgeText.includes(labels[gear]) || !contract.badgeLabel?.includes(labels[gear])
+  ) {
+    throw new Error(`${label} 전투 장비 출력 계약 오류: ${JSON.stringify(contract)}`);
+  }
+  ok(`${label} 전투 data/badge=${gear}`);
 }
 
 async function expectCrossDpad(page, testId, boardSelector) {
@@ -231,10 +359,7 @@ async function expectNearestWallPointerRouting(page) {
   ];
 
   const usedBudget = async () => {
-    const text = await page.locator('[data-testid=setup-budget]').innerText();
-    const match = text.match(/(\d+)\/24/);
-    if (!match) throw new Error(`벽 예산을 읽지 못함: ${text}`);
-    return Number(match[1]);
+    return (await readSetupBudget(page)).used;
   };
 
   for (const testCase of cases) {
@@ -366,53 +491,134 @@ async function setupSparseMapTest(page) {
   await page.waitForTimeout(150);
 
   const completeButton = page.getByRole('button', { name: '완료', exact: true });
+  await selectSetupRunnerGear(
+    page,
+    'none',
+    0,
+    NO_GEAR_WALL_BUDGET,
+    '내 맵 테스트 무장비'
+  );
   if (!(await completeButton.isEnabled())) {
-    throw new Error('내 맵 테스트에서 유효한 0/24 맵의 완료 버튼이 비활성화됨');
+    throw new Error(`내 맵 테스트에서 유효한 0/${NO_GEAR_WALL_BUDGET} 맵의 완료 버튼이 비활성화됨`);
   }
   if (await page.locator('[data-testid=full-budget-required]').count() !== 0) {
-    throw new Error('내 맵 테스트에 24/24 강제 안내가 노출됨');
+    throw new Error('내 맵 테스트에 전체 예산 강제 안내가 노출됨');
   }
+  await selectSetupRunnerGear(
+    page,
+    'insight',
+    0,
+    RUNNER_GEAR_WALL_BUDGET,
+    '내 맵 테스트 심안'
+  );
+  await selectSetupRunnerGear(
+    page,
+    'none',
+    0,
+    NO_GEAR_WALL_BUDGET,
+    '내 맵 테스트 무장비 복귀'
+  );
 
-  for (const tab of ['함정', '특수벽']) {
+  const expectedPaletteCounts = { '함정': 2, '특수벽': 7 };
+  for (const tab of Object.keys(expectedPaletteCounts)) {
     await page.getByRole('tab', { name: tab }).click();
     const compact = await page.locator('[data-testid=setup-palette-options]').evaluate((element) => ({
       scrollWidth: element.scrollWidth,
       clientWidth: element.clientWidth,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
       buttonCount: element.querySelectorAll('button').length,
     }));
-    if (compact.buttonCount === 0 || compact.scrollWidth > compact.clientWidth + 1) {
+    if (
+      compact.buttonCount !== expectedPaletteCounts[tab] ||
+      compact.scrollWidth > compact.clientWidth + 1 ||
+      compact.scrollHeight > compact.clientHeight + 1
+    ) {
       throw new Error(`${tab} 선택기가 모바일 폭에서 다시 스크롤됨: ${JSON.stringify(compact)}`);
     }
+  }
+  if (await page.getByRole('button', { name: /지뢰|연막 함정/ }).count() !== 0) {
+    throw new Error('은퇴한 지뢰/연막이 신규 맵 제작 팔레트에 노출됨');
   }
 
   await page.getByRole('button', { name: /화염벽/ }).click();
   await page.getByRole('button', { name: '1행 1열 right 벽', exact: true }).click();
-  const budget = page.locator('[data-testid=setup-budget]');
-  if (!(await budget.innerText()).includes('1/24')) {
-    throw new Error(`부분 예산 맵이 1/24로 유지되지 않음: ${await budget.innerText()}`);
-  }
-  if ((await budget.getAttribute('data-budget-complete')) !== 'false') {
-    throw new Error('부분 예산 맵이 전체 예산 완료로 잘못 표시됨');
-  }
+  await expectSetupBudget(page, {
+    used: 1,
+    limit: NO_GEAR_WALL_BUDGET,
+    gear: 'none',
+    complete: false,
+  }, '내 맵 테스트 부분 예산');
   if (!(await completeButton.isEnabled())) {
-    throw new Error('내 맵 테스트에서 유효한 1/24 맵의 완료 버튼이 비활성화됨');
+    throw new Error(`내 맵 테스트에서 유효한 1/${NO_GEAR_WALL_BUDGET} 맵의 완료 버튼이 비활성화됨`);
   }
 
-  const scrollContract = await page.locator('[data-testid=setup-controls]').evaluate((controls) => ({
-    controlsScrollHeight: controls.scrollHeight,
-    controlsClientHeight: controls.clientHeight,
-    pageScrollHeight: document.documentElement.scrollHeight,
-    pageClientHeight: document.documentElement.clientHeight,
-  }));
-  if (
-    scrollContract.controlsScrollHeight > scrollContract.controlsClientHeight + 1 ||
-    scrollContract.pageScrollHeight > scrollContract.pageClientHeight + 1
-  ) {
-    throw new Error(`압축 팔레트가 세로 스크롤을 만듦: ${JSON.stringify(scrollContract)}`);
+  await selectSetupRunnerGear(
+    page,
+    'insight',
+    1,
+    RUNNER_GEAR_WALL_BUDGET,
+    '부분 예산 심안 전환'
+  );
+  await selectSetupRunnerGear(
+    page,
+    'none',
+    1,
+    NO_GEAR_WALL_BUDGET,
+    '부분 예산 무장비 전환'
+  );
+
+  await toggleWalls(page, MAP_TEST_OVER_GEAR_WALLS);
+  await expectSetupBudget(page, {
+    used: RUNNER_GEAR_WALL_BUDGET + 1,
+    limit: NO_GEAR_WALL_BUDGET,
+    gear: 'none',
+    complete: false,
+  }, '장비 한도 초과 무장비 맵');
+
+  const insightOption = page.locator(
+    '[data-testid=runner-gear-selector] [data-runner-gear-option="insight"]'
+  );
+  if ((await insightOption.getAttribute('data-over-budget')) !== 'true') {
+    throw new Error('15 초과 맵에서 심안 선택기가 초과 상태를 표시하지 않음');
   }
+  let blockedMessage = null;
+  page.once('dialog', async (dialog) => {
+    blockedMessage = dialog.message();
+    await dialog.dismiss();
+  });
+  await insightOption.click();
+  if (!blockedMessage?.includes(String(RUNNER_GEAR_WALL_BUDGET))) {
+    throw new Error(`15 초과 장비 전환 차단 안내가 없음: ${blockedMessage}`);
+  }
+  await expectSetupBudget(page, {
+    used: RUNNER_GEAR_WALL_BUDGET + 1,
+    limit: NO_GEAR_WALL_BUDGET,
+    gear: 'none',
+    complete: false,
+  }, '장비 한도 초과 전환 차단 후');
+  if ((await insightOption.getAttribute('aria-checked')) !== 'false') {
+    throw new Error('15 초과 장비 전환이 UI 선택 상태에 잘못 반영됨');
+  }
+
+  await toggleWalls(page, MAP_TEST_OVER_GEAR_WALLS);
+  await expectSetupBudget(page, {
+    used: 1,
+    limit: NO_GEAR_WALL_BUDGET,
+    gear: 'none',
+    complete: false,
+  }, '초과 검증용 벽 제거 후');
+  await selectSetupRunnerGear(
+    page,
+    'insight',
+    1,
+    RUNNER_GEAR_WALL_BUDGET,
+    '내 맵 테스트 최종 심안'
+  );
+  await expectSetupSelectorNoScroll(page, 'Galaxy S21 짧은 화면');
 
   await completeButton.click();
-  ok('1/24 부분 예산 맵 테스트 · 모바일 팔레트 무스크롤');
+  ok(`1/${RUNNER_GEAR_WALL_BUDGET} 부분 예산 심안 맵 · 16/25 장비 전환 차단`);
 }
 
 async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyHistory = false } = {}) {
@@ -426,7 +632,16 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
   await page.waitForTimeout(150);
 
   const completeButton = page.getByRole('button', { name: '완료', exact: true });
-  if (await completeButton.isEnabled()) throw new Error('0/24 연습 맵에서 완료 버튼이 활성화됨');
+  await selectSetupRunnerGear(
+    page,
+    'wormholeEscapeKit',
+    0,
+    RUNNER_GEAR_WALL_BUDGET,
+    '직접 만든 연습 맵 탈출키트'
+  );
+  if (await completeButton.isEnabled()) {
+    throw new Error(`0/${RUNNER_GEAR_WALL_BUDGET} 연습 맵에서 완료 버튼이 활성화됨`);
+  }
   await page.locator('[data-testid=full-budget-required]').waitFor();
   if (verifyPreview) await expectNearestWallPointerRouting(page);
 
@@ -436,13 +651,34 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
   if (await page.getByRole('button', { name: /탐지기/ }).count() !== 0) {
     throw new Error('탐지기가 신규 맵 제작 팔레트에 노출됨');
   }
-  await page.getByRole('button', { name: /연막 함정/ }).click();
-  await page.locator('[data-cell="0,1"]').click();
-
   await page.getByRole('tab', { name: '특수벽' }).click();
   if (await page.getByRole('button', { name: /강철벽|붕괴벽|위상벽|거울벽|수정벽/ }).count() !== 0) {
     throw new Error('은퇴한 강철/붕괴/위상/거울/수정벽이 신규 맵 제작 팔레트에 노출됨');
   }
+  if (await page.getByRole('button', { name: /안개벽|환영벽/ }).count() !== 2) {
+    throw new Error('안개벽/환영벽이 신규 특수벽 팔레트에 모두 노출되지 않음');
+  }
+  await page.getByRole('button', { name: /안개벽/ }).click();
+  if (verifyPreview) {
+    const fogPreview = page.locator('[data-testid=wall-action-preview][data-preview-wall=fogWall]');
+    await fogPreview.waitFor();
+    const fogContract = await fogPreview.evaluate((element) => ({
+      from: element.getAttribute('data-preview-from'),
+      result: element.getAttribute('data-preview-result'),
+      consumed: element.getAttribute('data-preview-wall-consumed'),
+      cue: element.querySelector('[data-preview-effect=next-action-fog]')?.getAttribute('data-preview-effect'),
+      resultLabel: element.closest('[data-maze-board-grid]')
+        ?.querySelector('[data-wall-action-preview-companion=fogWall] [data-preview-step=result]')
+        ?.textContent?.trim(),
+    }));
+    if (
+      !fogContract.from || fogContract.result === fogContract.from || fogContract.consumed !== 'true' ||
+      fogContract.cue !== 'next-action-fog' || !fogContract.resultLabel?.includes('다음 1행동 시야 차단')
+    ) {
+      throw new Error(`안개벽 관통/다음행동 시야 예시 오류: ${JSON.stringify(fogContract)}`);
+    }
+  }
+  await page.getByRole('button', { name: '2행 1열 right 벽', exact: true }).click();
   const budgetBeforeGuide = await page.locator('[data-testid=setup-budget]').innerText();
   await page.getByRole('button', { name: /화염벽/ }).click();
   const wallGuideStatus = page.locator('[data-testid=wall-placement-guide][data-selected-wall=fireWall]');
@@ -633,6 +869,36 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
       throw new Error(`가시벽 반대방향 튕김 3단계 예시 오류: ${JSON.stringify(thornContract)}`);
     }
 
+    await page.getByRole('button', { name: /환영벽/ }).click();
+    const illusionPreview = page.locator('[data-testid=wall-action-preview][data-preview-wall=illusionWall]');
+    await illusionPreview.waitFor();
+    const illusionContract = await illusionPreview.evaluate((element) => {
+      const cue = element.querySelector('[data-preview-effect=illusion-three-actions]');
+      const companion = element.closest('[data-maze-board-grid]')
+        ?.querySelector('[data-wall-action-preview-companion=illusionWall]');
+      return {
+        from: element.getAttribute('data-preview-from'),
+        result: element.getAttribute('data-preview-result'),
+        consumed: element.getAttribute('data-preview-wall-consumed'),
+        actionCount: cue?.querySelectorAll('[data-illusion-action]').length,
+        firstWallLock: cue?.getAttribute('data-first-blocking-wall-lock'),
+        laterWallUpdate: cue?.getAttribute('data-later-wall-update'),
+        noCollisionStay: cue?.getAttribute('data-no-collision-stay'),
+        resultLabel: companion?.querySelector('[data-preview-step=result]')?.textContent?.trim(),
+        returnRule: companion?.querySelector('[data-preview-rule=first-blocking-wall-only]')?.textContent?.trim(),
+      };
+    });
+    if (
+      !illusionContract.from || illusionContract.result === illusionContract.from ||
+      illusionContract.consumed !== 'true' || illusionContract.actionCount !== 3 ||
+      illusionContract.firstWallLock !== 'true' || illusionContract.laterWallUpdate !== 'false' ||
+      illusionContract.noCollisionStay !== 'true' || !illusionContract.resultLabel?.includes('환영 3행동 시작') ||
+      !illusionContract.returnRule?.includes('첫 차단벽 관통 직전 고정') ||
+      !illusionContract.returnRule?.includes('뒤 벽 갱신 없음')
+    ) {
+      throw new Error(`환영벽 3행동/첫 차단벽 관통 직전 귀환점 예시 오류: ${JSON.stringify(illusionContract)}`);
+    }
+
     await page.getByRole('tab', { name: '함정' }).click();
     await page.getByRole('button', { name: /웜홀/ }).click();
     const wormholePreview = page.locator('[data-testid=wall-action-preview][data-preview-wall=wormhole]');
@@ -664,7 +930,7 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
     await fireActionPreview.waitFor();
 
     await page.screenshot({ path: path.join(OUT, 'practice-wall-guide-galaxy-s21.png') });
-    ok('실제 보드 내 화염/독/웜홀 그림자 분신 · 안전한 빈 위치 · 예산 무변경');
+    ok('실제 보드 내 화염/독/안개/환영/웜홀 그림자 분신 · 안전한 빈 위치 · 예산 무변경');
   }
   await page.getByRole('button', { name: '1행 1열 right 벽', exact: true }).click();
 
@@ -812,7 +1078,8 @@ async function setupFullBudgetPracticeMap(page, { verifyPreview = false, verifyH
     ok('Galaxy S21 바람벽 방향 버튼 · 기존 벽 중첩 방지 피드백');
   }
 
-  await addFullBudgetWalls(page);
+  await addGearFullBudgetWalls(page, 'wormholeEscapeKit');
+  await expectSetupSelectorNoScroll(page, 'Galaxy S21 정규 맵');
   const setupBounds = await page.evaluate(() => {
     const palette = document.querySelector('[role="tablist"]')?.closest('.game-panel');
     const board = document.querySelector('[data-cell]')?.closest('.grid');
@@ -1104,6 +1371,7 @@ async function expectMobileToonCanvases(page, label, expected) {
     await page.getByRole('radio', { name: 'AI 3명' }).click();
     await page.getByRole('button', { name: '빠른 대전' }).click();
     await expectBoardCount(page, 4);
+    await expectBattleRunnerGear(page, 'none', '빠른 대전');
     const kinds = await page.locator('[data-player-board]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-player-kind')));
     if (kinds.join(',') !== 'human,ai,ai,ai') throw new Error(`사람/AI 보드 순서 오류: ${kinds}`);
     await expectGameplay3DOnly(page, 'AI 3명 빠른 대전', 4);
@@ -1202,7 +1470,7 @@ async function expectMobileToonCanvases(page, label, expected) {
     );
     ok('639px와 640px 모두 4보드 동시 표시와 모바일 십자패드 유지');
 
-    console.log('STEP 5: 모바일 2·3인 전체 보드와 24/24 직접 만든 맵');
+    console.log('STEP 5: 모바일 2·3인 전체 보드와 탈출키트 15/15 직접 만든 맵');
     await page.getByRole('button', { name: '연습 설정' }).click();
     await page.getByRole('radio', { name: 'AI 1명' }).click();
     await page.getByRole('button', { name: '빠른 대전' }).click();
@@ -1234,6 +1502,7 @@ async function expectMobileToonCanvases(page, label, expected) {
     await page.getByRole('radio', { name: 'AI 2명' }).click();
     await page.getByRole('button', { name: '맵 만들기' }).click();
     await setupFullBudgetPracticeMap(page, { verifyPreview: true, verifyHistory: true });
+    await expectBattleRunnerGear(page, 'wormholeEscapeKit', '15/15 직접 만든 맵');
     await expectAllMobileBoards(page, 3, '직접 만든 맵 3인 전체 보드');
     await expectGameplay3DOnly(page, '직접 만든 맵 3인 전체 보드', 3);
     await expectMobileToonCanvases(page, '직접 만든 맵 3인 전체 보드', 3);
@@ -1242,12 +1511,13 @@ async function expectMobileToonCanvases(page, label, expected) {
       'practice-mobile-direction-pad',
       '[data-player-board="practice-user"]'
     );
-    ok('24/24 직접 만든 맵 + AI 2명');
+    ok('탈출키트 15/15 직접 만든 맵 + AI 2명');
 
     console.log('STEP 6: 부분 예산 내 맵 단독 테스트와 연속 턴');
     await page.getByRole('button', { name: '연습 설정' }).click();
     await page.getByRole('button', { name: '내 맵 테스트' }).click();
     await setupSparseMapTest(page);
+    await expectBattleRunnerGear(page, 'insight', '부분 예산 내 맵 테스트');
     await expectBoardCount(page, 1);
     await expectAllMobileBoards(page, 1, '내 맵 단독 테스트');
     await expectGameplay3DOnly(page, '내 맵 단독 테스트', 1);
@@ -1313,7 +1583,7 @@ async function expectMobileToonCanvases(page, label, expected) {
     await oneOpenExit.waitFor();
     await oneOpenExit.click();
     await page.waitForFunction(() =>
-      document.querySelector('[data-testid=setup-budget]')?.textContent?.includes('8/24')
+      document.querySelector('[data-testid=setup-budget]')?.textContent?.includes('8/15')
     );
     await page.getByRole('button', { name: '완료', exact: true }).click();
     await page.locator('[data-testid=practice-match]').waitFor();

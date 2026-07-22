@@ -8,6 +8,7 @@ import {
   Obstacle,
   Player,
   Position,
+  RunnerGear,
   DiceWormholeChallenge,
   DiceWormholeRunState,
   LegacyWormholeRunState,
@@ -20,13 +21,14 @@ import {
   findShortestPath,
   getMapBudgetUsed,
   getMapItems,
+  getMapRunnerGear,
+  getMapWallBudget,
   getNewPosition,
   GAME_RULES_VERSION,
   isSameWallSegment,
   isPositionInBoard,
   isSamePosition,
   isValidMap,
-  MAX_OBSTACLES,
 } from '@/lib/gameUtils';
 import {
   isVisionObscuredForPlayer,
@@ -66,11 +68,6 @@ const wall = (row: number, col: number, direction: Direction): Obstacle => ({
   direction,
 });
 
-const mine = (row: number, col: number): MapItem => ({
-  type: 'mine',
-  position: { row, col },
-});
-
 const oneTimeWall = (row: number, col: number, direction: Direction): MapItem => ({
   type: 'oneTimeWall',
   wallPosition: { row, col },
@@ -101,13 +98,9 @@ const wormhole = (entrance: Position, exit: Position): MapItem => ({
   challenge: createPracticeWormholeChallenge(),
 });
 
-const smoke = (row: number, col: number): MapItem => ({
-  type: 'smoke',
-  position: { row, col },
-});
-
 const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
   {
+    runnerGear: 'none',
     skillLoadout: 'scoutPulse',
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 5, col: 5 },
@@ -123,8 +116,8 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
     ],
     items: [
       oneTimeWall(5, 2, 'right'),
-      mine(3, 0),
-      smoke(4, 0),
+      specialWall('fogWall', 1, 2, 'right'),
+      specialWall('illusionWall', 4, 4, 'right'),
       specialWall('fireWall', 0, 1, 'down'),
       specialWall('poisonWall', 2, 3, 'right'),
       specialWall('iceWall', 4, 1, 'right'),
@@ -132,6 +125,7 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
     ],
   },
   {
+    runnerGear: 'wormholeEscapeKit',
     skillLoadout: 'scoutPulse',
     startPosition: { row: 5, col: 0 },
     endPosition: { row: 5, col: 5 },
@@ -143,7 +137,6 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
       wall(2, 3, 'down'),
       wall(1, 4, 'left'),
       wall(5, 1, 'up'),
-      wall(1, 2, 'right'),
     ],
     items: [
       wormhole({ row: 2, col: 0 }, { row: 4, col: 1 }),
@@ -151,6 +144,7 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
     ],
   },
   {
+    runnerGear: 'insight',
     skillLoadout: 'scoutPulse',
     startPosition: { row: 0, col: 5 },
     endPosition: { row: 5, col: 0 },
@@ -163,6 +157,7 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
     ],
   },
   {
+    runnerGear: 'none',
     skillLoadout: 'scoutPulse',
     startPosition: { row: 5, col: 5 },
     endPosition: { row: 0, col: 0 },
@@ -178,8 +173,8 @@ const BASE_PRACTICE_MAP_TEMPLATES: GameMap[] = [
     ],
     items: [
       oneTimeWall(0, 3, 'left'),
-      mine(3, 4),
-      smoke(4, 5),
+      specialWall('fogWall', 4, 5, 'up'),
+      specialWall('illusionWall', 3, 5, 'left'),
       specialWall('thornWall', 4, 4, 'up'),
     ],
   },
@@ -199,7 +194,8 @@ export function clonePracticeMap(map: GameMap): GameMap {
       direction: entry.direction,
     })),
     items: getMapItems(map).map(cloneMapItem),
-    // 연습전에서는 스킬을 노출하거나 사용하지 않는다. V3 맵 필드는 유지하되
+    runnerGear: getMapRunnerGear(map),
+    // 연습전에서는 스킬을 노출하거나 사용하지 않는다. 호환 맵 필드는 유지하되
     // 자동 발동형 anchor가 이동 결과에 개입하지 않도록 수동형 기본값으로 통일한다.
     skillLoadout: 'scoutPulse',
   };
@@ -233,13 +229,14 @@ export function getPracticeMapRouteLength(map: GameMap): number {
 
 export function fillPracticeMapBudget(map: GameMap, seed = 0): GameMap {
   let candidate = clonePracticeMap(map);
+  const wallBudget = getMapWallBudget(getMapRunnerGear(candidate));
   const wallItems = getMapItems(candidate).flatMap((item) =>
     item.wallPosition && item.wallDirection
       ? [{ position: item.wallPosition, direction: item.wallDirection }]
       : []
   );
 
-  while (getMapBudgetUsed(candidate) < MAX_OBSTACLES) {
+  while (getMapBudgetUsed(candidate) < wallBudget) {
     let best: GameMap | null = null;
     let bestScore = Number.NEGATIVE_INFINITY;
     const currentPath = findShortestPath(
@@ -263,7 +260,7 @@ export function fillPracticeMapBudget(map: GameMap, seed = 0): GameMap {
         ...candidate,
         obstacles: [...candidate.obstacles, nextWall],
       };
-      if (getMapBudgetUsed(nextMap) > MAX_OBSTACLES || !isValidMap(nextMap)) return;
+      if (getMapBudgetUsed(nextMap) > wallBudget || !isValidMap(nextMap)) return;
 
       const routeLength = getPracticeMapRouteLength(nextMap);
       const blocksCurrentRoute = currentPath.slice(0, -1).some((position, pathIndex) => {
@@ -293,19 +290,25 @@ export const PRACTICE_MAP_TEMPLATES: GameMap[] = BASE_PRACTICE_MAP_TEMPLATES.map
   (map, index) => fillPracticeMapBudget(map, index * 17 + 3)
 );
 
-export function createQuickPracticeMap(): GameMap {
-  return clonePracticeMap(PRACTICE_MAP_TEMPLATES[3]);
+export function createQuickPracticeMap(runnerGear: RunnerGear = 'none'): GameMap {
+  const templateIndex = runnerGear === 'none' ? 3 : 2;
+  return fillPracticeMapBudget({
+    ...clonePracticeMap(BASE_PRACTICE_MAP_TEMPLATES[templateIndex]),
+    runnerGear,
+  }, runnerGear === 'none' ? 71 : runnerGear === 'wormholeEscapeKit' ? 73 : 79);
 }
 
 export function createAiPracticeMap(index: number): GameMap {
   const candidate = clonePracticeMap(PRACTICE_MAP_TEMPLATES[index % 3]);
-  return isValidMap(candidate) && getMapBudgetUsed(candidate) === MAX_OBSTACLES
+  return isValidMap(candidate) &&
+    getMapBudgetUsed(candidate) === getMapWallBudget(getMapRunnerGear(candidate))
     ? candidate
     : fillPracticeMapBudget({
         startPosition: { row: 0, col: 0 },
         endPosition: { row: 5, col: 5 },
         obstacles: [],
         items: [],
+        runnerGear: (['none', 'wormholeEscapeKit', 'insight'] as RunnerGear[])[index % 3],
         skillLoadout: 'scoutPulse',
       }, index + 101);
 }
@@ -340,6 +343,7 @@ export function createMapTestGameState(playerMap: GameMap): GameState {
     collisionWalls: {},
     revealedWallsByPlayer: {},
     visionEffectsByPlayer: {},
+    illusionEffectsByPlayer: {},
     turnMessage: '내 맵 테스트를 시작합니다.',
     turnMessageTimestamp: Date.now(),
   };
@@ -390,6 +394,7 @@ export function createPracticeGameState(playerMap: GameMap, requestedAiCount: nu
     collisionWalls: {},
     revealedWallsByPlayer: {},
     visionEffectsByPlayer: {},
+    illusionEffectsByPlayer: {},
     turnMessage: '내 턴입니다.',
     turnMessageTimestamp: Date.now(),
   };
@@ -408,7 +413,9 @@ export function practiceWallKey(position: Position, direction: Direction): strin
 function knownWallsForRunner(state: GameState, runnerId: string): Obstacle[] {
   const mapOwnerId = state.assignments?.[runnerId];
   const collisions = getPracticeCollisionWalls(state)
-    .filter((entry) => entry.playerId === runnerId && entry.mapOwnerId === mapOwnerId)
+    .filter((entry) => entry.playerId === runnerId
+      && entry.mapOwnerId === mapOwnerId
+      && entry.identifiedAsFake !== true)
     .map((entry) => ({ position: entry.position, direction: entry.direction }));
   return mergeWallSegments(collisions, state.revealedWallsByPlayer?.[runnerId] || []);
 }

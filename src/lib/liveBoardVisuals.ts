@@ -86,6 +86,21 @@ export function getWallReboundOutcomeVia(outcome: MoveTurnOutcome): Position[] |
   );
 }
 
+/**
+ * The third affected action is shown before the pawn wakes at its fixed return
+ * point. `position` already is that final point, so the renderer only needs
+ * the attempted cell as its presentation waypoint.
+ */
+export function getIllusionReturnOutcomeVia(outcome: MoveTurnOutcome): Position[] | null {
+  if (outcome.illusionTransition !== 'returned' || !outcome.illusionReturnPosition) return null;
+  // A wormhole action uses private 4x4 coordinates. The main board remounts at
+  // the authoritative return point, so give it only that same-cell waypoint
+  // instead of briefly sending the pawn through an unrelated outer-board cell.
+  return outcome.illusionReturnFromWormhole
+    ? [{ ...outcome.illusionReturnPosition }]
+    : [{ ...outcome.attempted }];
+}
+
 const DIRECTIONS: Direction[] = ['up', 'down', 'left', 'right'];
 
 function flags(value: unknown): Record<number, boolean> {

@@ -1,21 +1,31 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Direction, GameMap, GamePhase, ItemType, MapItem, Obstacle, Position } from '@/types/game';
+import {
+  Direction,
+  GameMap,
+  GamePhase,
+  ItemType,
+  MapItem,
+  Obstacle,
+  Position,
+  RunnerGear,
+} from '@/types/game';
 import {
   Aperture,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
-  Bomb,
   BrickWall,
   CloudFog,
+  Eye,
   Flame,
   FlaskConical,
   LucideIcon,
   ShieldAlert,
   Snowflake,
+  Sparkles,
   Redo2,
   Undo2,
   Wind,
@@ -28,12 +38,14 @@ import {
   BOARD_SIZE,
   DEFAULT_MAZE_SKILL,
   GAME_RULES_VERSION,
-  MAX_OBSTACLES,
   ITEM_COSTS,
   ITEM_LIMITS,
   ITEM_LABELS,
   cloneMapItem,
+  getWormholeExitGoalPathError,
   getMapItems,
+  getMapRunnerGear,
+  getMapWallBudget,
   getWormholeExitSafetyError,
   isWallItemType,
   isSameWallSegment,
@@ -43,7 +55,9 @@ import {
 interface GameSetupProps {
   onMapComplete: (map: GameMap) => void;
   onDraftChange?: (map: GameMap) => void;
+  onRunnerGearChange?: (runnerGear: RunnerGear) => void;
   initialMap?: GameMap | null;
+  initialRunnerGear?: RunnerGear;
   requireFullBudget?: boolean;
 }
 
@@ -52,6 +66,7 @@ interface MapEditorSnapshot {
   endPosition?: Position;
   obstacles: Obstacle[];
   items: MapItem[];
+  runnerGear: RunnerGear;
   setupPhase: 'start' | 'end' | 'obstacles';
 }
 
@@ -113,63 +128,113 @@ function cloneEditorSnapshot(snapshot: MapEditorSnapshot): MapEditorSnapshot {
       direction: obstacle.direction,
     })),
     items: cloneMapItems(snapshot.items),
+    runnerGear: snapshot.runnerGear,
     setupPhase: snapshot.setupPhase,
   };
 }
 
 type PlaceableItemType = Exclude<
   ItemType,
-  'radar' | 'steelWall' | 'collapseWall' | 'phaseWall' | 'mirrorWall' | 'crystalWall'
+  | 'radar'
+  | 'mine'
+  | 'smoke'
+  | 'steelWall'
+  | 'collapseWall'
+  | 'phaseWall'
+  | 'mirrorWall'
+  | 'crystalWall'
 >;
 type PlaceMode = 'wall' | PlaceableItemType;
 
 const ITEM_ICONS: Record<PlaceableItemType, LucideIcon> = {
   oneTimeWall: BrickWall,
-  mine: Bomb,
   wormhole: Aperture,
-  smoke: CloudFog,
   fireWall: Flame,
   poisonWall: FlaskConical,
   iceWall: Snowflake,
   windWall: Wind,
   thornWall: ShieldAlert,
+  fogWall: CloudFog,
+  illusionWall: Sparkles,
 };
 
-const TRAP_ITEMS: PlaceableItemType[] = ['oneTimeWall', 'mine', 'wormhole', 'smoke'];
+const TRAP_ITEMS: PlaceableItemType[] = ['oneTimeWall', 'wormhole'];
 const SPECIAL_WALL_ITEMS: PlaceableItemType[] = [
   'fireWall',
   'poisonWall',
   'iceWall',
   'windWall',
   'thornWall',
+  'fogWall',
+  'illusionWall',
 ];
 
 const ITEM_DESCRIPTIONS: Record<PlaceableItemType, string> = {
   oneTimeWall: '발동 전까지 무기한 정상벽으로 위장하고 처음 한 번만 막음',
-  mine: '밟으면 실제 2턴 전 위치로 되돌림',
   wormhole: '4×4 방에서 주사위를 굴려 출구의 목표 윗면을 맞춰야 복귀',
-  smoke: '상대의 다음 행동 동안 보드를 가림',
   fireWall: '처음 막고 불을 붙여 발견한 벽을 지우고 4행동 동안 새 벽 기억도 태움',
   poisonWall: '통과 후 4행동의 방향을 매번 상·하·좌·우 중 하나로 무작위 변환',
   iceWall: '첫 충돌을 막고 소멸하며 이번 행동 수를 1 추가',
   windWall: '첫 충돌을 막고 원래 칸에서 지정 방향으로 한 칸 튕긴 뒤 소멸',
   thornWall: '첫 충돌을 막고 입력 반대 방향으로 한 칸 튕긴 뒤 소멸',
+  fogWall: '통과하며 소멸하고 다음 1회 행동 동안 주행 보드 시야를 가림',
+  illusionWall: '관통해 이후 3행동 동안 환영 상태. 처음 관통한 원래 막힌 벽 직전 칸을 귀환점으로 고정하고 종료 시 돌아감',
 };
 
 const ITEM_SHORT_LABELS: Record<PlaceableItemType, string> = {
   oneTimeWall: '가짜',
-  mine: '지뢰',
   wormhole: '웜홀',
-  smoke: '연막',
   fireWall: '화염',
   poisonWall: '독',
   iceWall: '빙결',
   windWall: '바람',
   thornWall: '가시',
+  fogWall: '안개',
+  illusionWall: '환영',
 };
+
+const RUNNER_GEAR_OPTIONS: Array<{
+  gear: RunnerGear;
+  shortLabel: string;
+  label: string;
+  description: string;
+  setupSummary: string;
+  Icon: LucideIcon;
+}> = [
+  {
+    gear: 'none',
+    shortLabel: '없음 +10',
+    label: '장비 없음',
+    description: '패시브 장비 대신 벽 예산을 10개 더 받아 총 25개를 배치합니다.',
+    setupSummary: '장비 없음 · 기본 15 + 보너스 10 = 25벽',
+    Icon: BrickWall,
+  },
+  {
+    gear: 'wormholeEscapeKit',
+    shortLabel: '탈출',
+    label: '웜홀 탈출키트',
+    description: '게임 내내 웜홀 주사위 방을 건너뛰고 출구로 바로 이동합니다. 벽 예산은 15개입니다.',
+    setupSummary: '탈출키트 · 모든 웜홀 즉시 탈출 · 15벽',
+    Icon: Aperture,
+  },
+  {
+    gear: 'insight',
+    shortLabel: '심안',
+    label: '심안',
+    description: '게임 내내 충돌한 가짜벽이 가짜인지 바로 구분합니다. 벽 예산은 15개입니다.',
+    setupSummary: '심안 · 충돌한 가짜벽 판별 · 15벽',
+    Icon: Eye,
+  },
+];
+
+function getRunnerGearOption(gear: RunnerGear) {
+  return RUNNER_GEAR_OPTIONS.find((option) => option.gear === gear) || RUNNER_GEAR_OPTIONS[0];
+}
 
 const RETIRED_EDITOR_ITEM_TYPES: readonly ItemType[] = [
   'radar',
+  'mine',
+  'smoke',
   'steelWall',
   'collapseWall',
   'phaseWall',
@@ -183,11 +248,12 @@ const RETIRED_WALLS_TO_ORDINARY: readonly ItemType[] = [
   'crystalWall',
 ];
 
-function prepareInitialEditorMap(initialMap: GameMap | null): {
+function prepareInitialEditorMap(initialMap: GameMap | null, initialRunnerGear: RunnerGear): {
   obstacles: Obstacle[];
   items: MapItem[];
+  runnerGear: RunnerGear;
 } {
-  if (!initialMap) return { obstacles: [], items: [] };
+  if (!initialMap) return { obstacles: [], items: [], runnerGear: initialRunnerGear };
 
   const sourceItems = getMapItems(initialMap);
   const obstacles = (initialMap.obstacles || []).map((entry) => ({
@@ -220,6 +286,7 @@ function prepareInitialEditorMap(initialMap: GameMap | null): {
       obstacles,
       siblings
     )),
+    runnerGear: getMapRunnerGear(initialMap),
   };
 }
 
@@ -236,16 +303,18 @@ const findWormholeSafetyError = (map: GameMap): string | null => {
     const error = getWormholeExitSafetyError(map, item.exit);
     if (error) return error;
   }
-  return null;
+  return getWormholeExitGoalPathError(map);
 };
 
 const GameSetup: React.FC<GameSetupProps> = ({
   onMapComplete,
   onDraftChange,
+  onRunnerGearChange,
   initialMap = null,
+  initialRunnerGear = 'none',
   requireFullBudget = false,
 }) => {
-  const [initialEditorMap] = useState(() => prepareInitialEditorMap(initialMap));
+  const [initialEditorMap] = useState(() => prepareInitialEditorMap(initialMap, initialRunnerGear));
   const [startPosition, setStartPosition] = useState<Position | undefined>(() =>
     initialMap?.startPosition ? { ...initialMap.startPosition } : undefined
   );
@@ -267,6 +336,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
   const [items, setItems] = useState<MapItem[]>(() =>
     cloneMapItems(initialEditorMap.items)
   );
+  const [runnerGear, setRunnerGear] = useState<RunnerGear>(initialEditorMap.runnerGear);
   const [wormholeEntrance, setWormholeEntrance] = useState<Position | null>(null);
   const [paletteTab, setPaletteTab] = useState<'traps' | 'walls'>('traps');
   const [windDirection, setWindDirection] = useState<Direction>('right');
@@ -281,6 +351,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
       endPosition,
       obstacles,
       items,
+      runnerGear,
       setupPhase,
     }),
     future: [],
@@ -294,6 +365,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
       endPosition,
       obstacles,
       items,
+      runnerGear,
       setupPhase,
     });
     const history = historyRef.current;
@@ -309,7 +381,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
     history.current = next;
     history.future = [];
     forceHistoryRender((version) => version + 1);
-  }, [endPosition, items, obstacles, setupPhase, startPosition]);
+  }, [endPosition, items, obstacles, runnerGear, setupPhase, startPosition]);
 
   const restoreEditorSnapshot = useCallback((snapshot: MapEditorSnapshot) => {
     restoringHistoryRef.current = true;
@@ -320,6 +392,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
       direction: obstacle.direction,
     })));
     setItems(cloneMapItems(snapshot.items));
+    setRunnerGear(snapshot.runnerGear);
     setSetupPhase(snapshot.setupPhase);
     setPlaceMode('wall');
     setWormholeEntrance(null);
@@ -358,9 +431,14 @@ const GameSetup: React.FC<GameSetupProps> = ({
     return () => window.removeEventListener('keydown', handleHistoryShortcut);
   }, [handleRedo, handleUndo]);
 
-  const itemsCost = items.reduce((sum, it) => sum + ITEM_COSTS[it.type], 0);
+  useEffect(() => {
+    onRunnerGearChange?.(runnerGear);
+  }, [onRunnerGearChange, runnerGear]);
 
-  // 아이템이 이미 점유한 칸 (지뢰 위치, 웜홀 입출구)
+  const itemsCost = items.reduce((sum, it) => sum + ITEM_COSTS[it.type], 0);
+  const wallBudget = getMapWallBudget(runnerGear);
+
+  // 레거시 칸 아이템과 웜홀 입출구가 이미 점유한 칸
   const isCellOccupiedByItem = (position: Position): boolean =>
     items.some(
       (it) =>
@@ -372,7 +450,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
 
   // 예산 안에서 이 아이템을 추가할 수 있는지
   const canAffordItem = (type: ItemType): boolean =>
-    countUniqueObstacles(obstacles) + itemsCost + ITEM_COSTS[type] <= MAX_OBSTACLES;
+    countUniqueObstacles(obstacles) + itemsCost + ITEM_COSTS[type] <= wallBudget;
 
   const hasItemCapacity = (type: ItemType): boolean =>
     items.filter((item) => item.type === type).length < ITEM_LIMITS[type];
@@ -516,7 +594,10 @@ const GameSetup: React.FC<GameSetupProps> = ({
           obstacles,
           items: [...items, wormhole],
         };
-        if (!getWormholeExitSafetyError(candidateMap, position)) {
+        if (
+          !getWormholeExitSafetyError(candidateMap, position) &&
+          !getWormholeExitGoalPathError(candidateMap)
+        ) {
           wormholeExitCandidates.push(position);
         }
       }
@@ -537,13 +618,8 @@ const GameSetup: React.FC<GameSetupProps> = ({
       setEndPosition(position);
       setSetupPhase('obstacles');
     } else if (setupPhase === 'obstacles') {
-      // 아이템 배치 모드에서의 셀 클릭
-      if (placeMode === 'mine' || placeMode === 'smoke') {
-        if (!canPlaceItemOnCell(position) || isCellOccupiedByItem(position)) return;
-        if (!canAffordItem(placeMode)) return;
-        addItem({ type: placeMode, position });
-        setPlaceMode('wall');
-      } else if (placeMode === 'wormhole') {
+      // 웜홀 배치 모드에서의 셀 클릭
+      if (placeMode === 'wormhole') {
         if (!canPlaceItemOnCell(position) || isCellOccupiedByItem(position)) return;
 
         if (!wormholeEntrance) {
@@ -570,7 +646,9 @@ const GameSetup: React.FC<GameSetupProps> = ({
             obstacles,
             items: [...items, wormhole],
           };
-          const safetyError = getWormholeExitSafetyError(candidateMap, position);
+          const safetyError =
+            getWormholeExitSafetyError(candidateMap, position) ||
+            getWormholeExitGoalPathError(candidateMap);
           if (safetyError) {
             alert(safetyError);
             return;
@@ -612,19 +690,6 @@ const GameSetup: React.FC<GameSetupProps> = ({
         wallDirection: direction,
         ...(placeMode === 'windWall' ? { effectDirection: windDirection } : {}),
       };
-      if (startPosition && endPosition) {
-        const safetyError = findWormholeSafetyError({
-          startPosition,
-          endPosition,
-          obstacles,
-          items: [...items, item],
-        });
-        if (safetyError) {
-          alert(safetyError);
-          return;
-        }
-      }
-
       addItem(item);
       setPlaceMode('wall');
       return;
@@ -674,27 +739,27 @@ const GameSetup: React.FC<GameSetupProps> = ({
       const uniqueObstacleCount = countUniqueObstacles(tempObstacles);
 
       // 벽 예산 확인 (아이템 비용 포함 최대 개수를 초과하지 않는지)
-      if (uniqueObstacleCount + itemsCost <= MAX_OBSTACLES) {
+      if (uniqueObstacleCount + itemsCost <= wallBudget) {
         if (startPosition && endPosition) {
-          const safetyError = findWormholeSafetyError({
+          const safetyError = getWormholeExitGoalPathError({
             startPosition,
             endPosition,
             obstacles: tempObstacles,
             items,
           });
           if (safetyError) {
-            alert(safetyError);
+            alert('이 벽을 놓으면 웜홀 출구에서 도착점까지 갈 수 없습니다.');
             return;
           }
         }
         setObstacles(tempObstacles);
       } else {
-        alert(`벽 예산(${MAX_OBSTACLES}개)을 초과했습니다. 아이템 비용 ${itemsCost}개가 포함되어 있습니다.`);
+        alert(`벽 예산(${wallBudget}개)을 초과했습니다. 아이템 비용 ${itemsCost}개가 포함되어 있습니다.`);
       }
     }
   };
 
-  // 아이템 선택/제거 (예산 안에서 무제한)
+  // 아이템 선택/제거 (종류별 배치 한도와 예산 적용)
   const handleSelectItemMode = (type: PlaceableItemType) => {
     if (!hasItemCapacity(type)) {
       alert(`${ITEM_LABELS[type]}은(는) 한 맵에 최대 ${ITEM_LIMITS[type]}개까지 배치할 수 있습니다.`);
@@ -733,14 +798,15 @@ const GameSetup: React.FC<GameSetupProps> = ({
       endPosition,
       obstacles,
       items,
-      // Authority V3 still requires the legacy field; official controls no longer expose skills.
+      runnerGear,
+      // Authority still requires the compatibility field; official controls no longer expose skills.
       skillLoadout: DEFAULT_MAZE_SKILL,
     };
 
-    if (requireFullBudget && usedBudget !== MAX_OBSTACLES) {
+    if (requireFullBudget && usedBudget !== wallBudget) {
       alert(
-        `연습 맵은 벽과 아이템 비용을 합쳐 ${MAX_OBSTACLES}/${MAX_OBSTACLES}를 모두 사용해야 합니다. ` +
-        `현재 ${usedBudget}/${MAX_OBSTACLES}, ${MAX_OBSTACLES - usedBudget} 남음`
+        `연습 맵은 벽과 아이템 비용을 합쳐 ${wallBudget}/${wallBudget}를 모두 사용해야 합니다. ` +
+        `현재 ${usedBudget}/${wallBudget}, ${wallBudget - usedBudget} 남음`
       );
       return;
     }
@@ -768,6 +834,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
         endPosition,
         obstacles,
         items,
+        runnerGear,
         skillLoadout: DEFAULT_MAZE_SKILL,
       };
 
@@ -785,12 +852,12 @@ const GameSetup: React.FC<GameSetupProps> = ({
         });
       }
     }
-  }, [startPosition, endPosition, obstacles, items, onDraftChange]);
+  }, [startPosition, endPosition, obstacles, items, onDraftChange, runnerGear]);
 
   // 사용한 벽 예산 (아이템 총비용 포함)
   const usedBudget = countUniqueObstacles(obstacles) + itemsCost;
-  const remainingObstacles = MAX_OBSTACLES - usedBudget;
-  const canSubmit = isMapValid && (!requireFullBudget || usedBudget === MAX_OBSTACLES);
+  const remainingObstacles = wallBudget - usedBudget;
+  const canSubmit = isMapValid && (!requireFullBudget || usedBudget === wallBudget);
   const wormholeSafetyError = startPosition && endPosition
     ? findWormholeSafetyError({ startPosition, endPosition, obstacles, items })
     : null;
@@ -807,6 +874,22 @@ const GameSetup: React.FC<GameSetupProps> = ({
   const activeWallGuide = activeItem && isWallItemType(activeItem) ? activeItem : null;
   const canUndo = historyRef.current.past.length > 0;
   const canRedo = historyRef.current.future.length > 0;
+  const activeRunnerGear = getRunnerGearOption(runnerGear);
+
+  const handleRunnerGearChange = (nextGear: RunnerGear) => {
+    if (nextGear === runnerGear) return;
+    const nextBudget = getMapWallBudget(nextGear);
+    if (usedBudget > nextBudget) {
+      alert(
+        `${getRunnerGearOption(nextGear).label}은(는) 벽 예산이 ${nextBudget}개입니다. ` +
+        `현재 배치 비용을 ${nextBudget} 이하로 줄인 뒤 선택해주세요.`
+      );
+      return;
+    }
+    setRunnerGear(nextGear);
+    setPlaceMode('wall');
+    setWormholeEntrance(null);
+  };
 
   return (
     <div
@@ -905,19 +988,28 @@ const GameSetup: React.FC<GameSetupProps> = ({
                 <span
                   className={`inline-flex items-center gap-1 text-xs font-bold ${remainingObstacles === 0 ? 'text-emerald-700' : remainingObstacles <= 5 ? 'text-red-700' : 'text-amber-700'}`}
                   data-testid="setup-budget"
-                  data-budget-complete={usedBudget === MAX_OBSTACLES ? 'true' : 'false'}
+                  data-budget-complete={usedBudget === wallBudget ? 'true' : 'false'}
+                  data-budget-limit={wallBudget}
+                  data-runner-gear={runnerGear}
+                  aria-label={`배치 비용 ${usedBudget}/${wallBudget}, ${activeRunnerGear.label}`}
                 >
-                  <BrickWall size={14} aria-hidden="true" /> {usedBudget}/{MAX_OBSTACLES}
-                  {items.length > 0 && <span className="ml-1 text-purple-700">(아이템 -{itemsCost})</span>}
+                  <BrickWall size={14} aria-hidden="true" /> {usedBudget}/{wallBudget}
+                  <span className="max-w-[72px] truncate text-[10px] text-cyan-800 sm:max-w-none">
+                    · {runnerGear === 'none' ? '없음 +10' : activeRunnerGear.shortLabel}
+                  </span>
+                  {items.length > 0 && <span className="ml-1 hidden text-purple-700 min-[430px]:inline">(함정 -{itemsCost})</span>}
                   {requireFullBudget && remainingObstacles > 0 && <span>· {remainingObstacles} 남음</span>}
                 </span>
               )}
             </div>
           </div>
-          <div className="mt-1.5 text-xs font-semibold text-[#55483d]">
+          <div
+            className="mt-1.5 truncate text-xs font-semibold text-[#55483d]"
+            title={setupPhase === 'obstacles' ? activeRunnerGear.description : undefined}
+          >
             {setupPhase === 'start' && '시작점을 선택하세요 - 상대방은 여기서 출발합니다'}
             {setupPhase === 'end' && '도착점을 선택하세요 - 상대방이 도달해야 하는 곳입니다'}
-            {setupPhase === 'obstacles' && '벽(장애물)을 배치하세요 - 상대방에게는 보이지 않습니다'}
+            {setupPhase === 'obstacles' && activeRunnerGear.setupSummary}
           </div>
         </div>
       </div>
@@ -935,7 +1027,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
         )}
         {setupPhase === 'obstacles' && requireFullBudget && isMapValid && remainingObstacles > 0 && (
           <p className="rounded-full border border-amber-400/50 bg-slate-950/90 px-3 py-1 text-xs font-bold text-amber-200" data-testid="full-budget-required">
-            연습 맵은 {MAX_OBSTACLES}/{MAX_OBSTACLES}를 모두 사용해야 합니다 · {remainingObstacles} 남음
+            연습 맵은 {wallBudget}/{wallBudget}를 모두 사용해야 합니다 · {remainingObstacles} 남음
           </p>
         )}
 
@@ -961,13 +1053,52 @@ const GameSetup: React.FC<GameSetupProps> = ({
                   특수벽
                 </button>
               </div>
-              <span className="shrink-0 text-[10px] font-bold text-[#5d5146]">
-                각 종류 1개
-              </span>
+              <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+                <span className="hidden shrink-0 text-[9px] font-black text-[#5d5146] min-[560px]:inline">
+                  장비
+                </span>
+                <div
+                  className="flex h-9 min-w-0 max-w-[210px] flex-1 rounded-md border border-cyan-800/60 bg-slate-900/80 p-0.5"
+                  role="radiogroup"
+                  aria-label="러너 패시브 장비"
+                  data-testid="runner-gear-selector"
+                >
+                  {RUNNER_GEAR_OPTIONS.map((option) => {
+                    const selected = runnerGear === option.gear;
+                    const nextBudget = getMapWallBudget(option.gear);
+                    const overBudget = !selected && usedBudget > nextBudget;
+                    return (
+                      <button
+                        key={option.gear}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={`flex h-full min-w-0 flex-1 items-center justify-center gap-0.5 rounded px-1 text-[8px] font-black transition-colors min-[430px]:text-[9px] ${
+                          selected
+                            ? 'bg-cyan-400 text-slate-950 shadow-sm'
+                            : overBudget
+                              ? 'text-slate-500'
+                              : 'text-cyan-100 hover:bg-slate-700'
+                        }`}
+                        onClick={() => handleRunnerGearChange(option.gear)}
+                        title={overBudget
+                          ? `${option.label}: 현재 비용을 ${nextBudget} 이하로 줄인 뒤 선택하세요.`
+                          : `${option.label}: ${option.description}`}
+                        aria-label={`${option.label} 선택 · ${option.description}${overBudget ? ` 현재 비용을 ${nextBudget} 이하로 줄여야 선택할 수 있습니다.` : ''}`}
+                        data-runner-gear-option={option.gear}
+                        data-over-budget={overBudget ? 'true' : 'false'}
+                      >
+                        <option.Icon className="hidden shrink-0 min-[600px]:block" size={11} aria-hidden="true" />
+                        <span className="truncate">{option.shortLabel}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
 
             <div
-              className={`mt-1 grid h-9 gap-1 ${paletteTab === 'traps' ? 'grid-cols-4' : 'grid-cols-5'}`}
+              className={`mt-1 grid h-9 gap-1 ${paletteTab === 'traps' ? 'grid-cols-2' : 'grid-cols-7'}`}
               role="tabpanel"
               data-testid="setup-palette-options"
             >
@@ -1024,7 +1155,7 @@ const GameSetup: React.FC<GameSetupProps> = ({
               )}
               {placeMode === 'wormhole' && wormholeEntrance && (
                 <span className="shrink-0 text-[10px] font-bold text-emerald-300">
-                  인접칸 있는 출구 {wormholeExitCandidates.length}칸
+                  도착점까지 안전한 출구 {wormholeExitCandidates.length}칸
                 </span>
               )}
             </div>

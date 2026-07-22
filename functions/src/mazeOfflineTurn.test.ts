@@ -22,12 +22,13 @@ const NOW = 1_000_000;
 
 function map(): GameMap {
   return {
-    rulesVersion: 3,
+    rulesVersion: 4,
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 5, col: 5 },
     obstacles: [],
     items: [],
     skillLoadout: 'scoutPulse',
+    runnerGear: 'none',
   };
 }
 

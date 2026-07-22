@@ -56,14 +56,13 @@ def main() -> None:
     import_asset(asset_dir, "wall-normal.glb", (-0.55, -1.25, 0))
 
     wall_files = [
-        "wall-steel.glb",
         "wall-fire.glb",
         "wall-poison.glb",
         "wall-ice.glb",
         "wall-wind.glb",
-        "wall-phase.glb",
         "wall-thorn.glb",
-        "wall-crystal.glb",
+        "wall-fog.glb",
+        "wall-illusion.glb",
     ]
     for index, filename in enumerate(wall_files):
         row = index // 4

@@ -54,6 +54,7 @@ const baseMap = (overrides = {}) => ({
   endPosition: pos(0, 5),
   obstacles: [],
   items: [],
+  runnerGear: 'none',
   ...overrides,
 });
 
@@ -77,8 +78,32 @@ assert.equal(
   true,
   'matching rules version'
 );
-assert.equal(utils.isValidMap(baseMap({ obstacles: walls.slice(0, 24) })), true, '24-wall map');
-assert.equal(utils.isValidMap(baseMap({ obstacles: walls.slice(0, 25) })), false, '25-wall budget');
+assert.equal(
+  utils.isValidMap(baseMap({ obstacles: walls.slice(0, 25) })),
+  true,
+  'no runner gear grants the full 25-wall budget'
+);
+assert.equal(
+  utils.isValidMap(baseMap({ obstacles: walls.slice(0, 26) })),
+  false,
+  'a no-gear map cannot exceed its 25-wall budget'
+);
+assert.equal(
+  utils.isValidMap(baseMap({
+    runnerGear: 'insight',
+    obstacles: walls.slice(0, 15),
+  })),
+  true,
+  'equipping a runner item keeps the base 15-wall budget'
+);
+assert.equal(
+  utils.isValidMap(baseMap({
+    runnerGear: 'wormholeEscapeKit',
+    obstacles: walls.slice(0, 16),
+  })),
+  false,
+  'equipped runner gear cannot use the no-item wall bonus'
+);
 
 const fake = (row, col, direction = 'right') => ({
   type: 'oneTimeWall',
@@ -125,12 +150,14 @@ assert.notStrictEqual(
 const specialWallCosts = {
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 2,
+  fogWall: 1,
+  illusionWall: 2,
+  poisonWall: 1,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,
   phaseWall: 1,
-  mirrorWall: 5,
+  mirrorWall: 1,
   thornWall: 1,
   crystalWall: 1,
 };
@@ -199,7 +226,7 @@ assert.equal(utils.isValidMap(baseMap({ items: [radar(), radar()] })), false, 'r
 assert.equal(
   utils.isValidNewMap(baseMap({ skillLoadout: 'scoutPulse' })),
   true,
-  'new maps keep the inert V3 compatibility loadout'
+  'new maps keep the inert V4 compatibility loadout'
 );
 for (const retiredSkillLoadout of ['breach', 'anchor', 'dash']) {
   assert.equal(
@@ -461,6 +488,81 @@ assert.equal(
   'a completely sealed wormhole exit remains invalid'
 );
 
+const wormholeGoalRouteWalls = [
+  // The corner exit can only step left into (5,4).
+  { position: pos(4, 5), direction: 'down' },
+  { position: pos(4, 4), direction: 'down' },
+];
+const wormholeGoalRouteGate = { position: pos(5, 3), direction: 'right' };
+const routedDiceWormhole = wormhole(pos(2, 2), pos(5, 5), diceChallenge);
+const reachableWormholeExitMap = baseMap({
+  skillLoadout: 'scoutPulse',
+  obstacles: wormholeGoalRouteWalls,
+  items: [routedDiceWormhole],
+});
+assert.equal(
+  utils.areWormholeExitsReachableFromGoal(reachableWormholeExitMap),
+  true,
+  'a wormhole exit with a route through its one adjacent cell remains valid'
+);
+assert.equal(
+  utils.isValidNewMap(reachableWormholeExitMap),
+  true,
+  'new maps accept a wormhole exit when an ordinary-wall route reaches the goal'
+);
+
+const permanentlyCutOffWormholeExitMap = baseMap({
+  skillLoadout: 'scoutPulse',
+  obstacles: [...wormholeGoalRouteWalls, wormholeGoalRouteGate],
+  items: [routedDiceWormhole],
+});
+assert.equal(
+  utils.isValidMap(permanentlyCutOffWormholeExitMap),
+  true,
+  'legacy validation still accepts one immediately open space beside the exit'
+);
+assert.equal(
+  utils.getWormholeExitGoalPathError(permanentlyCutOffWormholeExitMap),
+  '웜홀 출구에서 도착점까지 갈 수 있는 길이 필요합니다.'
+);
+assert.equal(
+  utils.isValidNewMap(permanentlyCutOffWormholeExitMap),
+  false,
+  'a new ordinary wall cannot remove the last wormhole-exit route to the goal'
+);
+
+const transientWallOnWormholeGateMap = baseMap({
+  skillLoadout: 'scoutPulse',
+  obstacles: wormholeGoalRouteWalls,
+  items: [
+    routedDiceWormhole,
+    specialWall('fogWall', 5, 3, 'right'),
+  ],
+});
+assert.equal(
+  utils.areWormholeExitsReachableFromGoal(transientWallOnWormholeGateMap),
+  true,
+  'transient special walls are excluded from the wormhole-to-goal path search'
+);
+assert.equal(
+  utils.isValidNewMap(transientWallOnWormholeGateMap),
+  true,
+  'the same gate segment remains placeable as a disappearing special wall'
+);
+const transientWallOnOnlyAdjacentExitMap = baseMap({
+  skillLoadout: 'scoutPulse',
+  obstacles: wormholeGoalRouteWalls,
+  items: [
+    routedDiceWormhole,
+    specialWall('fogWall', 5, 4, 'right'),
+  ],
+});
+assert.equal(
+  utils.isValidNewMap(transientWallOnOnlyAdjacentExitMap),
+  true,
+  'a disappearing special wall can occupy the exit\'s only adjacent route'
+);
+
 assert.equal(
   turns.getMineRollbackPosition([pos(0, 0), pos(0, 1), pos(0, 1)], pos(0, 1)).col,
   1,
@@ -487,6 +589,8 @@ function runtimeState(playedMap, {
   moves = 0,
   turnNumber = 1,
   itemState,
+  illusionEffect,
+  runnerGear = 'none',
 } = {}) {
   return {
     phase: types.GamePhase.PLAY,
@@ -497,8 +601,9 @@ function runtimeState(playedMap, {
       a: { id: 'a', position, positionHistory: history, moves, isReady: true },
     },
     assignments: { a: 'b' },
-    maps: { a: baseMap(), b: playedMap },
+    maps: { a: baseMap({ runnerGear }), b: playedMap },
     ...(itemState ? { itemState: { b: itemState } } : {}),
+    ...(illusionEffect ? { illusionEffectsByPlayer: { a: illusionEffect } } : {}),
   };
 }
 
@@ -516,6 +621,248 @@ const steelHit = resolveSpecial(steelMap, 'right', { itemState: { consumed: { 0:
 assert.deepEqual(steelHit.outcome.position, pos(0, 0), 'steel always blocks');
 assert.equal(steelHit.outcome.wallEffect, 'steelWall', 'steel effect identified');
 assert.equal(steelHit.outcome.consumedItemIndex, null, 'steel ignores consumed/breach state');
+
+const fogHit = resolveSpecial(baseMap({ items: [specialWall('fogWall', 0, 0)] }));
+assert.deepEqual(fogHit.outcome.position, pos(0, 1), 'fog wall is crossed');
+assert.equal(fogHit.outcome.effect, 'move', 'fog wall does not report a collision');
+assert.equal(fogHit.outcome.wallEffect, 'fogWall', 'fog wall effect is identified');
+assert.equal(fogHit.state.itemState.b.consumed[0], true, 'fog wall is consumed on crossing');
+assert.deepEqual(fogHit.state.collisionWalls || {}, {}, 'fog wall crossing learns no blocking wall');
+assert.deepEqual(fogHit.state.visionEffectsByPlayer.a, {
+  type: 'smoke',
+  sourcePlayerId: 'b',
+  appliedAtTurn: 1,
+  expiresAtTargetMove: 2,
+});
+
+const illusionCourse = baseMap({
+  obstacles: [
+    { position: pos(0, 1), direction: 'right' },
+    { position: pos(0, 2), direction: 'right' },
+  ],
+  items: [specialWall('illusionWall', 0, 0)],
+});
+const illusionActivated = resolveSpecial(illusionCourse);
+assert.deepEqual(illusionActivated.outcome.position, pos(0, 1), 'illusion trigger is crossed');
+assert.equal(illusionActivated.outcome.illusionTransition, 'activated');
+assert.deepEqual(illusionActivated.state.illusionEffectsByPlayer.a, {
+  sourcePlayerId: 'b',
+  appliedAtTurn: 1,
+  actionsRemaining: 3,
+});
+const presentedIllusionActivation = turns.sanitizeHiddenIllusionResolutionForPresentation(
+  illusionActivated,
+  'a'
+);
+assert.equal(presentedIllusionActivation.outcome.illusionTransition, undefined);
+assert.equal(presentedIllusionActivation.outcome.wallEffect, undefined);
+assert.equal(presentedIllusionActivation.outcome.wallItemIndex, undefined);
+assert.equal(presentedIllusionActivation.outcome.itemPosition, undefined);
+assert.equal(presentedIllusionActivation.outcome.consumedItemIndex, null);
+assert.equal(presentedIllusionActivation.outcome.message, '플레이어가 한 칸 이동했습니다.');
+assert.equal(presentedIllusionActivation.state.turnMessage, presentedIllusionActivation.outcome.message);
+assert.deepEqual(
+  presentedIllusionActivation.state.illusionEffectsByPlayer,
+  illusionActivated.state.illusionEffectsByPlayer,
+  'presentation sanitization preserves the private reducer ledger'
+);
+assert.equal(
+  illusionActivated.outcome.illusionTransition,
+  'activated',
+  'presentation sanitization does not mutate trusted transition evidence'
+);
+
+const illusionFirstWall = turns.resolveTurnAction(
+  illusionActivated.state,
+  'a',
+  { type: 'move', direction: 'right' },
+  101
+);
+assert.ok(illusionFirstWall, 'first affected illusion action resolves');
+assert.deepEqual(illusionFirstWall.outcome.position, pos(0, 2));
+assert.equal(illusionFirstWall.outcome.illusionTransition, 'phased');
+assert.deepEqual(illusionFirstWall.state.illusionEffectsByPlayer.a, {
+  sourcePlayerId: 'b',
+  appliedAtTurn: 1,
+  actionsRemaining: 2,
+  firstWallOrigin: pos(0, 1),
+});
+assert.deepEqual(illusionFirstWall.state.collisionWalls || {}, {}, 'phased wall is not learned');
+const presentedIllusionProgress = turns.sanitizeHiddenIllusionResolutionForPresentation(
+  illusionFirstWall,
+  'a'
+);
+assert.equal(presentedIllusionProgress.outcome.illusionTransition, undefined);
+assert.equal(presentedIllusionProgress.outcome.message, '플레이어가 한 칸 이동했습니다.');
+
+const illusionSecondWall = turns.resolveTurnAction(
+  illusionFirstWall.state,
+  'a',
+  { type: 'move', direction: 'right' },
+  102
+);
+assert.ok(illusionSecondWall, 'second affected illusion action resolves');
+assert.deepEqual(illusionSecondWall.outcome.position, pos(0, 3));
+assert.deepEqual(
+  illusionSecondWall.state.illusionEffectsByPlayer.a.firstWallOrigin,
+  pos(0, 1),
+  'later walls never overwrite the first return origin'
+);
+
+const illusionReturned = turns.resolveTurnAction(
+  illusionSecondWall.state,
+  'a',
+  { type: 'move', direction: 'right' },
+  103
+);
+assert.ok(illusionReturned, 'third affected illusion action resolves');
+assert.deepEqual(illusionReturned.outcome.position, pos(0, 1));
+assert.equal(illusionReturned.outcome.illusionTransition, 'returned');
+assert.deepEqual(illusionReturned.outcome.illusionReturnPosition, pos(0, 1));
+assert.equal(
+  illusionReturned.outcome.illusionReturnFromWormhole,
+  undefined,
+  'a main-board wake-up keeps its attempted cell as the visual rewind waypoint'
+);
+assert.equal(illusionReturned.state.illusionEffectsByPlayer, undefined);
+assert.strictEqual(
+  turns.sanitizeHiddenIllusionResolutionForPresentation(illusionReturned, 'a'),
+  illusionReturned,
+  'the visible wake-up return is not sanitized away'
+);
+assert.equal(illusionReturned.state.players.a.moves, 4, 'trigger plus three affected actions are scored');
+assert.deepEqual(
+  illusionReturned.state.players.a.positionHistory,
+  [pos(0, 0), pos(0, 1), pos(0, 2), pos(0, 3), pos(0, 1)],
+  'the third action records only its final wake-up position'
+);
+
+const fakeBehindIllusion = baseMap({
+  items: [
+    specialWall('illusionWall', 0, 0),
+    fake(0, 1),
+  ],
+});
+const fakeIllusionActivated = resolveSpecial(fakeBehindIllusion, 'right', {
+  runnerGear: 'insight',
+});
+const fakeIllusionPass = turns.resolveTurnAction(
+  fakeIllusionActivated.state,
+  'a',
+  { type: 'move', direction: 'right' },
+  104
+);
+assert.ok(fakeIllusionPass, 'active illusion crosses a fake wall');
+assert.deepEqual(fakeIllusionPass.outcome.position, pos(0, 2));
+assert.equal(fakeIllusionPass.outcome.effect, 'move');
+assert.equal(fakeIllusionPass.outcome.identifiedFakeWall, undefined);
+assert.deepEqual(fakeIllusionPass.state.itemState.b.consumed, { 0: true });
+assert.deepEqual(fakeIllusionPass.state.collisionWalls || {}, {});
+
+const fireBehindIllusion = baseMap({
+  items: [
+    specialWall('illusionWall', 0, 0),
+    specialWall('fireWall', 0, 1),
+  ],
+});
+const fireIllusionActivated = resolveSpecial(fireBehindIllusion, 'right', {
+  runnerGear: 'insight',
+});
+const fireIllusionPass = turns.resolveTurnAction(
+  fireIllusionActivated.state,
+  'a',
+  { type: 'move', direction: 'right' },
+  105
+);
+assert.ok(fireIllusionPass, 'active illusion crosses a normally blocking special wall');
+assert.deepEqual(fireIllusionPass.outcome.position, pos(0, 2));
+assert.equal(fireIllusionPass.outcome.effect, 'move');
+assert.equal(fireIllusionPass.outcome.illusionTransition, 'phased');
+assert.equal(fireIllusionPass.outcome.wallEffect, undefined);
+assert.equal(fireIllusionPass.outcome.consumedItemIndex, null);
+assert.equal(fireIllusionPass.outcome.identifiedFakeWall, undefined);
+assert.deepEqual(
+  fireIllusionPass.state.itemState.b.consumed,
+  { 0: true },
+  'the suppressed special wall is not consumed'
+);
+assert.equal(
+  fireIllusionPass.state.visionEffectsByPlayer,
+  undefined,
+  'the suppressed fire wall does not ignite the runner'
+);
+assert.deepEqual(fireIllusionPass.state.collisionWalls || {}, {});
+assert.deepEqual(fireIllusionPass.state.illusionEffectsByPlayer.a, {
+  sourcePlayerId: 'b',
+  appliedAtTurn: 1,
+  actionsRemaining: 2,
+  firstWallOrigin: pos(0, 1),
+});
+
+let illusionWithoutWall = resolveSpecial(baseMap({
+  items: [specialWall('illusionWall', 0, 0)],
+}));
+for (let index = 0; index < 3; index += 1) {
+  illusionWithoutWall = turns.resolveTurnAction(
+    illusionWithoutWall.state,
+    'a',
+    { type: 'move', direction: 'right' },
+    110 + index
+  );
+  assert.ok(illusionWithoutWall, `wall-free illusion action ${index + 1} resolves`);
+}
+assert.deepEqual(illusionWithoutWall.outcome.position, pos(0, 4));
+assert.equal(illusionWithoutWall.outcome.illusionTransition, 'expired');
+assert.equal(illusionWithoutWall.state.illusionEffectsByPlayer, undefined);
+assert.equal(
+  turns.sanitizeHiddenIllusionResolutionForPresentation(illusionWithoutWall, 'a')
+    .outcome.illusionTransition,
+  undefined,
+  'silent expiry remains indistinguishable from an ordinary move'
+);
+
+const illusionGoalMap = baseMap({
+  endPosition: pos(0, 4),
+  obstacles: [{ position: pos(0, 1), direction: 'right' }],
+  items: [specialWall('illusionWall', 0, 0)],
+});
+let illusionGoal = resolveSpecial(illusionGoalMap);
+for (let index = 0; index < 3; index += 1) {
+  illusionGoal = turns.resolveTurnAction(
+    illusionGoal.state,
+    'a',
+    { type: 'move', direction: 'right' },
+    120 + index
+  );
+  assert.ok(illusionGoal, `illusion goal action ${index + 1} resolves`);
+}
+assert.deepEqual(illusionGoal.outcome.position, pos(0, 1));
+assert.equal(illusionGoal.outcome.reachedGoal, false);
+assert.equal(illusionGoal.state.players.a.finished, false);
+assert.equal(illusionGoal.state.players.a.finishMoves, undefined);
+assert.equal(illusionGoal.state.currentTurn, 'a', 'single-runner map test regains its turn after wake-up');
+
+const fogDuringIllusionMap = baseMap({
+  items: [
+    specialWall('illusionWall', 0, 0),
+    specialWall('fogWall', 0, 1),
+  ],
+});
+const fogIllusionActivated = resolveSpecial(fogDuringIllusionMap);
+const fogDuringIllusion = turns.resolveTurnAction(
+  fogIllusionActivated.state,
+  'a',
+  { type: 'move', direction: 'right' },
+  130
+);
+assert.ok(fogDuringIllusion, 'fog wall still triggers during an illusion');
+assert.deepEqual(fogDuringIllusion.outcome.position, pos(0, 2));
+assert.equal(fogDuringIllusion.outcome.wallEffect, 'fogWall');
+assert.equal(fogDuringIllusion.outcome.illusionTransition, undefined);
+assert.equal(fogDuringIllusion.state.itemState.b.consumed[1], true);
+assert.equal(fogDuringIllusion.state.illusionEffectsByPlayer.a.firstWallOrigin, undefined);
+assert.equal(fogDuringIllusion.state.illusionEffectsByPlayer.a.actionsRemaining, 2);
+assert.equal(fogDuringIllusion.state.visionEffectsByPlayer.a.type, 'smoke');
 
 const fireKnowledgeMap = baseMap({
   obstacles: [{ position: pos(0, 0), direction: 'down' }],
@@ -685,6 +1032,11 @@ const fakeHitMap = baseMap({ items: [fake(0, 0)] });
 const fakeHit = resolveSpecial(fakeHitMap);
 assert.deepEqual(fakeHit.outcome.position, pos(0, 0), 'fake wall blocks the first collision');
 assert.equal(fakeHit.state.itemState.b.consumed[0], true, 'first collision consumes the fake wall');
+assert.equal(
+  fakeHit.outcome.identifiedFakeWall,
+  undefined,
+  'a runner without insight cannot identify a fake wall from the private outcome'
+);
 const fakePass = turns.resolveTurnAction(fakeHit.state, 'a', {
   type: 'move',
   direction: 'right',
@@ -694,6 +1046,11 @@ assert.deepEqual(fakePass.outcome.position, pos(0, 1), 'fake wall is passable af
 assert.equal(fakePass.outcome.wallEffect ?? null, null, 'the consumed fake wall no longer blocks');
 const fakeCollisions = Object.values(fakeHit.state.collisionWalls || {});
 assert.equal(fakeCollisions.length, 1, 'fake wall collision remains in the persisted turn history');
+assert.equal(
+  fakeCollisions[0].identifiedAsFake,
+  undefined,
+  'a fake collision remains disguised when the runner has no insight'
+);
 assert.deepEqual(
   utils.getVisibleCollisionWalls(fakeCollisions, fakeHitMap, fakeHit.state.itemState.b.consumed),
   fakeCollisions,
@@ -734,6 +1091,74 @@ assert.equal(
   ).length,
   0,
   'a consumed non-fake dynamic wall still disappears from the rendered board'
+);
+
+const insightFakeMap = baseMap({ items: [fake(0, 0), fake(0, 1)] });
+const firstInsightHit = resolveSpecial(insightFakeMap, 'right', { runnerGear: 'insight' });
+assert.equal(firstInsightHit.outcome.identifiedFakeWall, true, 'insight identifies the first fake collision');
+assert.equal(
+  Object.values(firstInsightHit.state.collisionWalls || {})[0].identifiedAsFake,
+  true,
+  'insight persists a private fake-wall identification marker on the collision'
+);
+assert.equal(
+  utils.getVisibleCollisionWalls(
+    Object.values(firstInsightHit.state.collisionWalls || {}),
+    insightFakeMap,
+    firstInsightHit.state.itemState.b.consumed,
+  ).length,
+  0,
+  'the insight runner no longer sees an identified fake wall rendered as a normal wall',
+);
+assert.equal(
+  firstInsightHit.state.turnMessage,
+  '플레이어가 벽에 부딪혔습니다.',
+  'the shared reducer message does not identify the fake wall'
+);
+assert.equal(
+  utils.getMapRunnerGear(firstInsightHit.state.maps.a),
+  'insight',
+  'identifying a fake wall does not consume the persistent runner gear'
+);
+
+const firstInsightPass = turns.resolveTurnAction(firstInsightHit.state, 'a', {
+  type: 'move',
+  direction: 'right',
+}, 101);
+assert.ok(firstInsightPass, 'an identified consumed fake wall becomes passable');
+assert.deepEqual(firstInsightPass.outcome.position, pos(0, 1));
+assert.equal(
+  firstInsightPass.outcome.identifiedFakeWall,
+  undefined,
+  'insight only reports a fake wall on its blocking collision'
+);
+
+const secondInsightHit = turns.resolveTurnAction(firstInsightPass.state, 'a', {
+  type: 'move',
+  direction: 'right',
+}, 102);
+assert.ok(secondInsightHit, 'the same persistent insight gear applies to a later fake wall');
+assert.equal(secondInsightHit.outcome.identifiedFakeWall, true);
+assert.equal(secondInsightHit.state.itemState.b.consumed[1], true);
+assert.equal(
+  Object.values(secondInsightHit.state.collisionWalls || {})
+    .filter((collision) => collision.identifiedAsFake === true).length,
+  2,
+  'every fake collision is privately identified while insight remains equipped'
+);
+
+const escapeKitFakeHit = resolveSpecial(fakeHitMap, 'right', {
+  runnerGear: 'wormholeEscapeKit',
+});
+assert.equal(
+  escapeKitFakeHit.outcome.identifiedFakeWall,
+  undefined,
+  'the wormhole escape kit does not grant fake-wall insight'
+);
+assert.equal(
+  Object.values(escapeKitFakeHit.state.collisionWalls || {})[0].identifiedAsFake,
+  undefined,
+  'non-insight gear keeps fake-wall collisions disguised'
 );
 
 const poisonPass = resolveSpecial(baseMap({ items: [specialWall('poisonWall', 0, 0)] }));
@@ -1281,9 +1706,81 @@ assert.equal(
   'legacy wormhole does not create an internal challenge run'
 );
 
+const persistentEscapeKitMap = baseMap({
+  items: [
+    wormhole(pos(0, 1), pos(2, 2), diceChallenge),
+    wormhole(pos(2, 3), pos(4, 4), diceChallenge),
+  ],
+});
+const firstEscapeKitPass = resolveSpecial(persistentEscapeKitMap, 'right', {
+  runnerGear: 'wormholeEscapeKit',
+});
+assert.equal(firstEscapeKitPass.outcome.effect, 'wormhole');
+assert.deepEqual(
+  firstEscapeKitPass.outcome.position,
+  pos(2, 2),
+  'the escape kit skips a valid internal puzzle and lands at its safe external exit'
+);
+assert.deepEqual(firstEscapeKitPass.outcome.wormholeExit, pos(2, 2));
+assert.equal(
+  firstEscapeKitPass.outcome.wormholeTransition,
+  undefined,
+  'an escape-kit pass keeps the ordinary suction-to-external-exit animation contract'
+);
+assert.equal(firstEscapeKitPass.outcome.realm, undefined);
+assert.equal(firstEscapeKitPass.state.itemState.b.consumed[0], true, 'the bypassed wormhole is consumed');
+assert.equal(
+  firstEscapeKitPass.state.wormholeRunsByPlayer,
+  undefined,
+  'the escape kit never creates an internal wormhole run'
+);
+assert.match(firstEscapeKitPass.outcome.message, /탈출키트/u);
+assert.equal(
+  utils.getMapRunnerGear(firstEscapeKitPass.state.maps.a),
+  'wormholeEscapeKit',
+  'using the escape kit does not consume the persistent runner gear'
+);
+
+const secondEscapeKitPass = turns.resolveTurnAction(firstEscapeKitPass.state, 'a', {
+  type: 'move',
+  direction: 'right',
+}, 101);
+assert.ok(secondEscapeKitPass, 'the persistent escape kit applies to a later wormhole');
+assert.deepEqual(secondEscapeKitPass.outcome.position, pos(4, 4));
+assert.equal(secondEscapeKitPass.state.itemState.b.consumed[1], true);
+assert.equal(secondEscapeKitPass.state.wormholeRunsByPlayer, undefined);
+assert.equal(secondEscapeKitPass.outcome.wormholeTransition, undefined);
+assert.equal(secondEscapeKitPass.outcome.moves, 2, 'each bypass still costs one normal action');
+
+const unsafeEscapeKitExit = pos(5, 5);
+const unsafeEscapeKitPass = resolveSpecial(baseMap({
+  obstacles: [
+    { position: unsafeEscapeKitExit, direction: 'up' },
+    { position: unsafeEscapeKitExit, direction: 'left' },
+  ],
+  items: [wormhole(pos(0, 1), unsafeEscapeKitExit, diceChallenge)],
+}), 'right', { runnerGear: 'wormholeEscapeKit' });
+assert.deepEqual(
+  unsafeEscapeKitPass.outcome.position,
+  pos(0, 0),
+  'the escape kit never teleports to an unsafe legacy exit'
+);
+assert.equal(unsafeEscapeKitPass.state.itemState.b.consumed[0], true);
+assert.equal(unsafeEscapeKitPass.state.wormholeRunsByPlayer, undefined);
+assert.doesNotMatch(
+  unsafeEscapeKitPass.outcome.message,
+  /탈출키트/u,
+  'an unsafe exit cannot claim that the escape kit succeeded'
+);
+
 const diceRuntimeMap = baseMap({ items: [diceWormholeItem] });
 const enteredDiceWormhole = resolveSpecial(diceRuntimeMap);
 assert.equal(enteredDiceWormhole.outcome.effect, 'wormhole');
+assert.equal(
+  enteredDiceWormhole.outcome.identifiedFakeWall,
+  undefined,
+  'the default runner gear does not add an unrelated private effect'
+);
 assert.equal(enteredDiceWormhole.outcome.realm, 'main');
 assert.equal(enteredDiceWormhole.outcome.wormholeTransition, 'entered');
 assert.deepEqual(enteredDiceWormhole.state.players.a.position, diceWormholeItem.entrance);
@@ -1302,6 +1799,92 @@ assert.equal(
   0,
   'entering the V2 room does not count as an internal die action'
 );
+
+const illusionWormholeMap = baseMap({
+  obstacles: [{ position: pos(0, 1), direction: 'right' }],
+  items: [
+    specialWall('illusionWall', 0, 0),
+    wormhole(pos(0, 3), pos(4, 4), diceChallenge),
+  ],
+});
+const illusionBeforeWormhole = resolveSpecial(illusionWormholeMap);
+const illusionAnchorBeforeWormhole = turns.resolveTurnAction(
+  illusionBeforeWormhole.state,
+  'a',
+  { type: 'move', direction: 'right' },
+  1_970
+);
+assert.ok(illusionAnchorBeforeWormhole);
+const illusionEnteredWormhole = turns.resolveTurnAction(
+  illusionAnchorBeforeWormhole.state,
+  'a',
+  { type: 'move', direction: 'right' },
+  1_971
+);
+assert.ok(illusionEnteredWormhole, 'an affected action can enter a wormhole');
+assert.equal(illusionEnteredWormhole.outcome.wormholeTransition, 'entered');
+assert.equal(illusionEnteredWormhole.state.illusionEffectsByPlayer.a.actionsRemaining, 1);
+assert.deepEqual(
+  illusionEnteredWormhole.state.illusionEffectsByPlayer.a.firstWallOrigin,
+  pos(0, 1)
+);
+const illusionReturnedFromWormhole = turns.resolveTurnAction(
+  illusionEnteredWormhole.state,
+  'a',
+  { type: 'move', direction: 'up' },
+  1_972
+);
+assert.ok(illusionReturnedFromWormhole, 'the third affected wormhole action resolves');
+assert.equal(illusionReturnedFromWormhole.outcome.illusionTransition, 'returned');
+assert.equal(
+  illusionReturnedFromWormhole.outcome.illusionReturnFromWormhole,
+  true,
+  'a wake-up from the private wormhole room is marked for safe main-board presentation'
+);
+assert.equal(illusionReturnedFromWormhole.outcome.realm, 'main');
+assert.deepEqual(illusionReturnedFromWormhole.outcome.position, pos(0, 1));
+assert.equal(illusionReturnedFromWormhole.state.wormholeRunsByPlayer, undefined);
+assert.equal(illusionReturnedFromWormhole.state.illusionEffectsByPlayer, undefined);
+
+const illusionInsideWormholeState = structuredClone(enteredDiceWormhole.state);
+illusionInsideWormholeState.wormholeRunsByPlayer.a.position = pos(0, 0);
+illusionInsideWormholeState.illusionEffectsByPlayer = {
+  a: {
+    sourcePlayerId: 'b',
+    appliedAtTurn: 1,
+    actionsRemaining: 2,
+  },
+};
+const illusionInternalBoundary = turns.resolveTurnAction(
+  illusionInsideWormholeState,
+  'a',
+  { type: 'move', direction: 'up' },
+  1_973
+);
+assert.ok(illusionInternalBoundary, 'wormhole boundary action remains committed');
+assert.equal(illusionInternalBoundary.outcome.effect, 'bump');
+assert.equal(illusionInternalBoundary.outcome.realm, 'wormhole');
+assert.deepEqual(illusionInternalBoundary.state.wormholeRunsByPlayer.a.position, pos(0, 0));
+assert.equal(illusionInternalBoundary.state.illusionEffectsByPlayer.a.actionsRemaining, 1);
+assert.equal(
+  illusionInternalBoundary.state.illusionEffectsByPlayer.a.firstWallOrigin,
+  undefined,
+  'internal wormhole obstacles never become the outer illusion return origin'
+);
+
+const legacyMissingGearState = runtimeState(diceRuntimeMap);
+delete legacyMissingGearState.maps.a.runnerGear;
+const legacyMissingGearEntry = turns.resolveTurnAction(legacyMissingGearState, 'a', {
+  type: 'move',
+  direction: 'right',
+}, 1_999);
+assert.ok(legacyMissingGearEntry, 'a legacy state without runner gear still resolves');
+assert.equal(
+  legacyMissingGearEntry.outcome.wormholeTransition,
+  'entered',
+  'missing legacy gear defaults to no gear instead of granting a wormhole bypass'
+);
+assert.ok(legacyMissingGearEntry.state.wormholeRunsByPlayer.a);
 
 function resolveSingleActorDiceMove(state, direction, now) {
   const resolved = turns.resolveTurnAction(state, 'a', { type: 'move', direction }, now);
@@ -1905,8 +2488,8 @@ for (const [index, map] of practice.PRACTICE_MAP_TEMPLATES.entries()) {
   );
   assert.equal(
     utils.getMapBudgetUsed(map),
-    utils.MAX_OBSTACLES,
-    `practice template ${index + 1} spends the full wall budget`
+    utils.getMapWallBudget(map),
+    `practice template ${index + 1} spends its gear-adjusted wall budget`
   );
   const manhattan = Math.abs(map.startPosition.row - map.endPosition.row) +
     Math.abs(map.startPosition.col - map.endPosition.col);
@@ -1917,7 +2500,7 @@ for (const [index, map] of practice.PRACTICE_MAP_TEMPLATES.entries()) {
   assert.equal(
     map.skillLoadout,
     utils.DEFAULT_MAZE_SKILL,
-    `practice template ${index + 1} keeps only the inert V3 compatibility loadout`
+    `practice template ${index + 1} keeps only the inert compatibility loadout`
   );
   for (const retiredItemType of utils.RETIRED_NEW_MAP_ITEM_TYPES) {
     assert.equal(
@@ -1938,6 +2521,45 @@ assert.deepEqual(
     .filter((itemType) => !utils.isRetiredNewMapItemType(itemType))
     .sort(),
   'the three AI maps use every currently available trap and special wall'
+);
+
+const insightAiState = {
+  rulesVersion: utils.GAME_RULES_VERSION,
+  phase: types.GamePhase.PLAY,
+  currentTurn: 'a',
+  turnOrder: ['a'],
+  turnNumber: 2,
+  players: {
+    a: {
+      id: 'a',
+      displayName: 'AI',
+      position: pos(0, 0),
+      isReady: true,
+      finished: false,
+      forfeited: false,
+      moves: 1,
+    },
+  },
+  maps: {
+    a: baseMap({ runnerGear: 'insight' }),
+    b: baseMap({ startPosition: pos(0, 0), endPosition: pos(0, 1) }),
+  },
+  assignments: { a: 'b' },
+  collisionWalls: {
+    fake: {
+      playerId: 'a',
+      mapOwnerId: 'b',
+      position: pos(0, 0),
+      direction: 'right',
+      timestamp: 1,
+      identifiedAsFake: true,
+    },
+  },
+};
+assert.deepEqual(
+  practice.choosePracticeAiAction(insightAiState, 'a'),
+  { type: 'move', direction: 'right' },
+  'an insight AI treats its identified fake wall as passable instead of avoiding it forever',
 );
 
 function simulatePracticeState(initialState, label) {
@@ -2000,7 +2622,7 @@ const sparseMapTestState = practice.createMapTestGameState(baseMap());
 assert.equal(
   utils.getMapBudgetUsed(sparseMapTestState.maps[practice.PRACTICE_USER_ID]),
   0,
-  'solo map test accepts a valid 0/24 map without auto-filling the unused budget'
+  'solo map test accepts a valid 0/25 no-gear map without auto-filling the unused budget'
 );
 assert.deepEqual(
   sparseMapTestState.maps[practice.PRACTICE_USER_ID].obstacles,

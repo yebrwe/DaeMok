@@ -111,10 +111,10 @@ function createRoomPayload(ownerId, snapshot) {
     lastActivity: Date.now(),
     maxPlayers: 4,
     players: [ownerId],
-    rulesVersion: 3,
+    rulesVersion: 4,
     ruleSnapshot: snapshot,
     gameState: {
-      rulesVersion: 3,
+      rulesVersion: 4,
       matchNumber: 0,
       phase: 'setup',
       currentTurn: ownerId,
@@ -134,8 +134,9 @@ function createRoomPayload(ownerId, snapshot) {
 
 function validMap(skillLoadout = 'scoutPulse') {
   return {
-    rulesVersion: 3,
+    rulesVersion: 4,
     skillLoadout,
+    runnerGear: 'none',
     startPosition: { row: 0, col: 0 },
     endPosition: { row: 5, col: 5 },
     obstacles: [],
@@ -184,6 +185,14 @@ function validPoisonEffect(sourcePlayerId, appliedAtTurn = 1) {
     appliedAtTurn,
     expiresAtTargetMove: 2,
     seed: 1_234_567,
+  };
+}
+
+function validIllusionEffect(sourcePlayerId, appliedAtTurn = 1, actionsRemaining = 3) {
+  return {
+    sourcePlayerId,
+    appliedAtTurn,
+    actionsRemaining,
   };
 }
 
@@ -262,14 +271,56 @@ async function main() {
     userProfileRules.photoURL['.validate'],
     /https:\/\/lh3\.googleusercontent\.com/
   );
+  const expectedWallCosts = {
+    oneTimeWall: 1,
+    steelWall: 1,
+    fireWall: 1,
+    fogWall: 1,
+    illusionWall: 2,
+    poisonWall: 1,
+    iceWall: 1,
+    windWall: 1,
+    collapseWall: 1,
+    phaseWall: 1,
+    mirrorWall: 1,
+    thornWall: 1,
+    crystalWall: 1,
+  };
+  for (const [wallType, expectedCost] of Object.entries(expectedWallCosts)) {
+    assert.match(
+      rulesDocument.rules.rooms.$roomId.ruleSnapshot.itemCosts[wallType]['.validate'],
+      new RegExp(`newData\\.val\\(\\) === ${expectedCost}`, 'u'),
+      `database rules pin ${wallType} to cost ${expectedCost}`
+    );
+  }
   assert.match(
-    rulesDocument.rules.rooms.$roomId.ruleSnapshot.itemCosts.poisonWall['.validate'],
-    /newData\.val\(\) === 2/,
-    'database rules pin poison wall to cost 2'
+    rulesDocument.rules.rooms.$roomId.ruleSnapshot.itemLimits.fogWall['.validate'],
+    /newData\.val\(\) === 1/,
+    'database rules limit fog wall to one'
+  );
+  assert.match(
+    rulesDocument.rules.rooms.$roomId.ruleSnapshot.itemLimits.illusionWall['.validate'],
+    /newData\.val\(\) === 1/,
+    'database rules limit illusion wall to one'
+  );
+  assert.match(
+    rulesDocument.rules.rooms.$roomId.ruleSnapshot.wallBudget['.validate'],
+    /newData\.val\(\) === 25/,
+    'database rules pin the no-gear wall budget to 25'
+  );
+  assert.match(
+    rulesDocument.rules.rooms.$roomId.ruleSnapshot.runnerGearWallBudget['.validate'],
+    /newData\.val\(\) === 15/,
+    'database rules pin equipped runners to the base wall budget 15'
   );
   const mapRules = rulesDocument.rules.rooms.$roomId.maps.$ownerId;
+  assert.match(mapRules['.validate'], /runnerGear/);
+  assert.match(mapRules['.validate'], /wormholeEscapeKit/);
+  assert.match(mapRules['.validate'], /insight/);
   for (const retiredItemType of [
     'radar',
+    'mine',
+    'smoke',
     'steelWall',
     'collapseWall',
     'phaseWall',
@@ -314,7 +365,15 @@ async function main() {
     )
   );
   const canonical = gameRules.createCanonicalGameRuleSnapshot();
-  assert.equal(canonical.itemCosts.poisonWall, 2, 'canonical poison wall cost is 2');
+  for (const [wallType, expectedCost] of Object.entries(expectedWallCosts)) {
+    assert.equal(
+      canonical.itemCosts[wallType],
+      expectedCost,
+      `canonical ${wallType} cost is ${expectedCost}`
+    );
+  }
+  assert.equal(canonical.itemLimits.fogWall, 1, 'canonical fog wall limit is one');
+  assert.equal(canonical.itemLimits.illusionWall, 1, 'canonical illusion wall limit is one');
   assert.equal(
     diceWormhole.isValidDiceWormholeChallenge(validWormholeChallenge()),
     true,
@@ -344,6 +403,19 @@ async function main() {
   await expectDenied(
     'map without skill loadout',
     databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', missingSkill)
+  );
+  const missingRunnerGear = validMap();
+  delete missingRunnerGear.runnerGear;
+  await expectDenied(
+    'new map must make the runner gear choice explicit',
+    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', missingRunnerGear)
+  );
+  await expectDenied(
+    'unknown runner gear is rejected',
+    databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
+      ...validMap(),
+      runnerGear: 'forgedGear',
+    })
   );
   for (const retiredSkillLoadout of ['breach', 'anchor', 'dash']) {
     await expectDenied(
@@ -519,12 +591,37 @@ async function main() {
     )
   );
   await expectAllowed(
-    'non-wormhole setup items retain their existing write behavior',
+    'new fog and illusion walls remain available in setup maps',
     databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
       ...validMap(),
-      items: [{ type: 'mine', position: { row: 2, col: 2 } }],
+      items: [{
+        type: 'fogWall',
+        wallPosition: { row: 2, col: 2 },
+        wallDirection: 'right',
+      }, {
+        type: 'illusionWall',
+        wallPosition: { row: 3, col: 3 },
+        wallDirection: 'right',
+      }],
     })
   );
+  for (const retiredTrap of ['mine', 'smoke']) {
+    await expectDenied(
+      `retired ${retiredTrap} cannot be submitted in an item list`,
+      databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
+        ...validMap(),
+        items: [{ type: retiredTrap, position: { row: 2, col: 2 } }],
+      })
+    );
+    await expectDenied(
+      `retired ${retiredTrap} cannot be submitted through the legacy single-item shape`,
+      databaseRequest(`rooms/${roomId}/maps/${owner.uid}`, owner.token, 'PUT', {
+        ...validMap(),
+        items: undefined,
+        item: { type: retiredTrap, position: { row: 2, col: 2 } },
+      })
+    );
+  }
   for (const retiredWall of [
     'steelWall',
     'collapseWall',
@@ -565,7 +662,11 @@ async function main() {
   legacyReadRoom.maps = {
     [owner.uid]: {
       ...validMap('anchor'),
-      items: [{ type: 'radar' }],
+      items: [
+        { type: 'radar' },
+        { type: 'mine', position: { row: 2, col: 2 } },
+        { type: 'smoke', position: { row: 3, col: 3 } },
+      ],
     },
   };
   await seedAdminFixture(`rooms/${legacyReadRoomId}`, 'PUT', legacyReadRoom);
@@ -577,6 +678,8 @@ async function main() {
   assert.equal(legacyMapRead.ok, true, 'existing legacy maps remain readable');
   assert.equal(legacyMapRead.payload.skillLoadout, 'anchor');
   assert.equal(legacyMapRead.payload.items[0].type, 'radar');
+  assert.equal(legacyMapRead.payload.items[1].type, 'mine');
+  assert.equal(legacyMapRead.payload.items[2].type, 'smoke');
   await expectAllowed(
     'owner may atomically save setup map again',
     databaseRequest(`rooms/${roomId}`, owner.token, 'PATCH', {
@@ -595,7 +698,7 @@ async function main() {
   );
   await expectDenied(
     'room rules version mutation',
-    databaseRequest(`rooms/${roomId}/rulesVersion`, owner.token, 'PUT', 4)
+    databaseRequest(`rooms/${roomId}/rulesVersion`, owner.token, 'PUT', 5)
   );
   await expectDenied(
     'match number cannot skip a room-local sequence',
@@ -777,6 +880,9 @@ async function main() {
     poisonEffectsByPlayer: {
       [outsider.uid]: validPoisonEffect(owner.uid),
     },
+    illusionEffectsByPlayer: {
+      [outsider.uid]: validIllusionEffect(owner.uid),
+    },
   });
   await expectDenied(
     'unauthenticated callers cannot read live wormhole run state',
@@ -883,6 +989,41 @@ async function main() {
     databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', invalidPoisonShape)
   );
 
+  const forgedForeignIllusion = clone(privateStateRead.payload);
+  forgedForeignIllusion.players[owner.uid].moves = 1;
+  forgedForeignIllusion.currentTurn = outsider.uid;
+  forgedForeignIllusion.turnNumber = 2;
+  delete forgedForeignIllusion.illusionEffectsByPlayer[outsider.uid];
+  await expectDenied(
+    'current player cannot remove another runner illusion state',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', forgedForeignIllusion)
+  );
+
+  for (const [label, malformedEffect] of [
+    ['zero actions', validIllusionEffect(outsider.uid, 1, 0)],
+    ['too many actions', validIllusionEffect(outsider.uid, 1, 4)],
+    ['wrong map owner', validIllusionEffect(owner.uid, 1, 3)],
+    ['future application turn', validIllusionEffect(outsider.uid, 99, 3)],
+    ['out-of-board anchor', {
+      ...validIllusionEffect(outsider.uid, 1, 2),
+      firstWallOrigin: { row: 6, col: 0 },
+    }],
+    ['unknown private field', {
+      ...validIllusionEffect(outsider.uid, 1, 2),
+      privateSeed: 123,
+    }],
+  ]) {
+    const malformedIllusion = clone(privateStateRead.payload);
+    malformedIllusion.players[owner.uid].moves = 1;
+    malformedIllusion.currentTurn = outsider.uid;
+    malformedIllusion.turnNumber = 2;
+    malformedIllusion.illusionEffectsByPlayer[owner.uid] = malformedEffect;
+    await expectDenied(
+      `illusion effect rejects ${label}`,
+      databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', malformedIllusion)
+    );
+  }
+
   const ownPrivateStateTurn = clone(privateStateRead.payload);
   ownPrivateStateTurn.players[owner.uid].moves = 1;
   ownPrivateStateTurn.currentTurn = outsider.uid;
@@ -890,6 +1031,7 @@ async function main() {
   ownPrivateStateTurn.wormholeRunsByPlayer[owner.uid] = validWormholeRun(outsider.uid);
   ownPrivateStateTurn.visionEffectsByPlayer[owner.uid] = validFireVisionEffect(outsider.uid);
   ownPrivateStateTurn.poisonEffectsByPlayer[owner.uid] = validPoisonEffect(outsider.uid);
+  ownPrivateStateTurn.illusionEffectsByPlayer[owner.uid] = validIllusionEffect(outsider.uid);
   await expectAllowed(
     'current player atomically creates only their own wormhole and status effects',
     databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', ownPrivateStateTurn)
@@ -912,6 +1054,57 @@ async function main() {
     undefined,
     'new fire state does not persist the retired phantom-wall payload'
   );
+  assert.deepEqual(
+    afterOwnPrivateTurn.payload.illusionEffectsByPlayer[owner.uid],
+    validIllusionEffect(outsider.uid),
+    'the affected runner owns the persisted illusion progress'
+  );
+
+  const skippedIllusionCountdown = clone(afterOwnPrivateTurn.payload);
+  skippedIllusionCountdown.players[outsider.uid].moves = 1;
+  skippedIllusionCountdown.currentTurn = owner.uid;
+  skippedIllusionCountdown.turnNumber = 3;
+  await expectDenied(
+    'an active runner cannot keep three illusion actions across a committed turn',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', skippedIllusionCountdown)
+  );
+
+  const arbitraryFirstAnchor = clone(afterOwnPrivateTurn.payload);
+  arbitraryFirstAnchor.players[outsider.uid].moves = 1;
+  arbitraryFirstAnchor.currentTurn = owner.uid;
+  arbitraryFirstAnchor.turnNumber = 3;
+  arbitraryFirstAnchor.illusionEffectsByPlayer[outsider.uid] = {
+    ...arbitraryFirstAnchor.illusionEffectsByPlayer[outsider.uid],
+    actionsRemaining: 2,
+    firstWallOrigin: { row: 5, col: 5 },
+  };
+  await expectDenied(
+    'the first illusion wall anchor must equal the committed action origin',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', arbitraryFirstAnchor)
+  );
+
+  const anchorOutsideTurn = clone(afterOwnPrivateTurn.payload);
+  anchorOutsideTurn.illusionEffectsByPlayer[outsider.uid] = {
+    ...anchorOutsideTurn.illusionEffectsByPlayer[outsider.uid],
+    actionsRemaining: 2,
+    firstWallOrigin: { ...anchorOutsideTurn.players[outsider.uid].position },
+  };
+  await expectDenied(
+    'a runner cannot add an illusion wall anchor outside an atomic turn',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', anchorOutsideTurn)
+  );
+
+  const forgedOtherIllusionProgress = clone(afterOwnPrivateTurn.payload);
+  forgedOtherIllusionProgress.players[outsider.uid].moves = 1;
+  forgedOtherIllusionProgress.currentTurn = owner.uid;
+  forgedOtherIllusionProgress.turnNumber = 3;
+  forgedOtherIllusionProgress.illusionEffectsByPlayer[outsider.uid].actionsRemaining = 2;
+  forgedOtherIllusionProgress.illusionEffectsByPlayer[owner.uid].actionsRemaining = 2;
+  await expectDenied(
+    'a valid own countdown cannot hide another runner illusion ledger change',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', forgedOtherIllusionProgress)
+  );
+
   const forgedOwnerRunExpiry = clone(afterOwnPrivateTurn.payload);
   forgedOwnerRunExpiry.players[outsider.uid].moves = 1;
   forgedOwnerRunExpiry.currentTurn = owner.uid;
@@ -939,6 +1132,15 @@ async function main() {
     'next player cannot expire the previous player poison effect',
     databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', forgedOwnerPoisonExpiry)
   );
+  const forgedOwnerIllusionExpiry = clone(afterOwnPrivateTurn.payload);
+  forgedOwnerIllusionExpiry.players[outsider.uid].moves = 1;
+  forgedOwnerIllusionExpiry.currentTurn = owner.uid;
+  forgedOwnerIllusionExpiry.turnNumber = 3;
+  delete forgedOwnerIllusionExpiry.illusionEffectsByPlayer[owner.uid];
+  await expectDenied(
+    'next player cannot expire the previous player illusion effect',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', forgedOwnerIllusionExpiry)
+  );
 
   const ownPrivateStateExpiry = clone(afterOwnPrivateTurn.payload);
   ownPrivateStateExpiry.players[outsider.uid].moves = 1;
@@ -954,12 +1156,28 @@ async function main() {
   ownPrivateStateExpiry.visionEffectsByPlayer[outsider.uid] = validFireVisionEffect(owner.uid, 2);
   ownPrivateStateExpiry.poisonEffectsByPlayer[outsider.uid].expiresAtTargetMove = 3;
   ownPrivateStateExpiry.poisonEffectsByPlayer[outsider.uid].seed += 1;
+  ownPrivateStateExpiry.illusionEffectsByPlayer[outsider.uid] = {
+    ...ownPrivateStateExpiry.illusionEffectsByPlayer[outsider.uid],
+    actionsRemaining: 2,
+    firstWallOrigin: { row: 0, col: 0 },
+  };
   await expectAllowed(
     'current player atomically updates only their own private run and effects',
     databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', ownPrivateStateExpiry)
   );
   const afterOwnPrivateUpdate = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
   assert.equal(afterOwnPrivateUpdate.ok, true, 'private-state update should persist');
+
+  const prematureOwnIllusionRemoval = clone(afterOwnPrivateUpdate.payload);
+  prematureOwnIllusionRemoval.players[owner.uid].moves = 2;
+  prematureOwnIllusionRemoval.currentTurn = outsider.uid;
+  prematureOwnIllusionRemoval.turnNumber = 4;
+  delete prematureOwnIllusionRemoval.illusionEffectsByPlayer[owner.uid];
+  await expectDenied(
+    'a runner cannot delete an illusion effect before its countdown expires',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', prematureOwnIllusionRemoval)
+  );
+
   const ownPrivateStateRemoval = clone(afterOwnPrivateUpdate.payload);
   ownPrivateStateRemoval.players[owner.uid].moves = 2;
   ownPrivateStateRemoval.currentTurn = outsider.uid;
@@ -967,10 +1185,97 @@ async function main() {
   delete ownPrivateStateRemoval.wormholeRunsByPlayer[owner.uid];
   delete ownPrivateStateRemoval.visionEffectsByPlayer[owner.uid];
   delete ownPrivateStateRemoval.poisonEffectsByPlayer[owner.uid];
+  ownPrivateStateRemoval.illusionEffectsByPlayer[owner.uid] = {
+    ...ownPrivateStateRemoval.illusionEffectsByPlayer[owner.uid],
+    actionsRemaining: 2,
+  };
   await expectAllowed(
-    'current player atomically expires only their own private run and effects',
+    'current player expires timed state while decrementing their active illusion exactly once',
     databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', ownPrivateStateRemoval)
   );
+
+  const afterOwnPrivateRemoval = await databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'GET');
+  assert.equal(afterOwnPrivateRemoval.ok, true, 'private-state removal turn should persist');
+
+  const resetIllusionCountdown = clone(afterOwnPrivateRemoval.payload);
+  resetIllusionCountdown.players[outsider.uid].moves = 2;
+  resetIllusionCountdown.currentTurn = owner.uid;
+  resetIllusionCountdown.turnNumber = 5;
+  resetIllusionCountdown.illusionEffectsByPlayer[outsider.uid] = {
+    ...resetIllusionCountdown.illusionEffectsByPlayer[outsider.uid],
+    actionsRemaining: 3,
+  };
+  await expectDenied(
+    'a runner cannot reset an active illusion countdown back to three',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', resetIllusionCountdown)
+  );
+
+  const rewrittenFirstAnchor = clone(afterOwnPrivateRemoval.payload);
+  rewrittenFirstAnchor.players[outsider.uid].moves = 2;
+  rewrittenFirstAnchor.currentTurn = owner.uid;
+  rewrittenFirstAnchor.turnNumber = 5;
+  rewrittenFirstAnchor.illusionEffectsByPlayer[outsider.uid] = {
+    ...rewrittenFirstAnchor.illusionEffectsByPlayer[outsider.uid],
+    actionsRemaining: 1,
+    firstWallOrigin: { row: 0, col: 1 },
+  };
+  await expectDenied(
+    'the first illusion wall anchor cannot be rewritten on a later turn',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', rewrittenFirstAnchor)
+  );
+
+  const ownIllusionCountdown = clone(afterOwnPrivateRemoval.payload);
+  ownIllusionCountdown.players[outsider.uid].moves = 2;
+  ownIllusionCountdown.currentTurn = owner.uid;
+  ownIllusionCountdown.turnNumber = 5;
+  ownIllusionCountdown.illusionEffectsByPlayer[outsider.uid] = {
+    ...ownIllusionCountdown.illusionEffectsByPlayer[outsider.uid],
+    actionsRemaining: 1,
+  };
+  await expectAllowed(
+    'a committed own action decrements the illusion countdown and preserves its first anchor',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', ownIllusionCountdown)
+  );
+
+  const afterOutsiderCountdown = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
+  assert.equal(afterOutsiderCountdown.ok, true, 'first anchored countdown should persist');
+  const ownerIllusionCountdown = clone(afterOutsiderCountdown.payload);
+  ownerIllusionCountdown.players[owner.uid].moves = 3;
+  ownerIllusionCountdown.currentTurn = outsider.uid;
+  ownerIllusionCountdown.turnNumber = 6;
+  ownerIllusionCountdown.illusionEffectsByPlayer[owner.uid] = {
+    ...ownerIllusionCountdown.illusionEffectsByPlayer[owner.uid],
+    actionsRemaining: 1,
+  };
+  await expectAllowed(
+    'the other runner can independently reach the last illusion action',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', ownerIllusionCountdown)
+  );
+
+  const beforeOutsiderExpiry = await databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'GET');
+  assert.equal(beforeOutsiderExpiry.ok, true, 'last-action illusion state should persist');
+  const outsiderIllusionExpiry = clone(beforeOutsiderExpiry.payload);
+  outsiderIllusionExpiry.players[outsider.uid].moves = 3;
+  outsiderIllusionExpiry.currentTurn = owner.uid;
+  outsiderIllusionExpiry.turnNumber = 7;
+  delete outsiderIllusionExpiry.illusionEffectsByPlayer[outsider.uid];
+  await expectAllowed(
+    'the runner can delete their illusion ledger on the exact expiry turn',
+    databaseRequest(`rooms/${roomId}/gameState`, outsider.token, 'PUT', outsiderIllusionExpiry)
+  );
+
+  const beforeFinalIllusionExpiry = await databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'GET');
+  assert.equal(beforeFinalIllusionExpiry.ok, true, 'single remaining illusion ledger should persist');
+  const finalIllusionExpiry = clone(beforeFinalIllusionExpiry.payload);
+  finalIllusionExpiry.players[owner.uid].moves = 4;
+  finalIllusionExpiry.currentTurn = outsider.uid;
+  finalIllusionExpiry.turnNumber = 8;
+  delete finalIllusionExpiry.illusionEffectsByPlayer;
+  await expectAllowed(
+    'the final runner can delete the whole illusion ledger on the exact expiry turn',
+    databaseRequest(`rooms/${roomId}/gameState`, owner.token, 'PUT', finalIllusionExpiry)
+  );
+
   await seedAdminFixture(`rooms/${roomId}/gameState`, 'PUT', liveRead.payload);
 
   const retiredSkillCreation = clone(liveRead.payload);
@@ -1556,7 +1861,7 @@ async function main() {
   );
 
   const tampered = clone(canonical);
-  tampered.itemCosts.poisonWall = 3;
+  tampered.itemCosts.poisonWall = 2;
   await expectDenied(
     'room snapshot cannot restore the previous poison-wall cost',
     databaseRequest(

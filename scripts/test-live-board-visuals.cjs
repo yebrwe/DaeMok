@@ -175,6 +175,36 @@ function moveOutcome(overrides = {}) {
     null,
     'a legacy pass-through wind outcome keeps its existing forced-move route'
   );
+
+  assert.deepEqual(
+    visuals.getIllusionReturnOutcomeVia(moveOutcome({
+      effect: 'move',
+      position: pos(4, 4),
+      illusionTransition: 'returned',
+      illusionReturnPosition: pos(4, 4),
+    })),
+    [pos(1, 2)],
+    'illusion return first visits the third attempted cell before the final saved position'
+  );
+  assert.deepEqual(
+    visuals.getIllusionReturnOutcomeVia(moveOutcome({
+      effect: 'move',
+      position: pos(4, 4),
+      illusionTransition: 'returned',
+      illusionReturnPosition: pos(4, 4),
+      illusionReturnFromWormhole: true,
+    })),
+    [pos(4, 4)],
+    'a wormhole wake-up never reuses its private-room attempted coordinate on the main board'
+  );
+  assert.equal(
+    visuals.getIllusionReturnOutcomeVia(moveOutcome({
+      effect: 'move',
+      illusionTransition: 'expired',
+    })),
+    null,
+    'an illusion with no fixed return point does not invent a rewind route'
+  );
 }
 
 {

@@ -475,7 +475,7 @@ def main() -> None:
 
     manifest_path = output_dir / "manifest.json"
     assert manifest_path.exists(), (
-        "v2 extension generation must run after the existing v1 pack so its 15 entries can be preserved"
+        "v2 extension generation must run after the existing v1 pack so its base entries can be preserved"
     )
     existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert existing_manifest.get("version") == PACK_VERSION, "existing v1 manifest version drifted"

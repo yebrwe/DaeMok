@@ -18,8 +18,8 @@ const OUT = path.join(ROOT, 'e2e-artifacts');
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3215';
 const EXPECTED_MAZE_TOON_VERSION = 'inked-toy-v3';
 const EXPECTED_MAZE_ASSET_VERSION = 'blender-cartoon-v1';
-const EXPECTED_MAZE_ASSET_CATALOG_COUNT = 29;
-const EXPECTED_MAIN_ASSET_COUNT = 25;
+const EXPECTED_MAZE_ASSET_CATALOG_COUNT = 31;
+const EXPECTED_MAIN_ASSET_COUNT = 27;
 const STAMP = Date.now();
 const ROOM_NAME = `권위완주-${String(STAMP).slice(-6)}`;
 const ACCOUNTS = {
@@ -50,14 +50,40 @@ async function signInWithFakeGoogle(page, account) {
   await page.getByRole('button', { name: '새 게임 방 만들기' }).waitFor({ timeout: 25_000 });
 }
 
-async function selectEndpoints(page) {
+async function selectRunnerGear(page, runnerGear) {
+  const selector = page.getByTestId('runner-gear-selector');
+  await selector.waitFor({ state: 'visible', timeout: 10_000 });
+  const options = selector.getByRole('radio');
+  assert.equal(await options.count(), 3, 'runner gear selector must expose exactly three options');
+  assert.deepEqual(
+    await options.evaluateAll((entries) => entries.map((entry) => entry.dataset.runnerGearOption)),
+    ['none', 'wormholeEscapeKit', 'insight'],
+    'runner gear selector options',
+  );
+  assert.equal(
+    await selector.locator('[role="radio"][aria-checked="true"]').count(),
+    1,
+    'runner gear selector must have exactly one active option before selection',
+  );
+
+  const option = selector.locator(`[data-runner-gear-option="${runnerGear}"]`);
+  await option.click();
+  assert.equal(await option.getAttribute('aria-checked'), 'true');
+  assert.equal(
+    await selector.locator('[role="radio"][aria-checked="true"]').count(),
+    1,
+    'runner gear selector must have exactly one active option after selection',
+  );
+}
+
+async function selectEndpoints(page, runnerGear) {
   await page.getByText('시작점을 선택하세요', { exact: false }).first()
     .waitFor({ state: 'visible', timeout: 20_000 });
   await page.locator('[data-cell="0,0"]').click();
   await page.getByText('도착점을 선택하세요', { exact: false }).first()
     .waitFor({ state: 'visible', timeout: 10_000 });
   await page.locator('[data-cell="0,2"]').click();
-  await page.getByText('벽(장애물)을 배치하세요', { exact: false }).first()
+  await page.locator('[data-testid="setup-budget"]')
     .waitFor({ state: 'visible', timeout: 10_000 });
   assert.equal(
     await page.getByRole('button', { name: /붕괴벽|거울벽|탐지기/ }).count(),
@@ -69,10 +95,11 @@ async function selectEndpoints(page) {
     0,
     'skills must not appear in the new-map editor',
   );
+  await selectRunnerGear(page, runnerGear);
 }
 
 async function submitSimpleMap(page) {
-  await selectEndpoints(page);
+  await selectEndpoints(page, 'wormholeEscapeKit');
   const complete = page.getByRole('button', { name: '완료', exact: true });
   await page.waitForFunction(() => {
     const candidate = Array.from(document.querySelectorAll('button'))
@@ -85,12 +112,31 @@ async function submitSimpleMap(page) {
 }
 
 async function submitFakeWallMap(page) {
-  await selectEndpoints(page);
+  await selectEndpoints(page, 'insight');
   await page.getByRole('button', { name: /가짜벽/ }).first().click();
   await page.getByRole('button', { name: '1행 1열 right 벽' }).click();
   await page.getByRole('button', { name: '완료', exact: true }).click();
   await page.getByText('내 미로 준비 완료!', { exact: false }).first()
     .waitFor({ state: 'visible', timeout: 20_000 });
+}
+
+async function expectPrivateGearBadge(page, label) {
+  const badge = page.getByTestId('authority-own-runner-gear');
+  await badge.waitFor({ state: 'visible', timeout: 20_000 });
+  assert.equal((await badge.innerText()).trim(), label);
+}
+
+async function expectNoDocumentScroll(page, label) {
+  const metrics = await page.evaluate(() => ({
+    viewportHeight: window.innerHeight,
+    rootHeight: document.documentElement.scrollHeight,
+    bodyHeight: document.body.scrollHeight,
+  }));
+  assert.ok(
+    metrics.rootHeight <= metrics.viewportHeight + 1
+      && metrics.bodyHeight <= metrics.viewportHeight + 1,
+    `${label} must not create page scroll: ${JSON.stringify(metrics)}`,
+  );
 }
 
 async function expectBoardPosition(page, position) {
@@ -343,6 +389,8 @@ async function poll(label, read, timeoutMs = 20_000) {
     await pageA.waitForURL(/\/rooms\/mz1_[a-f0-9]{32}$/u, { timeout: 25_000 });
     const roomUrl = pageA.url();
     await submitSimpleMap(pageA);
+    await expectPrivateGearBadge(pageA, '탈출키트');
+    await expectNoDocumentScroll(pageA, 'mobile ready gear badge');
 
     step('join as B, verify reset has no time limit, then submit a fake wall');
     const roomCardB = pageB.locator('[data-room-card]', { hasText: ROOM_NAME }).first();
@@ -352,6 +400,7 @@ async function poll(label, read, timeoutMs = 20_000) {
     await submitFakeWallMap(pageB);
     await pageB.getByRole('button', { name: '다시 만들기' }).click();
     await submitFakeWallMap(pageB);
+    await expectPrivateGearBadge(pageB, '심안');
 
     step('start through the callable and prove voluntary leave/surrender are unavailable');
     const start = pageA.getByRole('button', { name: '게임 시작!', exact: true });
@@ -359,6 +408,9 @@ async function poll(label, read, timeoutMs = 20_000) {
     await start.click();
     await expectBoardCount(pageA, 2);
     await expectBoardCount(pageB, 2);
+    await expectPrivateGearBadge(pageA, '탈출키트');
+    await expectPrivateGearBadge(pageB, '심안');
+    await expectNoDocumentScroll(pageA, 'mobile play gear badge');
     await expectRendered3DBoards(pageA, 2, 'mobile participant · all boards');
     await expectRendered3DBoards(pageB, 2, 'desktop participant');
     const leaveA = pageA.getByRole('button', { name: /나가기/ }).first();
@@ -369,6 +421,12 @@ async function poll(label, read, timeoutMs = 20_000) {
     const uidA = canonical.lobby.ownerId;
     const uidB = Object.keys(canonical.lobby.members).find((uid) => uid !== uidA);
     assert.ok(uidB, 'guest uid missing from canonical room');
+    assert.equal(canonical.gameState.maps[uidA].rulesVersion, 4);
+    assert.equal(canonical.gameState.maps[uidA].runnerGear, 'wormholeEscapeKit');
+    assert.equal(canonical.gameState.maps[uidB].rulesVersion, 4);
+    assert.equal(canonical.gameState.maps[uidB].runnerGear, 'insight');
+    assert.equal(canonical.ruleSnapshot.wallBudget, 25);
+    assert.equal(canonical.ruleSnapshot.runnerGearWallBudget, 15);
     await poll('both participant presence rows to become online', async () => {
       const statuses = (await adminDatabase.ref(
         `mazePresence/v1/status/${canonical.meta.roomId}`,
@@ -386,6 +444,11 @@ async function poll(label, read, timeoutMs = 20_000) {
     await pageC.bringToFront();
     await expectBoardCount(pageC, 2);
     await expectRendered3DBoards(pageC, 2, 'desktop spectator');
+    assert.equal(
+      await pageC.getByTestId('authority-own-runner-gear').count(),
+      0,
+      'spectator must not receive a private runner gear badge',
+    );
     assert.equal(await pageC.locator('[data-map-item]').count(), 0, 'spectator DOM leaked a secret item');
     await pageA.screenshot({ path: path.join(OUT, 'maze-authority-cute-mobile.png'), fullPage: true });
 

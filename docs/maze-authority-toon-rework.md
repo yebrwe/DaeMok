@@ -8,11 +8,16 @@ runtime evidence.
 
 ## Non-negotiable invariants
 
-- Game rules remain V3: 6×6 board, 24-point wall budget, current item costs and
-  caps, one equipped skill and one use per match.
-- Existing movement, collision, supported item/special-wall, skill, finish,
-  draw and 2–4-player relay assignment results remain byte-equivalent for the
-  same input.
+- Game rules are V4: the board remains 6×6 and the base wall/item budget is 15.
+  Equipping no runner gear grants a 10-point bonus for a total budget of 25.
+- A runner equips at most one persistent match-long gear: `wormholeEscapeKit`
+  skips the internal dice puzzle when a safe wormhole exit is available, while
+  `insight` privately identifies a fake wall when that runner collides with it.
+  Gear is not consumed and its selection remains secret from opponents and
+  spectators during setup and play.
+- Outside the explicit V4 gear and budget changes, existing movement,
+  collision, supported item/special-wall, finish, draw and 2–4-player relay
+  assignment results remain byte-equivalent for the same input.
 - `collapseWall` and `mirrorWall` are retired for every newly submitted map.
   They are absent from setup/practice catalogs and rejected by both legacy
   validation and Authority submission. Their old reducer, projection decoder
@@ -83,19 +88,21 @@ runtime evidence.
 - The precise 2D map editor remains the input surface and gains previous-map
   restore, automatic valid-draft save, undo and redo.
 - A fake wall (`oneTimeWall`) is visually indistinguishable from a normal
-  opaque wall to the opposing runner and spectators. Its first collision blocks
-  movement; subsequent attempts pass through, while the discovered collision
-  remains rendered as the same opaque normal-wall silhouette. Transparency or
-  a special material must not reveal the deception before or after that hit.
+  opaque wall before collision and always remains so to opponents and
+  spectators. Its first collision blocks movement and subsequent attempts pass
+  through. For a runner without `insight`, the discovered collision remains the
+  same opaque normal-wall silhouette. Only the colliding `insight` runner gets
+  the private fake-wall identification and may have that silhouette removed;
+  public and opponent projections must not expose either signal.
 - Reduced motion, keyboard operation, 44px touch targets, shape+icon+color wall
   identity and the 2D fallback are release requirements.
 
 ## Delivery phases and evidence
 
 1. Engine foundation
-   - Generated Functions vendor is synchronized with canonical V3 sources.
-   - Differential transcripts cover movement, every item/special wall, radar,
-     every skill and terminal settlement.
+   - Generated Functions vendor is synchronized with canonical V4 sources.
+   - Differential transcripts cover movement, every item/special wall, both
+     persistent runner gears and terminal settlement.
 2. Server vertical slice
    - Create, join, submit/reset map, start and turn execute in one Admin RTDB
      transaction with CAS and idempotency tests. Setup/end leave, restart and

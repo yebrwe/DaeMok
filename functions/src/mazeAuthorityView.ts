@@ -15,6 +15,7 @@ import {
   type LegacyWormholeRunState,
   type Obstacle,
   type Position,
+  type RunnerGear,
   type VisionEffect,
   type WormholeChallenge,
   type WormholeRunState,
@@ -45,6 +46,8 @@ const ITEM_TYPES: readonly ItemType[] = [
   'mirrorWall',
   'thornWall',
   'crystalWall',
+  'fogWall',
+  'illusionWall',
 ];
 const ITEM_TYPE_SET = new Set<ItemType>(ITEM_TYPES);
 const WALL_ITEM_TYPE_SET = new Set<ItemType>([
@@ -59,9 +62,12 @@ const WALL_ITEM_TYPE_SET = new Set<ItemType>([
   'mirrorWall',
   'thornWall',
   'crystalWall',
+  'fogWall',
+  'illusionWall',
 ]);
 const MAZE_SKILL_IDS: readonly MazeSkillId[] = ['scoutPulse', 'breach', 'anchor', 'dash'];
 const MAZE_SKILL_ID_SET = new Set<MazeSkillId>(MAZE_SKILL_IDS);
+const RUNNER_GEAR_SET = new Set<RunnerGear>(['none', 'wormholeEscapeKit', 'insight']);
 const DIRECTIONS = new Set<Direction>(['up', 'down', 'left', 'right']);
 const MAX_ITEM_STATE_INDEX = 15;
 
@@ -184,6 +190,8 @@ export interface MazeAuthorityGameStateView {
   revealedWallsByPlayer: Record<string, Obstacle[]>;
   visionEffectsByPlayer: Record<string, VisionEffect>;
   poisonEffectsByPlayer: Record<string, MazeAuthorityPoisonEffectView>;
+  /** Always empty: knowing that illusion is active would defeat the wall. */
+  illusionEffectsByPlayer: Record<string, never>;
   wormholeRunsByPlayer: Record<string, MazeAuthorityWormholeRunView>;
   turnMessage?: string;
   turnMessageTimestamp?: number;
@@ -294,6 +302,9 @@ function projectFullMap(map: GameMap): GameMap {
   if (map.skillLoadout && MAZE_SKILL_ID_SET.has(map.skillLoadout)) {
     projected.skillLoadout = map.skillLoadout;
   }
+  if (map.runnerGear && RUNNER_GEAR_SET.has(map.runnerGear)) {
+    projected.runnerGear = map.runnerGear;
+  }
   return projected;
 }
 
@@ -316,6 +327,7 @@ function projectRuleSnapshot(snapshot: GameRuleSnapshot): GameRuleSnapshot {
   return {
     version: snapshot.version,
     wallBudget: snapshot.wallBudget,
+    runnerGearWallBudget: snapshot.runnerGearWallBudget,
     itemCosts: projectRuleNumberRecord(snapshot.itemCosts),
     itemLimits: projectRuleNumberRecord(snapshot.itemLimits),
     maxSkillLoadout: snapshot.maxSkillLoadout,
@@ -513,6 +525,7 @@ function collisionValues(value: MazeAuthorityState['gameState']['collisionWalls'
 function projectCollisionWalls(
   state: MazeAuthorityState,
   memberIds: readonly string[],
+  viewerUid: string | null,
 ): CollisionWall[] {
   if (state.gameState.phase === GamePhase.SETUP) return [];
   const memberSet = new Set(memberIds);
@@ -524,13 +537,21 @@ function projectCollisionWalls(
     const privateMap = maps[candidate.mapOwnerId];
     if (!privateMap) continue;
     const consumed = normalizeConsumed(itemState[candidate.mapOwnerId]?.consumed);
-    if (getVisibleCollisionWalls([candidate], privateMap, consumed).length === 0) continue;
-    projected.push({
+    const visibilityCandidate: CollisionWall = {
       playerId: candidate.playerId,
       position: clonePosition(candidate.position),
       direction: candidate.direction,
       timestamp: candidate.timestamp,
       mapOwnerId: candidate.mapOwnerId,
+    };
+    if (getVisibleCollisionWalls([visibilityCandidate], privateMap, consumed).length === 0) continue;
+    projected.push({
+      ...visibilityCandidate,
+      ...(candidate.identifiedAsFake === true
+        && viewerUid === candidate.playerId
+        && maps[candidate.playerId]?.runnerGear === 'insight'
+        ? { identifiedAsFake: true }
+        : {}),
     });
   }
   return projected;
@@ -625,6 +646,10 @@ function projectPoisonEffects(
     };
   }
   return projected;
+}
+
+function projectIllusionEffects(): Record<string, never> {
+  return {};
 }
 
 function isDiceWormholeRun(run: WormholeRunState): run is DiceWormholeRunState {
@@ -723,11 +748,12 @@ function projectGameState(
     turnOrder: (state.gameState.turnOrder ?? []).filter((uid) => memberSet.has(uid)),
     winner: winner !== null && memberSet.has(winner) ? winner : null,
     draw: typeof draw === 'boolean' ? draw : null,
-    collisionWalls: projectCollisionWalls(state, memberIds),
+    collisionWalls: projectCollisionWalls(state, memberIds, viewerUid),
     itemState: projectItemState(state, memberIds, viewerUid),
     revealedWallsByPlayer: projectRevealedWalls(state, memberIds, viewerUid),
     visionEffectsByPlayer: projectVisionEffects(state, memberIds, viewerUid),
     poisonEffectsByPlayer: projectPoisonEffects(state, memberIds, viewerUid),
+    illusionEffectsByPlayer: projectIllusionEffects(),
     wormholeRunsByPlayer: projectWormholeRuns(state, memberIds, viewerUid),
   };
   if (typeof state.gameState.rulesVersion === 'number') {

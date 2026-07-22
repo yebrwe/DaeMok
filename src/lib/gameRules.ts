@@ -5,7 +5,9 @@ import {
   ITEM_LIMITS,
   MAZE_SKILL_IDS,
   MAX_OBSTACLES,
+  RUNNER_GEAR_WALL_BUDGET,
   getMapItems,
+  getMapRunnerGear,
   isSameWallSegment,
   isValidMap,
   isValidNewMap,
@@ -23,6 +25,7 @@ export interface GameRuleSnapshotValidation {
 const SNAPSHOT_KEYS = [
   'version',
   'wallBudget',
+  'runnerGearWallBudget',
   'itemCosts',
   'itemLimits',
   'maxSkillLoadout',
@@ -34,6 +37,7 @@ const CANONICAL_ITEM_TYPES = Object.keys(ITEM_COSTS) as ItemType[];
 const CANONICAL_RULE_TEMPLATE: GameRuleSnapshot = {
   version: GAME_RULES_VERSION,
   wallBudget: MAX_OBSTACLES,
+  runnerGearWallBudget: RUNNER_GEAR_WALL_BUDGET,
   itemCosts: { ...ITEM_COSTS },
   itemLimits: { ...ITEM_LIMITS },
   maxSkillLoadout: MAX_MAZE_SKILL_LOADOUT,
@@ -118,6 +122,7 @@ export function createCanonicalGameRuleSnapshot(): GameRuleSnapshot {
   return {
     version: CANONICAL_RULE_TEMPLATE.version,
     wallBudget: CANONICAL_RULE_TEMPLATE.wallBudget,
+    runnerGearWallBudget: CANONICAL_RULE_TEMPLATE.runnerGearWallBudget,
     itemCosts: { ...CANONICAL_RULE_TEMPLATE.itemCosts },
     itemLimits: { ...CANONICAL_RULE_TEMPLATE.itemLimits },
     maxSkillLoadout: CANONICAL_RULE_TEMPLATE.maxSkillLoadout,
@@ -134,6 +139,10 @@ export function validateGameRuleSnapshot(value: unknown): GameRuleSnapshotValida
 
   if (!Object.is(value.version, CANONICAL_RULE_TEMPLATE.version)) issues.push('version');
   if (!Object.is(value.wallBudget, CANONICAL_RULE_TEMPLATE.wallBudget)) issues.push('wallBudget');
+  if (!Object.is(
+    value.runnerGearWallBudget,
+    CANONICAL_RULE_TEMPLATE.runnerGearWallBudget
+  )) issues.push('runnerGearWallBudget');
   if (!Object.is(value.maxSkillLoadout, CANONICAL_RULE_TEMPLATE.maxSkillLoadout)) {
     issues.push('maxSkillLoadout');
   }
@@ -163,6 +172,7 @@ export function areGameRuleSnapshotsEqual(left: unknown, right: unknown): boolea
   if (
     left.version !== right.version ||
     left.wallBudget !== right.wallBudget ||
+    left.runnerGearWallBudget !== right.runnerGearWallBudget ||
     left.maxSkillLoadout !== right.maxSkillLoadout ||
     left.skillIds.length !== right.skillIds.length
   ) {
@@ -225,7 +235,10 @@ export function isValidMapForRuleSnapshot(
     itemCost += snapshot.itemCosts[item.type];
   }
 
-  return countUniqueWalls(map.obstacles || []) + itemCost <= snapshot.wallBudget;
+  const wallBudget = getMapRunnerGear(map) === 'none'
+    ? snapshot.wallBudget
+    : snapshot.runnerGearWallBudget;
+  return countUniqueWalls(map.obstacles || []) + itemCost <= wallBudget;
 }
 
 /**

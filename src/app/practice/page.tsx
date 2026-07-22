@@ -3,8 +3,11 @@
 import React, { useCallback, useState } from 'react';
 import Link from 'next/link';
 import {
+  Aperture,
   Bot,
+  BrickWall,
   ChevronLeft,
+  Eye,
   Map,
   Pencil,
   RotateCcw,
@@ -17,23 +20,55 @@ import {
 import GameSetup from '@/components/GameSetup';
 import PracticeBattle, { PracticeBattleResult } from '@/components/PracticeBattle';
 import MazeShell from '@/components/maze/MazeShell';
-import { GameMap } from '@/types/game';
+import { GameMap, RunnerGear } from '@/types/game';
 import { createQuickPracticeMap, PRACTICE_USER_ID } from '@/lib/practiceBattle';
+import { getMapRunnerGear, getMapWallBudget } from '@/lib/gameUtils';
 
 type PracticeStage = 'configure' | 'setup' | 'battle';
 type PracticeMode = 'race' | 'mapTest';
+
+const PRACTICE_GEAR_OPTIONS: Array<{
+  gear: RunnerGear;
+  label: string;
+  shortLabel: string;
+  description: string;
+  Icon: typeof BrickWall;
+}> = [
+  {
+    gear: 'none',
+    label: '장비 없음',
+    shortLabel: '없음 +10벽',
+    description: '장비를 포기하고 벽을 25개까지 배치합니다.',
+    Icon: BrickWall,
+  },
+  {
+    gear: 'wormholeEscapeKit',
+    label: '웜홀 탈출키트',
+    shortLabel: '탈출키트',
+    description: '게임 내내 웜홀 내부를 건너뛰며 벽을 15개까지 배치합니다.',
+    Icon: Aperture,
+  },
+  {
+    gear: 'insight',
+    label: '심안',
+    shortLabel: '심안',
+    description: '게임 내내 충돌한 가짜벽을 판별하며 벽을 15개까지 배치합니다.',
+    Icon: Eye,
+  },
+];
 
 export default function PracticePage() {
   const [stage, setStage] = useState<PracticeStage>('configure');
   const [mode, setMode] = useState<PracticeMode>('race');
   const [aiCount, setAiCount] = useState(3);
+  const [runnerGear, setRunnerGear] = useState<RunnerGear>('none');
   const [playerMap, setPlayerMap] = useState<GameMap | null>(null);
   const [result, setResult] = useState<PracticeBattleResult | null>(null);
   const [matchKey, setMatchKey] = useState(0);
 
   const startQuickMatch = () => {
     setMode('race');
-    setPlayerMap(createQuickPracticeMap());
+    setPlayerMap(createQuickPracticeMap(runnerGear));
     setResult(null);
     setMatchKey((current) => current + 1);
     setStage('battle');
@@ -54,6 +89,7 @@ export default function PracticePage() {
 
   const handleMapComplete = (map: GameMap) => {
     setPlayerMap(map);
+    setRunnerGear(getMapRunnerGear(map));
     setResult(null);
     setMatchKey((current) => current + 1);
     setStage('battle');
@@ -88,8 +124,11 @@ export default function PracticePage() {
   const subtitle = stage === 'configure'
     ? '연습 방식 선택'
     : stage === 'setup'
-      ? mode === 'mapTest' ? '최대 24 · 필요한 만큼 배치' : `AI ${aiCount}명 · 24벽 맵 제작`
+      ? mode === 'mapTest'
+        ? `최대 ${getMapWallBudget(runnerGear)} · 필요한 만큼 배치`
+        : `AI ${aiCount}명 · ${getMapWallBudget(runnerGear)}벽 맵 제작`
       : mode === 'mapTest' ? '제작자·상대 시점 · 단독 주행' : `나 + AI ${aiCount}명 · 교대 대전`;
+  const selectedGear = PRACTICE_GEAR_OPTIONS.find((option) => option.gear === runnerGear) || PRACTICE_GEAR_OPTIONS[0];
 
   return (
     <MazeShell screen="practice" phase={stage === 'battle' ? 'play' : stage}>
@@ -181,7 +220,47 @@ export default function PracticePage() {
                 ))}
               </div>
 
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="mt-3">
+                <div className="mb-1 flex items-center justify-between gap-2 text-[10px] font-bold text-[#74685c]">
+                  <span>러너 패시브 장비</span>
+                  <span>{getMapWallBudget(runnerGear)}벽</span>
+                </div>
+                <div
+                  className="grid h-10 grid-cols-3 gap-1 rounded-lg border border-[#cfa87a] bg-[#fffaf0] p-0.5"
+                  role="radiogroup"
+                  aria-label="연습전 러너 패시브 장비"
+                  data-testid="practice-runner-gear-selector"
+                >
+                  {PRACTICE_GEAR_OPTIONS.map((option) => {
+                    const selected = runnerGear === option.gear;
+                    return (
+                      <button
+                        key={option.gear}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={`flex min-w-0 items-center justify-center gap-1 rounded-md px-1 text-[9px] font-black transition-colors ${
+                          selected
+                            ? 'bg-[#69cdb7] text-[#244a43] shadow-sm'
+                            : 'text-[#74685c] hover:bg-[#f2e4cf]'
+                        }`}
+                        onClick={() => setRunnerGear(option.gear)}
+                        title={`${option.label}: ${option.description}`}
+                        aria-label={`${option.label} 선택 · ${option.description}`}
+                        data-runner-gear-option={option.gear}
+                      >
+                        <option.Icon className="hidden shrink-0 min-[390px]:block" size={12} aria-hidden="true" />
+                        <span className="truncate">{option.shortLabel}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1 truncate text-[9px] font-semibold text-[#74685c]" title={selectedGear.description}>
+                  {selectedGear.description}
+                </p>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   className="btn-game flex h-12 items-center justify-center gap-2 !rounded-md px-3 text-sm"
@@ -216,6 +295,8 @@ export default function PracticePage() {
             key={`practice-setup-${matchKey}`}
             onMapComplete={handleMapComplete}
             initialMap={playerMap}
+            initialRunnerGear={runnerGear}
+            onRunnerGearChange={setRunnerGear}
             requireFullBudget={mode !== 'mapTest'}
           />
         )}

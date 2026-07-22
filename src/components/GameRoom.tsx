@@ -30,6 +30,7 @@ import {
   applyOfflineTurnSkip,
   getOfflineTurnSkipCandidate,
 } from '@/lib/offlineTurn';
+import { stripLegacyPrivateCollisionMarkers } from '@/lib/legacyGamePrivacy';
 import { shouldIncludeGamePlayerOnRestart } from '@/lib/roomLifecycle';
 import { useRouter } from 'next/navigation';
 import { getDatabase, ref, update, get, remove, onValue, serverTimestamp, runTransaction } from 'firebase/database';
@@ -372,7 +373,10 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
     runTransaction(ref(database, `rooms/${roomId}/gameState`), (state: GameState | null) => {
       if (!state || state.phase !== GamePhase.PLAY) return;
       const settled = settleCompletedGameState(state);
-      if (settled.phase === GamePhase.END) return settled;
+      if (settled.phase === GamePhase.END) {
+        delete settled.illusionEffectsByPlayer;
+        return settled;
+      }
       const activeCurrent = state.currentTurn ? state.players?.[state.currentTurn] : null;
       if (activeCurrent && !activeCurrent.finished && !activeCurrent.forfeited && !activeCurrent.hasLeft) return;
 
@@ -451,6 +455,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
 
         const settled = settleCompletedGameState(state);
         if (settled.phase === GamePhase.END) {
+          delete settled.illusionEffectsByPlayer;
           return settled;
         }
         if (alreadyFinished) {
@@ -728,6 +733,7 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       delete restartState.revealedWallsByPlayer;
       delete restartState.visionEffectsByPlayer;
       delete restartState.poisonEffectsByPlayer;
+      delete restartState.illusionEffectsByPlayer;
       delete restartState.wormholeRunsByPlayer;
       delete restartState.turnMessage;
       delete restartState.turnMessageTimestamp;
@@ -1160,7 +1166,9 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
       );
     }
 
-    const collisionList = Object.values(gameState.collisionWalls || {}).filter(Boolean) as CollisionWall[];
+    const collisionList = stripLegacyPrivateCollisionMarkers(
+      Object.values(gameState.collisionWalls || {}).filter(Boolean) as CollisionWall[]
+    );
     const pawnColors = ['#3b82f6', '#ef4444', '#22c55e', '#eab308'];
     const boards: LiveBoardEntry[] = ids.flatMap((runnerId, index) => {
       const runner = playersMap[runnerId];
@@ -1174,7 +1182,6 @@ const GameRoom: React.FC<GameRoomProps> = ({ userId, roomId }) => {
         : consumedRaw && typeof consumedRaw === 'object'
           ? consumedRaw
           : {};
-
       return [{
         runnerId,
         runnerName: runner.displayName || `플레이어 ${index + 1}`,

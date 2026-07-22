@@ -292,6 +292,8 @@ function wallPlan(
     'mirrorWall',
     'thornWall',
     'crystalWall',
+    'fogWall',
+    'illusionWall',
   ].includes(type);
 
   if (type === 'iceWall') {

@@ -63,8 +63,9 @@ function pos(row, col) {
 
 function baseMap(overrides = {}) {
   return {
-    rulesVersion: 3,
+    rulesVersion: 4,
     skillLoadout: 'scoutPulse',
+    runnerGear: 'none',
     startPosition: pos(0, 0),
     endPosition: pos(0, 5),
     obstacles: [],
@@ -87,19 +88,21 @@ function safeWallCandidates() {
 }
 
 const EXPECTED_COSTS = {
-  oneTimeWall: 7,
+  oneTimeWall: 1,
   mine: 1,
   wormhole: 7,
   radar: 4,
   smoke: 1,
   steelWall: 1,
   fireWall: 1,
-  poisonWall: 2,
+  fogWall: 1,
+  illusionWall: 2,
+  poisonWall: 1,
   iceWall: 1,
   windWall: 1,
   collapseWall: 1,
   phaseWall: 1,
-  mirrorWall: 5,
+  mirrorWall: 1,
   thornWall: 1,
   crystalWall: 1,
 };
@@ -107,6 +110,7 @@ const EXPECTED_SKILLS = ['scoutPulse', 'breach', 'anchor', 'dash'];
 const TOP_LEVEL_KEYS = [
   'version',
   'wallBudget',
+  'runnerGearWallBudget',
   'itemCosts',
   'itemLimits',
   'maxSkillLoadout',
@@ -114,16 +118,17 @@ const TOP_LEVEL_KEYS = [
 ];
 
 const canonical = rules.createCanonicalGameRuleSnapshot();
-assert.equal(canonical.version, 3, 'V3 snapshot');
-assert.equal(canonical.wallBudget, 24, 'V3 wall budget');
-assert.deepEqual(canonical.itemCosts, EXPECTED_COSTS, 'all 15 V3 item costs');
-assert.equal(Object.keys(canonical.itemCosts).length, 15, 'exactly 15 item costs');
+assert.equal(canonical.version, 4, 'V4 snapshot');
+assert.equal(canonical.wallBudget, 25, 'V4 no-gear wall budget');
+assert.equal(canonical.runnerGearWallBudget, 15, 'V4 equipped runner-gear wall budget');
+assert.deepEqual(canonical.itemCosts, EXPECTED_COSTS, 'all 17 V4 item costs');
+assert.equal(Object.keys(canonical.itemCosts).length, 17, 'exactly 17 item costs');
 assert.deepEqual(
   canonical.itemLimits,
   Object.fromEntries(Object.keys(EXPECTED_COSTS).map((itemType) => [itemType, 1])),
   'all item caps are one'
 );
-assert.equal(Object.keys(canonical.itemLimits).length, 15, 'exactly 15 item limits');
+assert.equal(Object.keys(canonical.itemLimits).length, 17, 'exactly 17 item limits');
 assert.equal(canonical.maxSkillLoadout, 1, 'one equipped skill');
 assert.deepEqual(canonical.skillIds, EXPECTED_SKILLS, 'canonical skill order');
 assert.equal(rules.isValidGameRuleSnapshot(canonical), true, 'canonical validates');
@@ -157,8 +162,9 @@ Object.defineProperty(hiddenExtraTopLevel, 'hidden', { value: true, enumerable: 
 assert.equal(rules.isValidGameRuleSnapshot(hiddenExtraTopLevel), false, 'hidden top-level key rejected');
 
 for (const [field, expected] of [
-  ['version', 4],
-  ['wallBudget', 25],
+  ['version', 3],
+  ['wallBudget', 24],
+  ['runnerGearWallBudget', 16],
   ['maxSkillLoadout', 2],
 ]) {
   const changed = clone(second);
@@ -244,7 +250,7 @@ for (const skillLoadout of EXPECTED_SKILLS) {
 assert.equal(
   rules.isValidNewMapForRuleSnapshot(baseMap(), second),
   true,
-  'new-map boundary accepts the inert V3 compatibility loadout'
+  'new-map boundary accepts the inert V4 compatibility loadout'
 );
 for (const retiredSkillLoadout of ['breach', 'anchor', 'dash']) {
   assert.equal(
@@ -258,7 +264,8 @@ const normalizedSkillMap = rules.normalizeNewMapForRuleSnapshot(
   second
 );
 assert.ok(normalizedSkillMap, 'stale skill drafts normalize at the trusted client boundary');
-assert.equal(normalizedSkillMap.skillLoadout, 'scoutPulse', 'normalized maps keep only V3 compatibility');
+assert.equal(normalizedSkillMap.skillLoadout, 'scoutPulse', 'normalized maps keep only V4 compatibility');
+assert.equal(normalizedSkillMap.runnerGear, 'none', 'normalized maps preserve explicit no-gear');
 
 const legacyRadarMap = baseMap({ items: [{ type: 'radar' }] });
 assert.equal(
@@ -279,6 +286,22 @@ assert.equal(
   null,
   'normalization never silently drops a retired radar item'
 );
+for (const legacyCellItem of [
+  { type: 'mine', position: pos(1, 1) },
+  { type: 'smoke', position: pos(1, 1) },
+]) {
+  const legacyMap = baseMap({ items: [legacyCellItem] });
+  assert.equal(
+    rules.isValidMapForRuleSnapshot(legacyMap, second),
+    true,
+    `legacy ${legacyCellItem.type} map remains readable`
+  );
+  assert.equal(
+    rules.isValidNewMapForRuleSnapshot(legacyMap, second),
+    false,
+    `new-map boundary rejects retired ${legacyCellItem.type}`
+  );
+}
 assert.equal(
   rules.normalizeNewMapForRuleSnapshot(baseMap({ items: 'malformed' }), second),
   null,
@@ -303,6 +326,27 @@ assert.equal(
   true,
   'new-map boundary accepts the canonical V2 dice wormhole challenge'
 );
+const cutOffDiceWormholeMap = baseMap({
+  obstacles: [
+    { position: pos(4, 5), direction: 'down' },
+    { position: pos(4, 4), direction: 'down' },
+    { position: pos(5, 3), direction: 'right' },
+  ],
+  items: [{
+    ...clone(diceWormholeMap.items[0]),
+    exit: pos(5, 5),
+  }],
+});
+assert.equal(
+  rules.isValidMapForRuleSnapshot(cutOffDiceWormholeMap, second),
+  true,
+  'snapshot compatibility reads a legacy exit with one adjacent but isolated cell'
+);
+assert.equal(
+  rules.isValidNewMapForRuleSnapshot(cutOffDiceWormholeMap, second),
+  false,
+  'trusted new-map validation rejects a wormhole exit with no static-wall route to the goal'
+);
 const malformedDiceWormholeMap = clone(diceWormholeMap);
 malformedDiceWormholeMap.items[0].challenge.endPosition =
   clone(malformedDiceWormholeMap.items[0].challenge.startPosition);
@@ -317,7 +361,7 @@ assert.equal(
   'missing map rulesVersion rejected'
 );
 assert.equal(
-  rules.isValidMapForRuleSnapshot(baseMap({ rulesVersion: 2 }), second),
+  rules.isValidMapForRuleSnapshot(baseMap({ rulesVersion: 3 }), second),
   false,
   'mismatched map rulesVersion rejected'
 );
@@ -341,6 +385,30 @@ assert.equal(
   false,
   'array skill loadout rejected'
 );
+const legacyMissingGearMap = baseMap({ runnerGear: undefined });
+assert.equal(
+  rules.isValidMapForRuleSnapshot(legacyMissingGearMap, second),
+  true,
+  'legacy map missing runner gear reads as none'
+);
+assert.equal(
+  rules.isValidNewMapForRuleSnapshot(legacyMissingGearMap, second),
+  false,
+  'new-map boundary requires an explicit runner gear'
+);
+const normalizedLegacyGearMap = rules.normalizeNewMapForRuleSnapshot(
+  legacyMissingGearMap,
+  second
+);
+assert.ok(normalizedLegacyGearMap, 'legacy missing gear can be normalized at the trusted boundary');
+assert.equal(normalizedLegacyGearMap.runnerGear, 'none', 'legacy missing gear normalizes to none');
+for (const runnerGear of [null, 'teleport', ['insight']]) {
+  assert.equal(
+    rules.isValidMapForRuleSnapshot(baseMap({ runnerGear }), second),
+    false,
+    `invalid runner gear ${JSON.stringify(runnerGear)} rejected`
+  );
+}
 assert.equal(
   rules.isValidMapForRuleSnapshot(baseMap({ startPosition: pos(-1, 0) }), second),
   false,
@@ -353,19 +421,50 @@ assert.equal(
 );
 
 const wallCandidates = safeWallCandidates();
-assert.equal(wallCandidates.length >= 25, true);
+assert.equal(wallCandidates.length >= 26, true);
 assert.equal(
-  rules.isValidMapForRuleSnapshot(baseMap({ obstacles: wallCandidates.slice(0, 24) }), second),
+  rules.isValidMapForRuleSnapshot(baseMap({ obstacles: wallCandidates.slice(0, 25) }), second),
   true,
-  '24-wall snapshot budget accepted'
+  '25-wall no-gear snapshot budget accepted'
 );
 assert.equal(
   rules.isValidMapForRuleSnapshot(baseMap({
-    obstacles: wallCandidates.slice(0, 24),
+    obstacles: wallCandidates.slice(0, 25),
     items: [{ type: 'mine', position: pos(1, 1) }],
   }), second),
   false,
-  'snapshot item cost pushes map over budget'
+  'no-gear item cost pushes map over the 25-wall budget'
+);
+for (const runnerGear of ['wormholeEscapeKit', 'insight']) {
+  assert.equal(
+    rules.isValidMapForRuleSnapshot(baseMap({
+      runnerGear,
+      obstacles: wallCandidates.slice(0, 15),
+    }), second),
+    true,
+    `${runnerGear} accepts the 15-wall equipped budget`
+  );
+  assert.equal(
+    rules.isValidMapForRuleSnapshot(baseMap({
+      runnerGear,
+      obstacles: wallCandidates.slice(0, 16),
+    }), second),
+    false,
+    `${runnerGear} rejects a 16-wall map`
+  );
+}
+assert.equal(
+  utils.getMapRunnerGear({}),
+  'none',
+  'missing runner gear normalizes to none'
+);
+assert.equal(utils.getMapWallBudget('none'), 25, 'no gear grants the ten-wall bonus');
+assert.equal(utils.getMapWallBudget('wormholeEscapeKit'), 15, 'escape kit uses base budget');
+assert.equal(utils.getMapWallBudget({ runnerGear: 'insight' }), 15, 'map helper accepts a map shape');
+assert.equal(
+  utils.cloneGameMap(legacyMissingGearMap).runnerGear,
+  'none',
+  'map cloning materializes legacy missing gear'
 );
 assert.equal(
   rules.isValidMapForRuleSnapshot(baseMap({

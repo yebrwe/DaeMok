@@ -79,8 +79,8 @@ export default function LoginPage() {
         <p className="text-sm text-slate-400 mb-2">
           상대가 숨겨둔 벽을 피해 <span className="text-amber-300 font-bold">더 적은 턴</span>으로 골인하세요
         </p>
-        <div className="flex justify-center gap-3 text-[11px] text-slate-500 mb-8">
-          <span>🧱 벽 15개 배치</span>
+        <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-slate-500 mb-8">
+          <span>🧱 장비 15벽 / 무장비 25벽</span>
           <span>⚔️ 1:1 대전</span>
           <span>🎲 3D 보드</span>
         </div>

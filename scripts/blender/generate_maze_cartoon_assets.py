@@ -65,6 +65,10 @@ PALETTE = {
     "thorn_light": "#FF9D94",
     "crystal": "#008E83",
     "crystal_light": "#F064B5",
+    "fog": "#8393A3",
+    "fog_light": "#D9F7FB",
+    "illusion": "#6D28D9",
+    "illusion_light": "#67E8F9",
 }
 
 
@@ -500,6 +504,79 @@ def make_crystal_wall() -> bpy.types.Object:
     return asset
 
 
+def make_fog_wall() -> bpy.types.Object:
+    asset = root("asset_wall_fog")
+    mist = material("mat_wall_fog_mist", PALETTE["fog"], roughness=0.96)
+    pale = material(
+        "mat_wall_fog_glow",
+        PALETTE["fog_light"],
+        roughness=0.86,
+        emissive="#4F7E8D",
+        emissive_strength=0.12,
+    )
+    # End posts preserve the exact wall-slot silhouette while the soft,
+    # staggered cloud clusters make this pass-through wall read as fog.
+    for x in (-WALL_LENGTH / 2 + 0.05, WALL_LENGTH / 2 - 0.05):
+        cylinder(
+            f"fog_post_{x:+.2f}", 0.05, WALL_HEIGHT, (x, 0, WALL_HEIGHT / 2),
+            mist, parent=asset, vertices=10, role="wall_body",
+        )
+    cloud_specs = (
+        (-0.32, -0.01, 0.17, 0.21, 0.075, 0.12),
+        (-0.12, 0.01, 0.31, 0.25, 0.085, 0.14),
+        (0.14, -0.015, 0.2, 0.24, 0.07, 0.13),
+        (0.34, 0.012, 0.38, 0.19, 0.075, 0.11),
+        (0.03, 0.0, 0.49, 0.22, 0.065, 0.09),
+    )
+    for index, (x, y, z, sx, sy, sz) in enumerate(cloud_specs):
+        sphere(
+            f"fog_cloud_{index}", (x, y, z), (sx, sy, sz),
+            pale if index in (1, 4) else mist,
+            parent=asset, segments=12, rings=8, role="wall_accent",
+        )
+    return asset
+
+
+def make_illusion_wall() -> bpy.types.Object:
+    asset = root("asset_wall_illusion")
+    purple = material(
+        "mat_wall_illusion_body",
+        PALETTE["illusion"],
+        roughness=0.58,
+        emissive="#7E22CE",
+        emissive_strength=0.28,
+    )
+    cyan = material(
+        "mat_wall_illusion_echo",
+        PALETTE["illusion_light"],
+        roughness=0.48,
+        emissive="#0E7490",
+        emissive_strength=0.32,
+    )
+    for x in (-WALL_LENGTH / 2 + 0.05, WALL_LENGTH / 2 - 0.05):
+        cylinder(
+            f"illusion_post_{x:+.2f}", 0.05, WALL_HEIGHT, (x, 0, WALL_HEIGHT / 2),
+            purple, parent=asset, vertices=8, role="wall_body",
+        )
+    # Three offset echoes are a direct visual shorthand for the three-action
+    # duration. The cyan ring reads as the fixed return point.
+    for index, (x, y, z, length) in enumerate((
+        (-0.18, -0.025, 0.15, 0.58),
+        (0.14, 0.025, 0.29, 0.66),
+        (-0.08, -0.015, 0.43, 0.72),
+    )):
+        bevelled_box(
+            f"illusion_echo_{index}", (length, WALL_DEPTH * 0.52, 0.075),
+            (x, y, z), cyan if index == 1 else purple,
+            bevel=0.018, parent=asset, role="wall_accent",
+        )
+    torus(
+        "illusion_return_ring", 0.16, 0.025, (0.04, -0.015, 0.3), cyan,
+        parent=asset, rotation=(math.pi / 2, 0, 0), role="wall_accent",
+    )
+    return asset
+
+
 BUILDERS: dict[str, Callable[[], bpy.types.Object]] = {
     "rabbit-pawn": make_rabbit,
     "tile-cream": lambda: make_tile("cream", PALETTE["cream"]),
@@ -516,6 +593,8 @@ BUILDERS: dict[str, Callable[[], bpy.types.Object]] = {
     "wall-phase": make_phase_wall,
     "wall-thorn": make_thorn_wall,
     "wall-crystal": make_crystal_wall,
+    "wall-fog": make_fog_wall,
+    "wall-illusion": make_illusion_wall,
 }
 
 

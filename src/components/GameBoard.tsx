@@ -25,6 +25,8 @@ const ITEM_WALL_STYLES: Record<SpecialWallType, string> = {
   mirrorWall: 'bg-slate-100 ring-cyan-500',
   thornWall: 'bg-rose-700 ring-rose-100',
   crystalWall: 'bg-fuchsia-700 ring-pink-100',
+  fogWall: 'bg-slate-400 ring-cyan-100',
+  illusionWall: 'bg-purple-600 ring-cyan-200',
 };
 
 const NORMAL_WALL_STYLE = 'bg-[#6b1111] ring-2 ring-[#fecaca] shadow-sm shadow-red-950/70';
@@ -59,6 +61,8 @@ const WALL_EFFECT_GLYPHS: Record<SpecialWallType, string> = {
   mirrorWall: '◇◇◇',
   thornWall: '▲▲▲',
   crystalWall: '✦✦✦',
+  fogWall: '≋≋≋',
+  illusionWall: '✧✧✧',
 };
 
 interface WallTarget {

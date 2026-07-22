@@ -55,6 +55,13 @@ assert.ok(poison?.resultDirection, 'poison preview exposes input and resolved di
 assert.deepEqual(poison?.result, poison?.to, 'poison crosses the triggering wall');
 assert.equal(poison?.wallConsumed, true, 'poison disappears after triggering');
 
+for (const type of ['fogWall', 'illusionWall']) {
+  const preview = createWallActionPreviewPlanAtTarget(type, occupiedTarget, baseContext);
+  assert.deepEqual(preview?.result, preview?.to, `${type} crosses the triggering segment`);
+  assert.equal(preview?.actionCost, 1, `${type} consumes one action`);
+  assert.equal(preview?.wallConsumed, true, `${type} disappears after activation`);
+}
+
 const ice = createWallActionPreviewPlanAtTarget('iceWall', occupiedTarget, baseContext);
 assert.deepEqual(ice?.result, ice?.from, 'ice blocks and leaves the pawn on its original cell');
 assert.equal(ice?.actionCost, 2, 'one ice collision consumes two actions total');

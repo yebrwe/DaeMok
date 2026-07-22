@@ -267,6 +267,14 @@ const SPECIAL_WALL_STYLES: Record<SpecialWallType, SpecialWallStyle> = {
     color: '#008e83', accent: '#f064b5', emissive: '#006c65', emissiveIntensity: 0.32,
     metalness: 0.14, roughness: 0.26, opacity: 0.9,
   },
+  fogWall: {
+    color: '#8b9aaa', accent: '#d9f7fb', emissive: '#4f7e8d', emissiveIntensity: 0.12,
+    metalness: 0, roughness: 0.9, opacity: 0.8,
+  },
+  illusionWall: {
+    color: '#6d28d9', accent: '#67e8f9', emissive: '#7e22ce', emissiveIntensity: 0.34,
+    metalness: 0.04, roughness: 0.3, opacity: 0.84,
+  },
 };
 
 const SPECIAL_WALL_ASSETS: Record<SpecialWallType, MazeCartoonAssetId> = {
@@ -280,6 +288,8 @@ const SPECIAL_WALL_ASSETS: Record<SpecialWallType, MazeCartoonAssetId> = {
   crystalWall: 'wallCrystal',
   collapseWall: 'wallCollapse',
   mirrorWall: 'wallMirror',
+  fogWall: 'wallFog',
+  illusionWall: 'wallIllusion',
 };
 
 interface SpecialWallBoxProps {
